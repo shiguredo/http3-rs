@@ -1,0 +1,25 @@
+[package]
+name = "shiguredo_http3"
+version = "2026.0.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Shiguredo Inc."]
+license = "Apache-2.0"
+description = "Sans I/O HTTP/3 Library"
+homepage = "https://github.com/shiguredo/http3-rs"
+repository = "https://github.com/shiguredo/http3-rs"
+readme = "README.md"
+include = ["/src/**", "/README.md", "/LICENSE"]
+
+[dependencies]
+
+[workspace]
+members = [
+    "crates/ngtcp2-sys",
+    "crates/nghttp3-sys",
+    "crates/shiguredo_ngtcp2",
+    "crates/tokio-ngtcp2",
+    "crates/tokio-s2n-quic",
+    "pbt",
+]
+exclude = ["fuzz", "interop_h3", "interop_wt", "examples/wt_server"]

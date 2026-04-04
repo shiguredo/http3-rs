@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    paths-ignore:
+      - "**.md"
+
+jobs:
+  ci:
+    name: CI
+    strategy:
+      matrix:
+        os:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+          - macos-26
+          - windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+      # neqo-crypto のビルドに NSS >= 3.121 が必要
+      - uses: mozilla/actions/nss@main
+        if: runner.os != 'Windows'
+        with:
+          minimum-version: "3.121"
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - run: rustup update stable
+      - uses: shiguredo/github-actions/.github/actions/rust-cache@main
+        with:
+          os: ${{ matrix.os }}
+          toolchain: stable
+      - run: cargo fmt --all --check
+      # shiguredo_ngtcp2 / tokio-ngtcp2 は POSIX ソケット型に依存するため Windows では除外する
+      - name: Set excluded crates
+        id: excludes
+        shell: bash
+        run: |
+          EXCLUDES=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            EXCLUDES="--exclude ngtcp2-sys --exclude nghttp3-sys --exclude shiguredo_ngtcp2 --exclude tokio-ngtcp2"
+          fi
+          echo "flags=$EXCLUDES" >> "$GITHUB_OUTPUT"
+      - run: cargo clippy --workspace ${{ steps.excludes.outputs.flags }} -- -D warnings
+      - run: cargo test --workspace ${{ steps.excludes.outputs.flags }}
+      # interop_h3 / interop_wt は quiche (BoringSSL) と neqo (NSS) のシンボル衝突により
+      # Linux ではリンクに失敗するため macOS でのみテストする
+      - name: Run interop tests
+        if: runner.os == 'macOS'
+        run: make interop-test
+
+  slack_notify:
+    needs: [ci]
+    runs-on: ubuntu-slim
+    if: ${{ always() }}
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Slack Notification
+        uses: shiguredo/github-actions/.github/actions/slack-notify@main
+        with:
+          status: ${{ job.status }}
+          slack_channel: sora-moqt
+          slack_webhook: ${{ secrets.SLACK_WEBHOOK }}
+          notify_mode: failure_and_fixed
+        env:
+          GH_TOKEN: ${{ github.token }}

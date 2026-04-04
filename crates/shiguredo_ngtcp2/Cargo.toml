@@ -1,0 +1,19 @@
+[package]
+name = "shiguredo_ngtcp2"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ngtcp2-sys = { path = "../ngtcp2-sys" }
+nghttp3-sys = { path = "../nghttp3-sys" }
+libc = "0.2"
+aws-lc-rs = "1"
+aws-lc-sys = { version = "0.39", features = ["ssl"] }
+
+[dev-dependencies]
+rcgen = "0.14"

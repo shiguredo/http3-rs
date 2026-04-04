@@ -1,0 +1,32 @@
+[package]
+name = "tokio-s2n-quic"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+shiguredo_http3 = { path = "../.." }
+s2n-quic = "1.73.0"
+tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
+bytes = "1"
+
+[dev-dependencies]
+rcgen = "0.14"
+tokio = { version = "1", features = ["full", "test-util"] }
+
+[[example]]
+name = "tokio_s2n_quic_h3_server"
+path = "examples/h3_server.rs"
+
+[[example]]
+name = "tokio_s2n_quic_h3_client"
+path = "examples/h3_client.rs"
+
+[[example]]
+name = "tokio_s2n_quic_wt_echo_server"
+path = "examples/wt_echo_server.rs"
+
+[[example]]
+name = "tokio_s2n_quic_wt_echo_client"
+path = "examples/wt_echo_client.rs"

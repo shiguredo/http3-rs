@@ -1,0 +1,18 @@
+[package]
+name = "tokio-ngtcp2"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+shiguredo_ngtcp2 = { path = "../shiguredo_ngtcp2" }
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+rcgen = "0.14"
+serial_test = "3"
+shiguredo_http3 = { path = "../.." }

@@ -1,0 +1,92 @@
+[package]
+name = "fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.shiguredo_http3]
+path = ".."
+
+[[bin]]
+name = "fuzz_varint"
+path = "fuzz_targets/fuzz_varint.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_frame"
+path = "fuzz_targets/fuzz_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_huffman"
+path = "fuzz_targets/fuzz_huffman.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_qpack"
+path = "fuzz_targets/fuzz_qpack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_capsule"
+path = "fuzz_targets/fuzz_capsule.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_connection"
+path = "fuzz_targets/fuzz_connection.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_webtransport_session"
+path = "fuzz_targets/fuzz_webtransport_session.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_validation"
+path = "fuzz_targets/fuzz_validation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_settings"
+path = "fuzz_targets/fuzz_settings.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_stream"
+path = "fuzz_targets/fuzz_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_datagram"
+path = "fuzz_targets/fuzz_datagram.rs"
+test = false
+doc = false
+bench = false

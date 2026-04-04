@@ -1,0 +1,33 @@
+[package]
+name = "nghttp3-sys"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+build = "build.rs"
+publish = false
+links = "nghttp3"
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[features]
+# bindings.rs を再生成するための feature
+# 通常は生成済みの bindings.rs を使用し、nghttp3 のバージョンを上げたときに再生成する
+# 使用方法: cargo build -p nghttp3-sys --features overwrite
+overwrite = ["dep:bindgen"]
+
+[build-dependencies]
+shiguredo_cmake = "4.3"
+shiguredo_toml = "2026.1.0"
+# overwrite feature でのみ使用 (通常ビルドでは libclang 不要)
+bindgen = { version = "0.72", optional = true }
+
+[dependencies]
+libc = "0.2"
+
+# 以降は外部ライブラリビルド用のメタデータ
+# (この内容は build.rs の中からのみ参照される)
+[package.metadata.external-dependencies]
+# webtransport ブランチがリリースされたら version (タグ) に切り替える
+nghttp3 = { git = "https://github.com/ngtcp2/nghttp3", branch = "webtransport" }

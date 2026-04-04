@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  github-release:
+    name: "Create GitHub Release"
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.VERSION }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Get the version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ${{ contains(steps.get_version.outputs.VERSION, 'canary') }}; then
+            gh release create ${{ steps.get_version.outputs.VERSION }} \
+              --prerelease \
+              --title "${{ steps.get_version.outputs.VERSION }}" \
+              --notes "Release ${{ steps.get_version.outputs.VERSION }}"
+          else
+            gh release create ${{ steps.get_version.outputs.VERSION }} \
+              --title "${{ steps.get_version.outputs.VERSION }}" \
+              --notes "Release ${{ steps.get_version.outputs.VERSION }}"
+          fi
+
+  publish:
+    needs: github-release
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  slack_notify:
+    needs: [github-release, publish]
+    timeout-minutes: 20
+    runs-on: ubuntu-slim
+    if: ${{ always() }}
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Slack Notification
+        uses: shiguredo/github-actions/.github/actions/slack-notify@main
+        with:
+          status: ${{ job.status }}
+          slack_webhook: ${{ secrets.SLACK_WEBHOOK }}
+          slack_channel: sora-moqt
+          notify_mode: failure_and_fixed
+        env:
+          GH_TOKEN: ${{ github.token }}
