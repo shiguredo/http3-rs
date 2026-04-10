@@ -12,28 +12,34 @@ draft-ietf-webtrans-http3 の draft-02 / 07 / 14 / 15 に対応しており、�
 
 ## 起動方法
 
+workspace に含まれていないため、`examples/wt_server` ディレクトリで直接実行する。
+
 デフォルト (`127.0.0.1:4443`) で起動する。
 
 ```bash
-cargo run -p wt_server
+cd examples/wt_server
+cargo run
 ```
 
 リッスンアドレスを指定する。
 
 ```bash
-cargo run -p wt_server -- --listen 127.0.0.1:4443
+cd examples/wt_server
+cargo run -- --listen 127.0.0.1:4443
 ```
 
 全ての WebTransport CONNECT を 404 で拒否する (`WtSessionRequest::reject()` の動作確認用)。
 
 ```bash
-cargo run -p wt_server -- --reject-connect
+cd examples/wt_server
+cargo run -- --reject-connect
 ```
 
 ログレベルを変更する。
 
 ```bash
-RUST_LOG=debug cargo run -p wt_server
+cd examples/wt_server
+RUST_LOG=debug cargo run
 ```
 
 ## オプション
