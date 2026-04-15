@@ -1,0 +1,45 @@
+name: Interop WebTransport
+
+on:
+  schedule:
+    # 毎日 JST 00:17 (UTC 15:17) に実行する
+    # :00 はジョブが集中して遅延しやすいのでずらす
+    - cron: "17 15 * * *"
+  workflow_dispatch:
+
+jobs:
+  interop-wt:
+    name: Interop WebTransport (ngtcp2 x s2n-quic)
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+      - run: rustup update stable
+      - uses: shiguredo/github-actions/.github/actions/rust-cache@main
+        with:
+          os: macos-26
+          toolchain: stable
+      # ngtcp2/nghttp3 と s2n-quic の組み合わせのみを実行する
+      - name: Run WebTransport interop tests (ngtcp2 x s2n-quic)
+        run: |
+          cargo test -p interop_wt --test ngtcp2_client_s2n_server
+          cargo test -p interop_wt --test s2n_client_ngtcp2_server
+
+  slack_notify:
+    needs: [interop-wt]
+    runs-on: ubuntu-slim
+    if: ${{ always() }}
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Slack Notification
+        uses: shiguredo/github-actions/.github/actions/slack-notify@main
+        with:
+          status: ${{ job.status }}
+          slack_channel: sora-moqt
+          slack_webhook: ${{ secrets.SLACK_WEBHOOK }}
+          notify_mode: failure_and_fixed
+        env:
+          GH_TOKEN: ${{ github.token }}

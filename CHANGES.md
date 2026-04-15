@@ -12,3 +12,6 @@
 ## develop
 
 ### misc
+
+- [ADD] ngtcp2/nghttp3 と s2n-quic の WebTransport 相互運用テストを毎日実行する GitHub Actions ワークフローを追加する
+  - @voluntas
