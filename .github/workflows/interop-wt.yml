@@ -2,9 +2,8 @@ name: Interop WebTransport
 
 on:
   schedule:
-    # 毎日 JST 00:17 (UTC 15:17) に実行する
-    # :00 はジョブが集中して遅延しやすいのでずらす
-    - cron: "17 15 * * *"
+    # 平日 JST 11:00 (UTC 02:00) に実行する
+    - cron: "0 2 * * 1-5"
   workflow_dispatch:
 
 jobs:
