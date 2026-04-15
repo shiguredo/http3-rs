@@ -12,3 +12,6 @@
 ## develop
 
 ### misc
+
+- [ADD] ngtcp2/nghttp3 と s2n-quic の WebTransport 相互運用テストを平日 JST 11:00 に実行する GitHub Actions ワークフローを追加する
+  - @voluntas
