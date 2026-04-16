@@ -22,8 +22,8 @@ jobs:
       # ngtcp2/nghttp3 と s2n-quic の組み合わせのみを実行する
       - name: Run WebTransport interop tests (ngtcp2 x s2n-quic)
         run: |
-          cargo test -p interop_wt --test ngtcp2_client_s2n_server
-          cargo test -p interop_wt --test s2n_client_ngtcp2_server
+          cargo test --manifest-path interop_wt/Cargo.toml --test ngtcp2_client_s2n_server
+          cargo test --manifest-path interop_wt/Cargo.toml --test s2n_client_ngtcp2_server
 
   slack_notify:
     needs: [interop-wt]
