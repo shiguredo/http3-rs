@@ -315,10 +315,10 @@ async fn test_h3_session_state_with_ngtcp2_streams() {
                             Http3Event::HeadersEnd { .. } => {
                                 return true;
                             }
-                            Http3Event::WebTransportData { stream_id, .. } => {
-                                if seen_streams.insert(*stream_id) {
-                                    received_stream_count_clone.fetch_add(1, Ordering::SeqCst);
-                                }
+                            Http3Event::WebTransportData { stream_id, .. }
+                                if seen_streams.insert(*stream_id) =>
+                            {
+                                received_stream_count_clone.fetch_add(1, Ordering::SeqCst);
                             }
                             _ => {}
                         }
