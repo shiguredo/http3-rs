@@ -1,8 +1,8 @@
 [package]
 name = "nghttp3-sys"
 version = "0.0.0"
-edition = "2024"
-rust-version = "1.88"
+edition.workspace = true
+rust-version.workspace = true
 build = "build.rs"
 publish = false
 links = "nghttp3"

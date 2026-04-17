@@ -1,8 +1,8 @@
 [package]
 name = "shiguredo_http3"
 version = "2026.1.0-canary.0"
-edition = "2024"
-rust-version = "1.88"
+edition.workspace = true
+rust-version.workspace = true
 authors = ["Shiguredo Inc."]
 license = "Apache-2.0"
 description = "Sans I/O HTTP/3 Library"
@@ -23,3 +23,7 @@ members = [
     "pbt",
 ]
 exclude = ["fuzz", "interop_h3", "interop_wt", "examples/wt_server"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
