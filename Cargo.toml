@@ -20,9 +20,10 @@ members = [
     "crates/shiguredo_ngtcp2",
     "crates/tokio-ngtcp2",
     "crates/tokio-s2n-quic",
+    "examples/wt_server",
     "pbt",
 ]
-exclude = ["fuzz", "interop_h3", "interop_wt", "examples/wt_server"]
+exclude = ["fuzz", "interop_h3", "interop_wt"]
 
 [workspace.package]
 edition = "2024"
