@@ -64,7 +64,7 @@ fuzz_target!(|input: FuzzInput| {
             }
 
             // from_payload でラウンドトリップ
-            let decoded = Settings::from_payload(&payload);
+            let decoded = Settings::from_payload(&payload).expect("roundtrip must succeed");
 
             // 基本設定がラウンドトリップで一致することを検証
             assert_eq!(settings.qpack_max_table_capacity, decoded.qpack_max_table_capacity);

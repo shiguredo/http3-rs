@@ -1,6 +1,7 @@
 # fuzz_settings が Settings::from_payload の Result 戻り値に追従していない
 
 Created: 2026-04-17
+Completed: 2026-04-17
 Model: Opus 4.7
 
 ## 背景
@@ -28,3 +29,9 @@ fuzz crate がコンパイルできず、`fuzz_settings` を含む fuzzing 全�
 ## 修正方針
 
 ラウンドトリップは成功するべきシナリオなので、`Settings::from_payload` の戻り値を `expect("roundtrip must succeed")` で unwrap したうえでフィールドアクセスする。
+
+## 解決方法
+
+`fuzz/fuzz_targets/fuzz_settings.rs:67` の `let decoded = Settings::from_payload(&payload);` を `let decoded = Settings::from_payload(&payload).expect("roundtrip must succeed");` に変更し、`decoded` を `Settings` として扱えるようにした。`cd fuzz && cargo check` でコンパイルが通ることを確認した。
+
+なお、本修正後もビルド済みバイナリを `-runs=0` で実行するとハングする別問題が残っているため、fuzz 全体の再設計タスクを別 issue で扱う。
