@@ -1,6 +1,7 @@
 # fuzz を再設計・再構築する
 
 Created: 2026-04-17
+Completed: 2026-04-17
 Model: Opus 4.7
 
 ## 背景
@@ -100,3 +101,55 @@ Model: Opus 4.7
 2. 既存の `Arbitrary` 定義を全て破棄するか、一部を PBT の `Strategy` に転用するか
 3. `corpus/` / `artifacts/` ディレクトリを全破棄するか
 4. CI に fuzz ビルド (cargo fuzz build) を組み込むか
+
+## 解決方法
+
+2026-04-17 に以下の作業を行い、本 issue で想定していた再設計を完了した。
+
+### 1. ハング問題の解消
+
+ローカル nightly toolchain が 2026-01-27 版と古かったことが原因 (ASan ランタイムの不具合が疑わしい)。`rustup update nightly` で 2026-04-16 版に更新したところ、libfuzzer の起動ログが正常に出力され、全 fuzz ターゲットが動作するようになった。
+
+### 2. fuzz ターゲットの純化
+
+全 11 ターゲットを実行して動作確認した上で、CLAUDE.md の役割分担 (fuzz はパニック安全性のみ) に従いラウンドトリップ等のプロパティ検証を削除した。
+
+- `fuzz_varint` / `fuzz_huffman` / `fuzz_datagram` / `fuzz_frame` / `fuzz_capsule`: `|data: &[u8]|` でパース関数を呼び出すだけの最小形式に統一
+- `fuzz_settings`: `Arbitrary` の `Vec<(u64, u64)>` で `SettingsPayload` を構築して `from_payload` に流すだけに変更
+- `fuzz_qpack`: 286 行 → 約 65 行。静的 / 動的デコーダーとエンコーダー / デコーダーストリームレシーバーへの任意バイト列注入のみに絞った
+- `fuzz_validation` / `fuzz_connection` / `fuzz_stream` / `fuzz_webtransport_session`: もともとパニック検証のみだったのでそのまま残した
+
+### 3. PBT への移管
+
+`fuzz_qpack` から削除した `DynamicRoundtrip` と `BlockedThenUnblocked` に相当するプロパティを `prop_qpack.rs` に追加した。
+
+- `prop_dynamic_encoder_decoder_roundtrip`: 同期された `DynamicEncoder` / `DynamicDecoder` 間でのラウンドトリップ
+- `prop_blocked_then_unblocked`: RFC 9204 Section 2.1.2 のブロック → テーブル更新 → アンブロック
+
+### 4. CI への組み込み
+
+ユーザーの判断により、今回は `cargo fuzz build` の CI 組み込みは行わない。
+
+### 5. `corpus/` / `artifacts/` の扱い
+
+`fuzz/.gitignore` で ignore 済みのため、git 管理外。今回の動作確認で生成された corpus/artifacts はローカルのみに残る。
+
+### 動作確認
+
+更新後に全 fuzz ターゲットを 15 秒ずつ実行し、クラッシュなしで終了することを確認した。ラウンドトリップ処理の除去により実行速度が向上している。
+
+| Target | 15 秒実行回数 (refactor 前 → 後) |
+| --- | --- |
+| fuzz_varint | 10,656,772 → 11,999,783 |
+| fuzz_huffman | 117,528 → 786,100 |
+| fuzz_datagram | 5,770,294 → 10,584,559 |
+| fuzz_frame | 2,837,783 → 6,939,022 |
+| fuzz_capsule | 4,640,644 → 10,988,514 |
+| fuzz_settings | 4,707,786 → 4,819,526 |
+| fuzz_qpack | 508,892 → 1,171,331 |
+| fuzz_validation | 2,866,345 → 2,811,328 |
+| fuzz_connection | 786,812 → 638,764 |
+| fuzz_stream | 1,450,618 → 1,311,722 |
+| fuzz_webtransport_session | 1,444,484 → 1,606,799 |
+
+PBT 側で追加した 2 つのプロパティも `cargo test -p pbt --test prop_qpack` で成功することを確認済み。

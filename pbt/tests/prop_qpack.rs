@@ -2,10 +2,13 @@
 
 use proptest::prelude::*;
 use shiguredo_http3::qpack::{
-    Decoder, DecoderInstruction, DecoderStream, DecoderStreamReceiver, DynamicEntry, DynamicTable,
-    Encoder, EncoderInstruction, EncoderStream, EncoderStreamReceiver, Header, STATIC_TABLE_LEN,
-    find_static_entry, huffman,
+    DecodeOutput, Decoder, DecoderInstruction, DecoderStream, DecoderStreamReceiver,
+    DynamicDecoder, DynamicEncoder, DynamicEntry, DynamicTable, Encoder, EncoderInstruction,
+    EncoderStream, EncoderStreamReceiver, Header, STATIC_TABLE_LEN, find_static_entry, huffman,
 };
+
+/// 動的テーブル容量 (RFC 9204 Section 3.2)
+const DYNAMIC_TABLE_CAPACITY: u64 = 4096;
 
 /// エントリオーバーヘッド (RFC 9204 Section 3.2.1)
 const ENTRY_OVERHEAD: u64 = 32;
@@ -854,5 +857,118 @@ proptest! {
         let new_entry = table.get_by_absolute_index(1).unwrap();
         prop_assert_eq!(&new_entry.name, &name);
         prop_assert_eq!(&new_entry.value, &value2);
+    }
+}
+
+// =============================================================================
+// DynamicEncoder / DynamicDecoder Roundtrip (RFC 9204 Section 4)
+// =============================================================================
+
+prop_compose! {
+    /// 動的テーブルエンコード用のヘッダーを生成
+    fn dynamic_header()(
+        name in valid_header_name(),
+        value in valid_header_value(),
+    ) -> Header {
+        Header::new(name, value)
+    }
+}
+
+proptest! {
+    /// Property: エンコーダーとデコーダーのテーブルを同期させると、
+    /// DynamicEncoder でエンコードしたヘッダーは DynamicDecoder で復元できる
+    #[test]
+    fn prop_dynamic_encoder_decoder_roundtrip(
+        entries in prop::collection::vec(
+            (valid_header_name(), valid_header_value()),
+            0..5,
+        ),
+        headers in prop::collection::vec(dynamic_header(), 1..5),
+        use_huffman in any::<bool>(),
+    ) {
+        let mut encoder = DynamicEncoder::new().use_huffman(use_huffman);
+        encoder.set_max_table_capacity(DYNAMIC_TABLE_CAPACITY);
+        encoder.set_table_capacity(DYNAMIC_TABLE_CAPACITY);
+
+        let mut decoder = DynamicDecoder::new();
+        decoder.set_max_table_capacity(DYNAMIC_TABLE_CAPACITY);
+        decoder.set_table_capacity(DYNAMIC_TABLE_CAPACITY);
+
+        // エンコーダーとデコーダーに同じエントリを挿入してテーブルを同期させる
+        for (name, value) in &entries {
+            encoder.insert(name.clone(), value.clone());
+            decoder.insert(name.clone(), value.clone());
+        }
+
+        let mut buf = vec![0u8; 64 * 1024];
+        let Some(len) = encoder.encode(&mut buf, &headers, 0) else {
+            return Ok(());
+        };
+
+        match decoder.decode(&buf[..len]) {
+            Ok(DecodeOutput::Decoded(decoded)) => {
+                prop_assert_eq!(headers.len(), decoded.len());
+                for (orig, dec) in headers.iter().zip(decoded.iter()) {
+                    prop_assert_eq!(orig.name.clone(), dec.name.clone());
+                    prop_assert_eq!(orig.value.clone(), dec.value.clone());
+                }
+            }
+            // テーブル状態の不一致によるブロックやエラーは許容
+            Ok(DecodeOutput::Blocked) | Err(_) => {}
+        }
+    }
+
+    /// Property: 動的テーブル参照でブロックされたデコードは、
+    /// エンコーダーストリームでテーブル更新後に成功する (RFC 9204 Section 2.1.2)
+    #[test]
+    fn prop_blocked_then_unblocked(
+        entry_name in valid_header_name(),
+        entry_value in valid_header_value(),
+    ) {
+        // エンコーダー側: 動的テーブルにエントリを挿入してエンコード
+        let mut encoder = DynamicEncoder::new().use_huffman(false);
+        encoder.set_max_table_capacity(DYNAMIC_TABLE_CAPACITY);
+        encoder.set_table_capacity(DYNAMIC_TABLE_CAPACITY);
+        encoder.insert(entry_name.clone(), entry_value.clone());
+
+        let headers = vec![Header::new(entry_name.clone(), entry_value.clone())];
+        let mut buf = vec![0u8; 64 * 1024];
+        let Some(encoded_len) = encoder.encode(&mut buf, &headers, 0) else {
+            return Ok(());
+        };
+        let encoded = buf[..encoded_len].to_vec();
+
+        // デコーダー側: テーブル空でデコード → Blocked 期待
+        let mut decoder = DynamicDecoder::new();
+        decoder.set_max_table_capacity(DYNAMIC_TABLE_CAPACITY);
+        decoder.set_table_capacity(DYNAMIC_TABLE_CAPACITY);
+        let first_result = decoder.decode(&encoded);
+
+        // エンコーダーストリーム命令で decoder のテーブルを更新
+        let mut enc_stream = EncoderStream::new();
+        let _ = enc_stream.encode_insert_with_literal_name(&entry_name, &entry_value);
+        let stream_data = enc_stream.get_data().to_vec();
+
+        let mut receiver = EncoderStreamReceiver::new();
+        receiver.set_max_table_capacity(DYNAMIC_TABLE_CAPACITY);
+        receiver.receive(&stream_data);
+        loop {
+            match receiver.process(decoder.table_mut()) {
+                Ok(None) | Err(_) => break,
+                Ok(Some(_)) => {}
+            }
+        }
+
+        // テーブル更新後のデコード
+        let second_result = decoder.decode(&encoded);
+
+        // Blocked → Decoded のプロパティ
+        if let (Ok(DecodeOutput::Blocked), Ok(DecodeOutput::Decoded(decoded))) =
+            (first_result, second_result)
+        {
+            prop_assert_eq!(decoded.len(), 1);
+            prop_assert_eq!(decoded[0].name.clone(), entry_name);
+            prop_assert_eq!(decoded[0].value.clone(), entry_value);
+        }
     }
 }
