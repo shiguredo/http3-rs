@@ -5,16 +5,11 @@ Model: Opus 4.7
 
 ## 背景
 
-`cargo fuzz run` で fuzz ターゲットを実行するとハングし、libfuzzer の起動ログすら `stderr` に出ない状態になっている。ビルド済みバイナリを `-runs=0` で直接起動してもハングするため、fuzzing が実行できない状態が続いている (issue 0057 のコンパイル修正後も残存)。これに加えて、現状の fuzz は CLAUDE.md の役割分担ルール (PBT はプロパティ検証、fuzz はパニック安全性) から逸脱しており、PBT と責務が重複している。
+現状の fuzz は CLAUDE.md の役割分担ルール (PBT はプロパティ検証、fuzz はパニック安全性) から逸脱しており、PBT と責務が重複している。加えて `fuzz_qpack.rs` が 286 行に肥大化するなど、各ターゲットのスコープが曖昧なまま修正が重ねられている。
+
+当初発生していた「fuzz 実行時にハングする」問題は、`rustup update nightly` でローカル nightly toolchain を 2026-01-27 版 → 2026-04-16 版に更新することで解消した (下記「ハング問題の調査結果」参照)。以後の論点は設計の責務整理に絞られる。
 
 ## 現状の問題点
-
-### ハング問題
-
-- `cargo fuzz run fuzz_settings -- -max_total_time=30` を実行しても 30 秒で終わらず、CPU を 100% 消費し続ける
-- ビルド済みバイナリを `-runs=0` で直接起動してもハングする
-- `stderr` に libfuzzer の起動ログが一切出力されない
-- 原因未特定 (aws-lc-sys のグローバル初期化 × sanitizer の相性、あるいは libfuzzer-sys / nightly toolchain / macOS aarch64 の組み合わせが疑わしい)
 
 ### 責務重複問題
 
@@ -41,9 +36,9 @@ Model: Opus 4.7
 
 ## 根拠
 
-- 現状 fuzz は実行できない状態にあり、CI にも組み込まれていないため、退行検知の役割を果たしていない
 - PBT とのスコープ重複により、同じ入力空間を両方で扱う保守コストが発生している
 - 既存 11 ターゲットの責務が曖昧なまま修正を重ねると、issue 0057 のような「シグネチャ変更に追従漏れ」系の退行が再発する
+- CI に fuzz ビルドが組み込まれていないため、退行検知の役割を果たしていない
 
 ## 再設計方針 (案)
 
@@ -77,21 +72,31 @@ Model: Opus 4.7
 
 `fuzz_validation` / `fuzz_stream` は対象関数が不明瞭なため、再検討する。
 
-### ハング問題の調査
+## ハング問題の調査結果 (2026-04-17)
 
-再構築作業に入る前に以下を調査する。
+### 症状
 
-1. `shiguredo_http3` に依存しない最小 fuzz ターゲット (例: `fn(data: &[u8]) { let _ = core::str::from_utf8(data); }`) でハングが再現するか確認する
-2. `shiguredo_http3` を依存に含めた最小 fuzz ターゲットで再現するか確認する
-3. 再現した場合は `aws-lc-sys` のビルドフラグ (sanitizer 経由でのビルド) を疑う
-4. 再現しない場合は、既存 fuzz ターゲット内のコード (例えば `Arbitrary` 実装) が起動時に重い処理をしていないか確認する
+- `cargo fuzz run fuzz_settings -- -max_total_time=30` を実行しても 30 秒で終わらず、CPU を 100% 消費し続ける
+- ビルド済みバイナリを `-runs=0` / `-help=1` で起動してもハングする
+- `stderr` に libfuzzer の起動ログが一切出力されない
+
+### 切り分け手順
+
+1. `shiguredo_http3` を一切参照しない空の fuzz ターゲット `fuzz_minimal` を追加して試したところ、同様に libfuzzer の起動ログを出さずにハングした
+2. バイナリの共有ライブラリ依存を確認すると `@rpath/librustc-nightly_rt.asan.dylib` に依存していた
+3. `rustc --version` が `1.95.0-nightly (e96bb7e44 2026-01-27)` と約 3 ヶ月前のもので、古すぎた
+4. `rustup update nightly` で `1.97.0-nightly (7af3402cd 2026-04-16)` に更新
+5. 更新後に `fuzz_minimal -runs=0` が正常終了し、`fuzz_settings -- -max_total_time=30` も 30 秒で 10,081,077 回実行して正常終了することを確認した
+
+### 結論
+
+古い nightly toolchain (特に ASan ランタイム) が原因。再構築作業では特に対応不要だが、CI 側では nightly を定期的に更新する仕組み (あるいは明示的に `rustup update nightly` を実行するステップ) を入れておくと退行を防げる。
 
 ## pending にした理由
 
 以下の設計判断が必要なため、ユーザーの合意を得てから実装に入る。
 
-1. ハング原因の調査を再構築の前に行うか、並行で行うか
-2. fuzz 対象とするパース関数の粒度・範囲
-3. 既存の `Arbitrary` 定義を全て破棄するか、一部を PBT の `Strategy` に転用するか
-4. `corpus/` / `artifacts/` ディレクトリを全破棄するか
-5. CI に fuzz ビルド (cargo fuzz build) を組み込むか
+1. fuzz 対象とするパース関数の粒度・範囲 (上記の 9 個で妥当か、`fuzz_validation` / `fuzz_stream` をどう扱うか)
+2. 既存の `Arbitrary` 定義を全て破棄するか、一部を PBT の `Strategy` に転用するか
+3. `corpus/` / `artifacts/` ディレクトリを全破棄するか
+4. CI に fuzz ビルド (cargo fuzz build) を組み込むか
