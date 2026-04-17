@@ -1014,8 +1014,9 @@ fn build_server_wt_settings(draft: DraftVersion) -> shiguredo_http3::webtranspor
         // H3_REQUEST_CANCELLED (0x10C) で CONNECT をリセットする。
         // (docs/SAFARI_WT.md 参照) 初期フロー制御値はセッション確立後の
         // WT_MAX_STREAMS / WT_MAX_DATA カプセルで通知する。
-        DraftVersion::Draft07 => shiguredo_http3::webtransport::Settings::new()
-            .webtransport_max_sessions_draft07(100),
+        DraftVersion::Draft07 => {
+            shiguredo_http3::webtransport::Settings::new().webtransport_max_sessions_draft07(100)
+        }
         DraftVersion::Draft02 => {
             shiguredo_http3::webtransport::Settings::new().enable_webtransport_draft02(true)
         }
