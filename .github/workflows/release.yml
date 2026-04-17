@@ -8,7 +8,7 @@ on:
 jobs:
   github-release:
     name: "Create GitHub Release"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.get_version.outputs.VERSION }}
     steps:
