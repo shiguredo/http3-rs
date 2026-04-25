@@ -9,11 +9,11 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
-ngtcp2-sys = { path = "../ngtcp2-sys" }
-nghttp3-sys = { path = "../nghttp3-sys" }
+aws-lc-rs = "1.16"
+aws-lc-sys = { version = "0.40", features = ["ssl"] }
 libc = "0.2"
-aws-lc-rs = "1"
-aws-lc-sys = { version = "0.39", features = ["ssl"] }
+nghttp3-sys = { path = "../nghttp3-sys" }
+ngtcp2-sys = { path = "../ngtcp2-sys" }
 
 [dev-dependencies]
 rcgen = "0.14"

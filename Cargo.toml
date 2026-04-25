@@ -3,28 +3,31 @@ name = "shiguredo_http3"
 version = "2026.1.0-canary.1"
 edition.workspace = true
 rust-version.workspace = true
-authors = ["Shiguredo Inc."]
-license = "Apache-2.0"
 description = "Sans I/O HTTP/3 Library"
+readme = "README.md"
 homepage = "https://github.com/shiguredo/http3-rs"
 repository = "https://github.com/shiguredo/http3-rs"
-readme = "README.md"
-include = ["/src/**", "/README.md", "/LICENSE"]
-
-[dependencies]
+license = "Apache-2.0"
+include = ["/LICENSE", "/README.md", "/src/**"]
 
 [workspace]
 members = [
-    "crates/ngtcp2-sys",
-    "crates/nghttp3-sys",
-    "crates/shiguredo_ngtcp2",
-    "crates/tokio-ngtcp2",
-    "crates/tokio-s2n-quic",
-    "examples/wt_server",
-    "pbt",
+  "crates/nghttp3-sys",
+  "crates/ngtcp2-rs",
+  "crates/ngtcp2-sys",
+  "crates/tokio-ngtcp2",
+  "crates/tokio-s2n-quic",
+  "examples/wt_server",
+  "interop/h3",
+  "interop/wt",
+  "pbt",
 ]
-exclude = ["fuzz", "interop_h3", "interop_wt"]
+exclude = [
+  "fuzz",
+]
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.88"
+
+[dependencies]

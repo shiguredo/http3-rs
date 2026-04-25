@@ -1,0 +1,34 @@
+[package]
+name = "interop_h3"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+bytes = "1.11"
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+http = "1.4"
+quiche = "0.28"
+quinn = { version = "0.11", default-features = false, features = [
+  "runtime-tokio",
+  "rustls-aws-lc-rs"
+] }
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = [
+  "aws_lc_rs",
+  "std"
+] }
+rustls-pki-types = { version = "1.14", features = ["std"] }
+shiguredo_http3 = { path = "../.." }
+shiguredo_ngtcp2 = { path = "../../crates/ngtcp2-rs" }
+tempfile = "3.27"
+tokio = { version = "1.52", features = ["full"] }
+tokio-ngtcp2 = { path = "../../crates/tokio-ngtcp2" }
+tokio-quiche = "0.18"
+tokio-s2n-quic = { path = "../../crates/tokio-s2n-quic" }
+tquic = { version = "1.6", optional = true }
+
+[features]
+tquic-impl = ["dep:tquic"]

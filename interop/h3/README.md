@@ -21,7 +21,7 @@ HTTP/3 相互運用性テスト
 ## テスト構成
 
 ```
-interop_h3/
+interop/h3/
   src/lib.rs          -- 共通ヘルパー関数
   neqo-db/            -- neqo 用 NSS テスト証明書データベース
   tests/

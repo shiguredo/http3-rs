@@ -6,7 +6,7 @@ use std::error::Error;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bytes::{Buf, Bytes};
 use quiche::h3::NameValue;
@@ -440,8 +440,7 @@ pub async fn start_quinn_server(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     // PEM をパース
     let certs: Vec<CertificateDer<'static>> =
-        CertificateDer::pem_slice_iter(cert_pem.as_bytes())
-            .collect::<Result<Vec<_>, _>>()?;
+        CertificateDer::pem_slice_iter(cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
     let key: PrivateKeyDer<'static> = PrivateKeyDer::from_pem_slice(key_pem.as_bytes())?;
 
     // rustls サーバー設定
@@ -598,6 +597,9 @@ pub async fn run_quinn_client(port: u16) -> Result<Vec<u8>, Box<dyn Error + Send
 mod tquic_impl {
 
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Instant;
 
     // --- tquic ヘルパー ---
 

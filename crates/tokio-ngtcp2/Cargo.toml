@@ -9,10 +9,10 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
-shiguredo_ngtcp2 = { path = "../shiguredo_ngtcp2" }
-tokio = { version = "1", features = ["full"] }
+shiguredo_ngtcp2 = { path = "../ngtcp2-rs" }
+tokio = { version = "1.52", features = ["full"] }
 
 [dev-dependencies]
 rcgen = "0.14"
-serial_test = "3"
+serial_test = "3.4"
 shiguredo_http3 = { path = "../.." }

@@ -25,11 +25,11 @@ fuzzing-list:
 
 # interop テスト (H3) を実行する
 interop-test-h3:
-	cd interop_h3 && cargo test
+	cd interop/h3 && cargo test
 
 # interop テスト (WebTransport) を実行する
 interop-test-wt:
-	cd interop_wt && cargo test
+	cd interop/wt && cargo test
 
 # interop テストを全て実行する
 interop-test: interop-test-h3 interop-test-wt

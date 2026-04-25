@@ -20,7 +20,7 @@ WebTransport 相互運用性テスト
 ## テスト構成
 
 ```
-interop_wt/
+interop/wt/
   src/lib.rs          -- 共通ヘルパー関数
   neqo-db/            -- neqo 用 NSS テスト証明書データベース
   tests/

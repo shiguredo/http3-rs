@@ -13,6 +13,10 @@
 
 ### misc
 
+- [UPDATE] 相互運用テスト用クレートの配置を `interop_h3` / `interop_wt` から `interop/h3` / `interop/wt` に移す
+  - @voluntas
+- [UPDATE] `aws-lc-sys` を `0.40` 系へ更新する
+  - @voluntas
 - [UPDATE] `examples/wt_server` を workspace member に含め、`edition` / `rust-version` を workspace 継承に変更し、個別の `Cargo.lock` を削除する
   - @voluntas
 - [UPDATE] edition と rust-version を `[workspace.package]` で共通化し、workspace member は `.workspace = true` で継承するようにする

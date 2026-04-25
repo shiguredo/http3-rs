@@ -44,7 +44,7 @@ jobs:
           echo "flags=$EXCLUDES" >> "$GITHUB_OUTPUT"
       - run: cargo clippy --workspace ${{ steps.excludes.outputs.flags }} -- -D warnings
       - run: cargo test --workspace ${{ steps.excludes.outputs.flags }}
-      # interop_h3 / interop_wt は quiche (BoringSSL) と neqo (NSS) のシンボル衝突により
+      # interop/h3 / interop/wt は quiche (BoringSSL) と neqo (NSS) のシンボル衝突により
       # Linux ではリンクに失敗するため macOS でのみテストする
       - name: Run interop tests
         if: runner.os == 'macOS'

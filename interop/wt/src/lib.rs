@@ -3,7 +3,6 @@
 //! tokio-ngtcp2, tokio-s2n-quic の WebTransport 相互運用性テストを支援するためのユーティリティ。
 
 use std::error::Error;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -176,10 +175,8 @@ pub async fn start_quinn_wt_server(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // PEM をパース
     let certs: Vec<CertificateDer<'static>> =
-        CertificateDer::pem_slice_iter(cert_pem.as_bytes())
-            .collect::<Result<Vec<_>, _>>()?;
-    let key: PrivateKeyDer<'static> =
-        PrivateKeyDer::from_pem_slice(key_pem.as_bytes())?;
+        CertificateDer::pem_slice_iter(cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
+    let key: PrivateKeyDer<'static> = PrivateKeyDer::from_pem_slice(key_pem.as_bytes())?;
 
     // rustls サーバー設定
     let mut tls_config = rustls::ServerConfig::builder_with_provider(Arc::new(
