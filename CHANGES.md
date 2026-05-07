@@ -21,6 +21,12 @@
   - @voluntas
 - [UPDATE] `RecvBuffer` を `BytesMut` ベースに変更し、`Buf::advance` でゼロコピー消費を行う (issue 0059)
   - @voluntas
+- [UPDATE] `qpack::EncoderStream` / `EncoderStreamReceiver` の send/recv バッファを `BytesMut` に変更し、内部の `encode_integer` / `encode_string` / `encode_string_with_prefix` を `&mut BytesMut` に揃える (issue 0059)
+  - @voluntas
+- [UPDATE] `qpack::DecoderStream` / `DecoderStreamReceiver` の send/recv バッファを `BytesMut` に変更し、内部の `encode_integer` を `&mut BytesMut` に揃える (issue 0059)
+  - @voluntas
+- [UPDATE] `stream::SendBuffer.data` を `BytesMut` に変更し、`consumed` オフセットを廃止して `Buf::advance` でゼロコピー消費する (`RecvBuffer` と対称化) (issue 0059)
+  - @voluntas
 - [ADD] `bytes` クレートを workspace dependencies に追加する (`default-features = false`、no_std 利用に備える) (issue 0059)
   - @voluntas
 - [ADD] `Connection::feed_stream_bytes(stream_id, Bytes, fin)` を追加する (zero-copy 用、既存の `feed_stream(&[u8])` も互換維持) (issue 0059)
@@ -40,6 +46,8 @@
 - [CHANGE] `stream::request::RawReceivedData::Data` / `Headers` / `Trailers` および `RequestStream::set_qpack_blocked` / `take_qpack_blocked_header` を `Vec<u8>` から `Bytes` に変更する (issue 0059)
   - @voluntas
 - [CHANGE] tokio-s2n-quic の `WtRecvStream::recv()` / `WtBiStream::recv()` / `WtSession::recv()` の戻り値および `H3Request` / `H3Response` / `H3ClientRequest` / `H3ClientResponse` の headers/body を `Vec<u8>` から `Bytes` に変更する (issue 0059)
+  - @voluntas
+- [CHANGE] 未使用の `stream::request::ReceivedData` enum を削除する (`RawReceivedData` のみ使用されていたため dead code) (issue 0059)
   - @voluntas
 
 ### misc

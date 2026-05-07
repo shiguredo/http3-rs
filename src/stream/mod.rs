@@ -152,12 +152,13 @@ impl StreamState {
 }
 
 /// 送信バッファ
+///
+/// 内部は `BytesMut` (issue 0059)。`Buf::advance` で先頭を捨てるため
+/// `consumed` オフセット管理は不要。`RecvBuffer` と対称。
 #[derive(Debug, Default)]
 pub struct SendBuffer {
     /// バッファデータ
-    data: Vec<u8>,
-    /// 消費済みオフセット
-    consumed: usize,
+    data: bytes::BytesMut,
     /// FIN フラグ
     fin: bool,
     /// FIN が QUIC 層に引き渡し済みか
@@ -187,21 +188,17 @@ impl SendBuffer {
 
     /// 送信可能なデータを取得
     pub fn peek(&self) -> &[u8] {
-        &self.data[self.consumed..]
+        &self.data
     }
 
-    /// データを消費
+    /// データを消費 (`advance` で先頭を捨てる)
     pub fn consume(&mut self, len: usize) {
-        self.consumed += len;
-        if self.consumed >= self.data.len() / 2 {
-            self.data.drain(..self.consumed);
-            self.consumed = 0;
-        }
+        bytes::Buf::advance(&mut self.data, len);
     }
 
     /// 送信待ちデータがあるか (FIN-only も含む)
     pub fn has_pending(&self) -> bool {
-        self.consumed < self.data.len() || (self.fin && !self.fin_sent)
+        !self.data.is_empty() || (self.fin && !self.fin_sent)
     }
 
     /// FIN を引き渡し済みとしてマークする
@@ -211,7 +208,7 @@ impl SendBuffer {
 
     /// すべてのデータが送信済みで FIN も送信済みか
     pub fn is_complete(&self) -> bool {
-        self.consumed >= self.data.len() && self.fin && self.fin_sent
+        self.data.is_empty() && self.fin && self.fin_sent
     }
 }
 

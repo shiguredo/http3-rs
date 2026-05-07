@@ -9,6 +9,8 @@
 //! - Insert with Literal Name (01 prefix)
 //! - Duplicate (000 prefix)
 
+use bytes::{Buf, BufMut, BytesMut};
+
 use crate::error::QpackError;
 
 use super::dynamic_table::DynamicTable;
@@ -40,10 +42,11 @@ pub enum EncoderInstruction {
 /// エンコーダーストリーム
 ///
 /// エンコーダー側で使用し、動的テーブルの更新命令を生成・送信する。
+/// 送信バッファは `BytesMut` で保持し、`Buf::advance` でゼロコピー消費する (issue 0059)。
 #[derive(Debug)]
 pub struct EncoderStream {
     /// 送信バッファ
-    send_buffer: Vec<u8>,
+    send_buffer: BytesMut,
     /// 最大テーブル容量 (ピアの SETTINGS から)
     max_table_capacity: u64,
 }
@@ -58,7 +61,7 @@ impl EncoderStream {
     /// 新しいエンコーダーストリームを作成
     pub fn new() -> Self {
         Self {
-            send_buffer: Vec::new(),
+            send_buffer: BytesMut::new(),
             max_table_capacity: 0,
         }
     }
@@ -68,7 +71,7 @@ impl EncoderStream {
     /// stream type 0x02 を送信バッファの先頭に追加する。
     /// Connection::set_encoder_stream_id() から呼び出される。
     pub fn write_stream_type(&mut self) {
-        self.send_buffer.push(0x02);
+        self.send_buffer.put_u8(0x02);
     }
 
     /// 最大テーブル容量を設定
@@ -164,7 +167,7 @@ impl EncoderStream {
         if len >= self.send_buffer.len() {
             self.send_buffer.clear();
         } else {
-            self.send_buffer.drain(..len);
+            self.send_buffer.advance(len);
         }
     }
 
@@ -177,10 +180,11 @@ impl EncoderStream {
 /// エンコーダーストリームレシーバー
 ///
 /// デコーダー側で使用し、エンコーダーからの命令を受信・処理する。
+/// 受信バッファは `BytesMut` で保持し、`Buf::advance` でゼロコピー消費する (issue 0059)。
 #[derive(Debug)]
 pub struct EncoderStreamReceiver {
     /// 受信バッファ
-    recv_buffer: Vec<u8>,
+    recv_buffer: BytesMut,
     /// 最大テーブル容量 (ローカルの SETTINGS)
     max_table_capacity: u64,
 }
@@ -195,7 +199,7 @@ impl EncoderStreamReceiver {
     /// 新しいエンコーダーストリームレシーバーを作成
     pub fn new() -> Self {
         Self {
-            recv_buffer: Vec::new(),
+            recv_buffer: BytesMut::new(),
             max_table_capacity: 0,
         }
     }
@@ -258,7 +262,7 @@ impl EncoderStreamReceiver {
             return Err(QpackError::DecodeFailed);
         }
 
-        self.recv_buffer.drain(..consumed);
+        self.recv_buffer.advance(consumed);
         table.set_capacity(capacity);
 
         Ok(Some(EncoderInstruction::SetDynamicTableCapacity {
@@ -278,7 +282,7 @@ impl EncoderStreamReceiver {
         let (value, value_len) = decode_string(&self.recv_buffer[consumed..])?;
         consumed += value_len;
 
-        self.recv_buffer.drain(..consumed);
+        self.recv_buffer.advance(consumed);
 
         // 動的テーブルに挿入
         let name = if is_static {
@@ -319,7 +323,7 @@ impl EncoderStreamReceiver {
         let (value, value_len) = decode_string(&self.recv_buffer[consumed..])?;
         consumed += value_len;
 
-        self.recv_buffer.drain(..consumed);
+        self.recv_buffer.advance(consumed);
 
         // 動的テーブルに挿入
         table
@@ -339,7 +343,7 @@ impl EncoderStreamReceiver {
     ) -> Result<Option<EncoderInstruction>, QpackError> {
         let (relative_index, consumed) = decode_integer(&self.recv_buffer, 5)?;
 
-        self.recv_buffer.drain(..consumed);
+        self.recv_buffer.advance(consumed);
 
         // 動的テーブルで複製
         table
@@ -358,25 +362,25 @@ impl EncoderStreamReceiver {
 // ヘルパー関数
 
 /// 整数をエンコード (RFC 7541 Section 5.1)
-fn encode_integer(buf: &mut Vec<u8>, value: u64, prefix_bits: u8, prefix: u8) {
+fn encode_integer(buf: &mut BytesMut, value: u64, prefix_bits: u8, prefix: u8) {
     let max_prefix = (1u64 << prefix_bits) - 1;
 
     if value < max_prefix {
-        buf.push(prefix | (value as u8));
+        buf.put_u8(prefix | (value as u8));
     } else {
-        buf.push(prefix | (max_prefix as u8));
+        buf.put_u8(prefix | (max_prefix as u8));
         let mut remaining = value - max_prefix;
 
         while remaining >= 128 {
-            buf.push(0x80 | ((remaining & 0x7f) as u8));
+            buf.put_u8(0x80 | ((remaining & 0x7f) as u8));
             remaining >>= 7;
         }
-        buf.push(remaining as u8);
+        buf.put_u8(remaining as u8);
     }
 }
 
 /// 文字列をエンコード (7-bit prefix)
-fn encode_string(buf: &mut Vec<u8>, data: &[u8]) {
+fn encode_string(buf: &mut BytesMut, data: &[u8]) {
     encode_string_with_prefix(buf, data, 7, 0x00);
 }
 
@@ -386,7 +390,7 @@ fn encode_string(buf: &mut Vec<u8>, data: &[u8]) {
 /// - 7-bit prefix: H は bit 7 (0x80)
 /// - 6-bit prefix: H は bit 6 (0x40)
 /// - 5-bit prefix: H は bit 5 (0x20)
-fn encode_string_with_prefix(buf: &mut Vec<u8>, data: &[u8], prefix_bits: u8, base: u8) {
+fn encode_string_with_prefix(buf: &mut BytesMut, data: &[u8], prefix_bits: u8, base: u8) {
     let huffman_len = huffman::encoded_len(data);
     if huffman_len < data.len() {
         // ハフマン符号化を使用

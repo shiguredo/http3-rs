@@ -8,6 +8,8 @@
 //! - Stream Cancellation (01 prefix)
 //! - Insert Count Increment (00 prefix)
 
+use bytes::{Buf, BufMut, BytesMut};
+
 use crate::error::QpackError;
 
 /// デコーダーストリーム命令
@@ -30,10 +32,11 @@ pub enum DecoderInstruction {
 /// デコーダーストリーム
 ///
 /// デコーダー側で使用し、エンコーダーへの確認応答命令を生成・送信する。
+/// 送信バッファは `BytesMut` で保持し、`Buf::advance` でゼロコピー消費する (issue 0059)。
 #[derive(Debug)]
 pub struct DecoderStream {
     /// 送信バッファ
-    send_buffer: Vec<u8>,
+    send_buffer: BytesMut,
 }
 
 impl Default for DecoderStream {
@@ -46,7 +49,7 @@ impl DecoderStream {
     /// 新しいデコーダーストリームを作成
     pub fn new() -> Self {
         Self {
-            send_buffer: Vec::new(),
+            send_buffer: BytesMut::new(),
         }
     }
 
@@ -55,7 +58,7 @@ impl DecoderStream {
     /// stream type 0x03 を送信バッファの先頭に追加する。
     /// Connection::set_decoder_stream_id() から呼び出される。
     pub fn write_stream_type(&mut self) {
-        self.send_buffer.push(0x03);
+        self.send_buffer.put_u8(0x03);
     }
 
     /// セクション確認応答をエンコード (Section 4.4.1)
@@ -89,7 +92,7 @@ impl DecoderStream {
         if len >= self.send_buffer.len() {
             self.send_buffer.clear();
         } else {
-            self.send_buffer.drain(..len);
+            self.send_buffer.advance(len);
         }
     }
 
@@ -102,10 +105,11 @@ impl DecoderStream {
 /// デコーダーストリームレシーバー
 ///
 /// エンコーダー側で使用し、デコーダーからの命令を受信・処理する。
+/// 受信バッファは `BytesMut` で保持し、`Buf::advance` でゼロコピー消費する (issue 0059)。
 #[derive(Debug)]
 pub struct DecoderStreamReceiver {
     /// 受信バッファ
-    recv_buffer: Vec<u8>,
+    recv_buffer: BytesMut,
     /// Known Received Count (エンコーダーが知っている、デコーダーが受信した挿入カウント)
     known_received_count: u64,
 }
@@ -120,7 +124,7 @@ impl DecoderStreamReceiver {
     /// 新しいデコーダーストリームレシーバーを作成
     pub fn new() -> Self {
         Self {
-            recv_buffer: Vec::new(),
+            recv_buffer: BytesMut::new(),
             known_received_count: 0,
         }
     }
@@ -177,7 +181,7 @@ impl DecoderStreamReceiver {
     fn decode_section_acknowledgment(&mut self) -> Result<Option<DecoderInstruction>, QpackError> {
         let (stream_id, consumed) = decode_integer(&self.recv_buffer, 7)?;
 
-        self.recv_buffer.drain(..consumed);
+        self.recv_buffer.advance(consumed);
 
         Ok(Some(DecoderInstruction::SectionAcknowledgment {
             stream_id,
@@ -188,7 +192,7 @@ impl DecoderStreamReceiver {
     fn decode_stream_cancellation(&mut self) -> Result<Option<DecoderInstruction>, QpackError> {
         let (stream_id, consumed) = decode_integer(&self.recv_buffer, 6)?;
 
-        self.recv_buffer.drain(..consumed);
+        self.recv_buffer.advance(consumed);
 
         Ok(Some(DecoderInstruction::StreamCancellation { stream_id }))
     }
@@ -212,7 +216,7 @@ impl DecoderStreamReceiver {
             return Err(QpackError::DecodeFailed);
         }
 
-        self.recv_buffer.drain(..consumed);
+        self.recv_buffer.advance(consumed);
         self.known_received_count = new_known;
 
         Ok(Some(DecoderInstruction::InsertCountIncrement { increment }))
@@ -227,20 +231,20 @@ impl DecoderStreamReceiver {
 // ヘルパー関数
 
 /// 整数をエンコード (RFC 7541 Section 5.1)
-fn encode_integer(buf: &mut Vec<u8>, value: u64, prefix_bits: u8, prefix: u8) {
+fn encode_integer(buf: &mut BytesMut, value: u64, prefix_bits: u8, prefix: u8) {
     let max_prefix = (1u64 << prefix_bits) - 1;
 
     if value < max_prefix {
-        buf.push(prefix | (value as u8));
+        buf.put_u8(prefix | (value as u8));
     } else {
-        buf.push(prefix | (max_prefix as u8));
+        buf.put_u8(prefix | (max_prefix as u8));
         let mut remaining = value - max_prefix;
 
         while remaining >= 128 {
-            buf.push(0x80 | ((remaining & 0x7f) as u8));
+            buf.put_u8(0x80 | ((remaining & 0x7f) as u8));
             remaining >>= 7;
         }
-        buf.push(remaining as u8);
+        buf.put_u8(remaining as u8);
     }
 }
 

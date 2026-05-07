@@ -470,17 +470,6 @@ impl RequestStream {
     }
 }
 
-/// 受信データの種類 (デコード済み)
-#[derive(Debug, Clone)]
-pub enum ReceivedData {
-    /// ヘッダー
-    Headers(Vec<DecodedHeader>),
-    /// ボディデータ
-    Data(Vec<u8>),
-    /// ストリーム終了
-    StreamEnd,
-}
-
 /// 受信データの種類 (生データ)
 ///
 /// QPACK デコード前のデータを返す。Connection が動的テーブルを使用してデコードする。
