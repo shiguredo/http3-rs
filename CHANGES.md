@@ -35,6 +35,8 @@
   - @voluntas
 - [UPDATE] `Connection::send_datagram` のエンコード経路を `BytesMut::with_capacity` + `freeze()` に変更し、`Vec::new() → Bytes::from(buf)` の中間確保を排除する (issue 0059)
   - @voluntas
+- [UPDATE] `stream::request::RequestStream::recv_body` を `Vec<u8>` から `BytesMut` に変更する (外向けの `received_body() -> &[u8]` API は不変) (issue 0059)
+  - @voluntas
 - [ADD] `bytes` クレートを workspace dependencies に追加する (`default-features = false`、no_std 利用に備える) (issue 0059)
   - @voluntas
 - [ADD] `Connection::feed_stream_bytes(stream_id, Bytes, fin)` を追加する (zero-copy 用、既存の `feed_stream(&[u8])` も互換維持) (issue 0059)
@@ -60,6 +62,8 @@
 - [CHANGE] `varint::encode_into_vec` を `varint::encode_into` にリネームし引数を `&mut impl BufMut` に変更する (`try_encode_into_vec` も同様に `try_encode_into` にリネーム) (issue 0059)
   - @voluntas
 - [CHANGE] `webtransport::Capsule::Unknown.payload` を `Vec<u8>` から `Bytes` に変更する (他の Capsule バリアントとの整合性) (issue 0059)
+  - @voluntas
+- [CHANGE] `qpack::huffman::decode` の戻り値を `Vec<u8>` から `Bytes` に変更する (内部 `BytesMut` 蓄積 + `freeze()` で呼び出し側の `Bytes::from(...)` 二重確保を排除) (issue 0059)
   - @voluntas
 
 ### misc

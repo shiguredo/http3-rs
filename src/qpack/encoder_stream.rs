@@ -478,7 +478,7 @@ fn decode_string_with_prefix(
     let encoded = &data[prefix_len..total_len];
 
     let decoded = if is_huffman {
-        bytes::Bytes::from(huffman::decode(encoded)?)
+        huffman::decode(encoded)?
     } else {
         bytes::Bytes::copy_from_slice(encoded)
     };

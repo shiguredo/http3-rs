@@ -57,8 +57,8 @@ pub struct RequestStream {
     state: StreamState,
     /// 受信済みヘッダー
     recv_headers: Vec<DecodedHeader>,
-    /// 受信済みボディ
-    recv_body: Vec<u8>,
+    /// 受信済みボディ (issue 0059: `BytesMut` で蓄積、外部公開は `&[u8]` のまま)
+    recv_body: bytes::BytesMut,
     /// HEAD リクエストかどうか (クライアントが HEAD を送信した場合 true)
     ///
     /// Content-Length 検証でレスポンスの body チェックをスキップするために使用する。
@@ -99,7 +99,7 @@ impl RequestStream {
             recv_state: RequestRecvState::WaitingHeaders,
             state: StreamState::Open,
             recv_headers: Vec::new(),
-            recv_body: Vec::new(),
+            recv_body: bytes::BytesMut::new(),
             is_head_request: false,
             is_connect_request: false,
             is_connect: false,

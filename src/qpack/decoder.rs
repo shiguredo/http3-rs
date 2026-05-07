@@ -232,7 +232,7 @@ impl Decoder {
         let encoded = &data[prefix_len..total_len];
 
         let decoded = if is_huffman {
-            bytes::Bytes::from(huffman::decode(encoded)?)
+            huffman::decode(encoded)?
         } else {
             bytes::Bytes::copy_from_slice(encoded)
         };
@@ -254,7 +254,7 @@ impl Decoder {
         let encoded = &data[..length];
 
         let decoded = if is_huffman {
-            bytes::Bytes::from(huffman::decode(encoded)?)
+            huffman::decode(encoded)?
         } else {
             bytes::Bytes::copy_from_slice(encoded)
         };
@@ -759,7 +759,7 @@ fn decode_string(data: &[u8]) -> Result<(bytes::Bytes, usize), QpackError> {
     let encoded = &data[prefix_len..total_len];
 
     let decoded = if is_huffman {
-        bytes::Bytes::from(huffman::decode(encoded)?)
+        huffman::decode(encoded)?
     } else {
         bytes::Bytes::copy_from_slice(encoded)
     };
@@ -780,7 +780,7 @@ fn decode_string_with_len(
     let encoded = &data[..length];
 
     let decoded = if is_huffman {
-        bytes::Bytes::from(huffman::decode(encoded)?)
+        huffman::decode(encoded)?
     } else {
         bytes::Bytes::copy_from_slice(encoded)
     };

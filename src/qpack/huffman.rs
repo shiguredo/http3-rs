@@ -2,6 +2,8 @@
 //!
 //! HPACK/QPACK で使用されるハフマン符号化/復号化を提供。
 
+use bytes::{BufMut, Bytes, BytesMut};
+
 use crate::error::QpackError;
 
 /// ハフマンシンボル (符号語と長さ)
@@ -1096,8 +1098,11 @@ pub fn encode(buf: &mut [u8], data: &[u8]) -> Option<usize> {
 }
 
 /// ハフマンデコード
-pub fn decode(data: &[u8]) -> Result<Vec<u8>, QpackError> {
-    let mut result = Vec::with_capacity(data.len() * 2);
+///
+/// 内部で `BytesMut` に書き込み、最後に `freeze()` で `Bytes` を返す (issue 0059)。
+/// 呼び出し側が `Bytes::from(...)` で再ラップする必要がない。
+pub fn decode(data: &[u8]) -> Result<Bytes, QpackError> {
+    let mut result = BytesMut::with_capacity(data.len() * 2);
     let mut acc: u64 = 0;
     let mut acc_bits: u32 = 0;
 
@@ -1128,9 +1133,9 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, QpackError> {
                     if (current & mask) == sym.code {
                         if sym_idx == 256 {
                             // EOS symbol - should not appear in valid data
-                            return Ok(result);
+                            return Ok(result.freeze());
                         }
-                        result.push(sym_idx as u8);
+                        result.put_u8(sym_idx as u8);
                         acc_bits -= sym.bits as u32;
                         // 使用したビットをクリア
                         if acc_bits > 0 {
@@ -1152,7 +1157,7 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, QpackError> {
     if acc_bits > 0 && acc_bits <= 7 {
         let mask = (1u64 << acc_bits) - 1;
         if (acc & mask) == mask {
-            return Ok(result);
+            return Ok(result.freeze());
         }
         // パディングが不正
         return Err(QpackError::InvalidHuffman);
@@ -1163,7 +1168,7 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, QpackError> {
         return Err(QpackError::InvalidHuffman);
     }
 
-    Ok(result)
+    Ok(result.freeze())
 }
 
 #[cfg(test)]
@@ -1180,7 +1185,7 @@ mod tests {
         assert_eq!(len, encoded_length);
 
         let decoded = decode(&buf).unwrap();
-        assert_eq!(decoded, input);
+        assert_eq!(&decoded[..], input);
     }
 
     #[test]
@@ -1190,7 +1195,7 @@ mod tests {
 
         encode(&mut buf, input).unwrap();
         let decoded = decode(&buf).unwrap();
-        assert_eq!(decoded, input);
+        assert_eq!(&decoded[..], input);
     }
 
     #[test]
@@ -1200,7 +1205,7 @@ mod tests {
 
         encode(&mut buf, input).unwrap();
         let decoded = decode(&buf).unwrap();
-        assert_eq!(decoded, input);
+        assert_eq!(&decoded[..], input);
     }
 
     #[test]
