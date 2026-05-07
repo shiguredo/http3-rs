@@ -1,5 +1,8 @@
 //! Property-Based Testing for HTTP/3 メッセージ検証 (RFC 9114 Section 4.1.2)
 
+// issue 0059 Phase 3: Bytes 比較で `bytes == &b"..."[..]` 形式を許容するため
+#![allow(clippy::op_ref)]
+
 use proptest::prelude::*;
 use shiguredo_http3::Header;
 use shiguredo_http3::validation::{
@@ -135,7 +138,7 @@ proptest! {
         regular_headers in valid_regular_headers(),
     ) {
         // CONNECT は :scheme, :path を持たないため除外
-        prop_assume!(method != b"CONNECT");
+        prop_assume!(method != &b"CONNECT"[..]);
 
         let mut headers = vec![
             Header::new(b":method", method.as_slice()),
@@ -169,7 +172,7 @@ proptest! {
         // レスポンスでは "te" ヘッダーは禁止なのでフィルタする
         let filtered: Vec<_> = regular_headers
             .into_iter()
-            .filter(|h| h.name != b"te")
+            .filter(|h| h.name != &b"te"[..])
             .collect();
         headers.extend(filtered);
 
@@ -194,7 +197,7 @@ proptest! {
         scheme in valid_scheme(),
         path in valid_path(),
     ) {
-        prop_assume!(method != b"CONNECT");
+        prop_assume!(method != &b"CONNECT"[..]);
 
         // 擬似ヘッダー → 通常ヘッダー → 擬似ヘッダー の順序にする
         let headers = vec![
@@ -375,7 +378,7 @@ proptest! {
         // 有効な通常ヘッダーのみのトレーラーは受理される
         let filtered: Vec<_> = regular_headers
             .iter()
-            .filter(|h| h.name != b"te")
+            .filter(|h| h.name != &b"te"[..])
             .cloned()
             .collect();
         if !filtered.is_empty() {

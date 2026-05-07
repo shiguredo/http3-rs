@@ -772,8 +772,8 @@ mod tests {
 
     fn h(name: &[u8], value: &[u8]) -> DecodedHeader {
         DecodedHeader {
-            name: name.to_vec(),
-            value: value.to_vec(),
+            name: bytes::Bytes::copy_from_slice(name),
+            value: bytes::Bytes::copy_from_slice(value),
         }
     }
 

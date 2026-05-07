@@ -11,6 +11,37 @@
 
 ## develop
 
+- [UPDATE] tokio-s2n-quic の HTTP/3・WebTransport receive ループで s2n-quic 由来の `Bytes` をそのまま `Connection::feed_stream_bytes` に流し、`Vec<u8>` への詰め替えを排除する (issue 0059)
+  - @voluntas
+- [UPDATE] tokio-s2n-quic の QPACK 送信チャンネルを `(u64, Vec<u8>)` から `(u64, Bytes)` に変更し、send 経路の冗長な `Bytes::from(...)` 変換を排除する (issue 0059)
+  - @voluntas
+- [UPDATE] `frame::decode_frame` を `BytesMut::split_to(payload_len).freeze()` による zero-copy 切り出しに変更し、`DATA` / `HEADERS` / `Unknown` ペイロードのコピーを排除する (issue 0059)
+  - @voluntas
+- [UPDATE] `Connection` 内部 dispatch (`handle_unidirectional_stream` / `handle_wt_bidi_stream` / `dispatch_client_bidi_stream` 等) を `&Bytes` 引き回しに変更し、WebTransport bidi/uni ストリームの Event 発行を refcount clone と `Bytes::slice(...)` による zero-copy 切り出しで行う (issue 0059)
+  - @voluntas
+- [UPDATE] `RecvBuffer` を `BytesMut` ベースに変更し、`Buf::advance` でゼロコピー消費を行う (issue 0059)
+  - @voluntas
+- [ADD] `bytes` クレートを workspace dependencies に追加する (`default-features = false`、no_std 利用に備える) (issue 0059)
+  - @voluntas
+- [ADD] `Connection::feed_stream_bytes(stream_id, Bytes, fin)` を追加する (zero-copy 用、既存の `feed_stream(&[u8])` も互換維持) (issue 0059)
+  - @voluntas
+- [ADD] `qpack::Header::from_bytes(Bytes, Bytes)` と tokio-s2n-quic の `H3Request` / `H3Response` / `H3ClientRequest` / `H3ClientResponse` に `header_bytes` / `body_bytes` を追加する (issue 0059)
+  - @voluntas
+- [CHANGE] `Event::Data.data` / `Event::Header.{name,value}` / `Event::WebTransportBidiStreamData.data` / `Event::WebTransportUniStreamData.data` / `Event::WebTransportDatagram.payload` を `Vec<u8>` から `Bytes` に変更する (issue 0059)
+  - @voluntas
+- [CHANGE] `Frame::Data.data` / `Frame::Headers.encoded_field_section` / `Frame::Unknown.payload` を `Vec<u8>` から `Bytes` に変更する (issue 0059)
+  - @voluntas
+- [CHANGE] `qpack::Header` / `qpack::DecodedHeader` / `qpack::DynamicEntry` / `qpack::EncoderInstruction` の name/value および `decode_string` の戻り値を `Vec<u8>` から `Bytes` に変更する (issue 0059)
+  - @voluntas
+- [CHANGE] `H3InitData.{control_data,encoder_data,decoder_data}` / `Connection::take_stream_data` の戻り値 / `Connection::send_datagram` の戻り値を `Vec<u8>` から `Bytes` に変更する (issue 0059)
+  - @voluntas
+- [CHANGE] `webtransport::Datagram.payload` / `webtransport::Session::buffer_datagram` の引数型 / `webtransport::Session::take_buffered_datagrams` の戻り値を `Vec<u8>` から `Bytes` に変更する (issue 0059)
+  - @voluntas
+- [CHANGE] `stream::request::RawReceivedData::Data` / `Headers` / `Trailers` および `RequestStream::set_qpack_blocked` / `take_qpack_blocked_header` を `Vec<u8>` から `Bytes` に変更する (issue 0059)
+  - @voluntas
+- [CHANGE] tokio-s2n-quic の `WtRecvStream::recv()` / `WtBiStream::recv()` / `WtSession::recv()` の戻り値および `H3Request` / `H3Response` / `H3ClientRequest` / `H3ClientResponse` の headers/body を `Vec<u8>` から `Bytes` に変更する (issue 0059)
+  - @voluntas
+
 ### misc
 
 - [UPDATE] 相互運用テスト用クレートの配置を `interop_h3` / `interop_wt` から `interop/h3` / `interop/wt` に移す

@@ -16,6 +16,8 @@ use super::huffman;
 use super::table::STATIC_TABLE;
 
 /// エンコーダーストリーム命令
+///
+/// name/value は `Bytes` で保持する (issue 0059 Phase 3)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EncoderInstruction {
     /// 動的テーブル容量を設定 (Section 4.3.1)
@@ -24,10 +26,13 @@ pub enum EncoderInstruction {
     InsertWithNameReference {
         is_static: bool,
         name_index: u64,
-        value: Vec<u8>,
+        value: bytes::Bytes,
     },
     /// リテラル名で挿入 (Section 4.3.3)
-    InsertWithLiteralName { name: Vec<u8>, value: Vec<u8> },
+    InsertWithLiteralName {
+        name: bytes::Bytes,
+        value: bytes::Bytes,
+    },
     /// 複製 (Section 4.3.4)
     Duplicate { relative_index: u64 },
 }
@@ -277,11 +282,12 @@ impl EncoderStreamReceiver {
 
         // 動的テーブルに挿入
         let name = if is_static {
-            STATIC_TABLE
-                .get(name_index as usize)
-                .ok_or(QpackError::InvalidIndex(name_index))?
-                .name
-                .to_vec()
+            bytes::Bytes::from_static(
+                STATIC_TABLE
+                    .get(name_index as usize)
+                    .ok_or(QpackError::InvalidIndex(name_index))?
+                    .name,
+            )
         } else {
             table
                 .get_by_relative_index_encoder(name_index)
@@ -436,18 +442,21 @@ fn decode_integer(data: &[u8], prefix_bits: u8) -> Result<(u64, usize), QpackErr
     Ok((value, offset))
 }
 
-/// 文字列をデコード (7-bit prefix)
-fn decode_string(data: &[u8]) -> Result<(Vec<u8>, usize), QpackError> {
+/// 文字列をデコード (7-bit prefix) (issue 0059 Phase 3: 戻り値を Bytes 化)
+fn decode_string(data: &[u8]) -> Result<(bytes::Bytes, usize), QpackError> {
     decode_string_with_prefix(data, 7)
 }
 
-/// 文字列をデコード (指定 prefix)
+/// 文字列をデコード (指定 prefix) (issue 0059 Phase 3: 戻り値を Bytes 化)
 ///
 /// H ビットは prefix ビットの直上に配置される:
 /// - 7-bit prefix: H は bit 7 (0x80)
 /// - 6-bit prefix: H は bit 6 (0x40)
 /// - 5-bit prefix: H は bit 5 (0x20)
-fn decode_string_with_prefix(data: &[u8], prefix_bits: u8) -> Result<(Vec<u8>, usize), QpackError> {
+fn decode_string_with_prefix(
+    data: &[u8],
+    prefix_bits: u8,
+) -> Result<(bytes::Bytes, usize), QpackError> {
     if data.is_empty() {
         return Err(QpackError::BufferTooShort);
     }
@@ -465,9 +474,9 @@ fn decode_string_with_prefix(data: &[u8], prefix_bits: u8) -> Result<(Vec<u8>, u
     let encoded = &data[prefix_len..total_len];
 
     let decoded = if is_huffman {
-        huffman::decode(encoded)?
+        bytes::Bytes::from(huffman::decode(encoded)?)
     } else {
-        encoded.to_vec()
+        bytes::Bytes::copy_from_slice(encoded)
     };
 
     Ok((decoded, total_len))
@@ -590,7 +599,7 @@ mod tests {
             } => {
                 assert!(is_static);
                 assert_eq!(name_index, 0);
-                assert_eq!(value, b"www.example.com");
+                assert_eq!(value, &b"www.example.com"[..]);
             }
             _ => panic!("Unexpected instruction"),
         }
@@ -598,7 +607,7 @@ mod tests {
         // テーブルにエントリが追加されている
         assert_eq!(table.len(), 1);
         let entry = table.get_by_absolute_index(0).unwrap();
-        assert_eq!(entry.name, b":authority");
-        assert_eq!(entry.value, b"www.example.com");
+        assert_eq!(entry.name, &b":authority"[..]);
+        assert_eq!(entry.value, &b"www.example.com"[..]);
     }
 }

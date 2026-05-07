@@ -2,6 +2,8 @@
 //!
 //! Connection から返されるイベントを定義。
 
+use bytes::Bytes;
+
 /// WebTransport セッション終了時にリセットすべきストリームの情報
 ///
 /// (draft-ietf-webtrans-http3-15 Section 3.1 / 5.4)
@@ -39,10 +41,10 @@ pub enum Event {
     Header {
         /// ストリーム ID
         stream_id: u64,
-        /// ヘッダー名
-        name: Vec<u8>,
+        /// ヘッダー名 (issue 0059 Phase 3: 動的テーブルからの参照を refcount 共有)
+        name: Bytes,
         /// ヘッダー値
-        value: Vec<u8>,
+        value: Bytes,
     },
     /// ヘッダー受信完了
     HeadersEnd {
@@ -53,8 +55,8 @@ pub enum Event {
     Data {
         /// ストリーム ID
         stream_id: u64,
-        /// データ
-        data: Vec<u8>,
+        /// データ (issue 0059: Bytes 化試験対象。cheap clone と参照カウント共有を意図する)
+        data: Bytes,
     },
     /// ストリーム終了
     StreamEnd {
@@ -92,8 +94,8 @@ pub enum Event {
     WebTransportBidiStreamData {
         /// QUIC ストリーム ID
         stream_id: u64,
-        /// データ
-        data: Vec<u8>,
+        /// データ (issue 0059: Bytes 化試験対象)
+        data: Bytes,
     },
     /// WebTransport 双方向ストリーム終了 (FIN 受信)
     WebTransportBidiStreamEnd {
@@ -112,8 +114,8 @@ pub enum Event {
     WebTransportUniStreamData {
         /// QUIC ストリーム ID
         stream_id: u64,
-        /// データ
-        data: Vec<u8>,
+        /// データ (issue 0059: Bytes 化試験対象)
+        data: Bytes,
     },
     /// WebTransport 単方向ストリーム終了 (FIN 受信)
     WebTransportUniStreamEnd {
@@ -187,8 +189,8 @@ pub enum Event {
     WebTransportDatagram {
         /// WebTransport セッション ID
         session_id: u64,
-        /// データグラムペイロード
-        payload: Vec<u8>,
+        /// データグラムペイロード (issue 0059: Bytes 化試験対象)
+        payload: Bytes,
     },
     /// WebTransport データストリームのリセット受信
     /// (draft-ietf-webtrans-http3-15 Section 4.4)

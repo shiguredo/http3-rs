@@ -60,8 +60,9 @@ impl WtSession {
         let (mut recv, send) = stream.split();
 
         // WT_STREAM ヘッダー (0x41 + session_id) をデコード
-        let mut header_buf: Vec<u8> = Vec::new();
-        let pending = loop {
+        // issue 0059 Phase 1: BytesMut で蓄積し、ヘッダ消費後の残留は split_off で zero-copy 切り出し
+        let mut header_buf = bytes::BytesMut::new();
+        let pending: Bytes = loop {
             let data = recv
                 .receive()
                 .await
@@ -69,7 +70,8 @@ impl WtSession {
                 .ok_or(crate::Error::StreamClosed)?;
             header_buf.extend_from_slice(&data);
             if let Some((_, consumed)) = StreamHeader::decode_bidirectional(&header_buf) {
-                break header_buf[consumed..].to_vec();
+                bytes::Buf::advance(&mut header_buf, consumed);
+                break header_buf.freeze();
             }
         };
 
@@ -108,7 +110,7 @@ impl WtSession {
             stream_id,
             recv,
             send,
-            pending: Vec::new(),
+            pending: Bytes::new(),
         })
     }
 
@@ -172,7 +174,8 @@ pub struct WtBiStream {
     /// 送信ストリーム
     send: SendStream,
     /// ヘッダー解析後の残留データ
-    pending: Vec<u8>,
+    /// issue 0059 Phase 1: Bytes 化して to_vec() を排除
+    pending: Bytes,
 }
 
 impl WtBiStream {
@@ -187,13 +190,13 @@ impl WtBiStream {
     /// データを受信する
     ///
     /// ヘッダー解析後の残留データがある場合はそれを先に返す
-    pub async fn recv(&mut self) -> crate::Result<Vec<u8>> {
+    pub async fn recv(&mut self) -> crate::Result<Bytes> {
         if !self.pending.is_empty() {
             return Ok(std::mem::take(&mut self.pending));
         }
         let received: Result<Option<Bytes>, _> = self.recv.receive().await;
         match received {
-            Ok(Some(data)) => Ok(data.to_vec()),
+            Ok(Some(data)) => Ok(data),
             Ok(None) => Err(crate::Error::StreamClosed),
             Err(e) => Err(crate::Error::transport(e)),
         }
@@ -245,12 +248,13 @@ pub struct WtRecvStream {
     /// 受信ストリーム
     recv: ReceiveStream,
     /// ヘッダー解析後の残留データ
-    pending: Vec<u8>,
+    /// issue 0059 Phase 1: Bytes 化して to_vec() を排除
+    pending: Bytes,
 }
 
 impl WtRecvStream {
     /// 新しい受信ストリームを作成する
-    pub(crate) fn new(stream_id: u64, recv: ReceiveStream, pending: Vec<u8>) -> Self {
+    pub(crate) fn new(stream_id: u64, recv: ReceiveStream, pending: Bytes) -> Self {
         Self {
             stream_id,
             recv,
@@ -261,13 +265,13 @@ impl WtRecvStream {
     /// データを受信する
     ///
     /// ヘッダー解析後の残留データがある場合はそれを先に返す
-    pub async fn recv(&mut self) -> crate::Result<Vec<u8>> {
+    pub async fn recv(&mut self) -> crate::Result<Bytes> {
         if !self.pending.is_empty() {
             return Ok(std::mem::take(&mut self.pending));
         }
         let received: Result<Option<Bytes>, _> = self.recv.receive().await;
         match received {
-            Ok(Some(data)) => Ok(data.to_vec()),
+            Ok(Some(data)) => Ok(data),
             Ok(None) => Err(crate::Error::StreamClosed),
             Err(e) => Err(crate::Error::transport(e)),
         }

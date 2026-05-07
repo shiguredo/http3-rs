@@ -1,6 +1,7 @@
 # bytes クレートの導入を試験する
 
 Created: 2026-05-07
+Completed: 2026-05-07
 Model: Opus 4.7
 
 ## 背景
@@ -109,3 +110,70 @@ Model: Opus 4.7
 - 公開 API 破壊が利用側 (sora-moqt-rs) で許容できない範囲に及ぶ
 
 いずれの場合も、何が問題で打ち切ったかを issue に追記してから pending に移す。
+
+## 解決方法
+
+`feature/change-introduce-bytes-crate` で本 issue の Phase 1〜5 と Phase 4-B (`Connection::feed_stream` の Bytes 化) をまとめて実装した。`tokio-ngtcp2` 側の Bytes 化は別 issue として切り出す (規模が大きく、ngtcp2 のバッファ所有権モデルとの整合確認が必要なため)。
+
+### workspace dependencies
+
+- `bytes = { version = "1.11", default-features = false }` を `[workspace.dependencies]` に追加 (no_std 利用に備え `default-features` を切り `alloc + core` のみ)。
+- `shiguredo_http3` 本体・`tokio-s2n-quic`・`pbt` の `Cargo.toml` に `bytes = { workspace = true }` を追加。
+
+### Phase 1: アダプタ層の zero-copy 化 (tokio-s2n-quic)
+
+- HTTP/3 / WebTransport の receive ループで s2n-quic 由来の `Bytes` を `Vec<u8>` に詰め替えていた箇所をすべて排除し、そのまま `Connection::feed_stream_bytes` に流す。
+- `WtRecvStream` / `WtBiStream` / `WtSession::recv()` の戻り値を `Bytes` 化。
+- `WebTransportSession.pending: Bytes`、`type_buf: BytesMut` 化し、ストリーム分類後に `advance + freeze` で `pending` を zero-copy 切り出し。
+- QPACK 送信チャンネルを `(u64, Vec<u8>)` から `(u64, Bytes)` に変更し、`encoder_send.send` / `decoder_send.send` への冗長な `Bytes::from(...)` 変換を排除。
+
+### Phase 2: Frame / Event 層 (公開 API 破壊)
+
+- `Frame::Data { data: Bytes }`、`Frame::Headers(HeadersPayload { encoded_field_section: Bytes })`、`Frame::Unknown { payload: Bytes }` に変更。
+- `Event::Data { data: Bytes }`、`Event::Header { name: Bytes, value: Bytes }`、`Event::WebTransportBidiStreamData { data: Bytes }`、`Event::WebTransportUniStreamData { data: Bytes }`、`Event::WebTransportDatagram { payload: Bytes }` に変更。
+- `frame::decode_frame(&mut BytesMut) -> Result<Option<Frame>>` を導入し、`split_to(payload_len).freeze()` でペイロードを zero-copy 切り出し。
+- `RawReceivedData::{Data, Headers, Trailers}` を `Bytes` 化。`qpack_blocked_header: Option<(Bytes, bool)>` に変更。
+
+### Phase 3: QPACK 層 (公開 API 破壊)
+
+- `qpack::Header` / `qpack::DecodedHeader` / `qpack::DynamicEntry` / `qpack::EncoderInstruction` の name/value をすべて `Bytes` 化。
+- `Header::new(impl AsRef<[u8]>, impl AsRef<[u8]>)` (リテラル/コピー用) と `Header::from_bytes(Bytes, Bytes)` (zero-copy 用) を提供。
+- 静的テーブル参照は `Bytes::from_static(entry.name)` で zero-copy refcount。
+- `decode_string` の戻り値を `Bytes` 化、動的テーブル挿入も `(Bytes, Bytes)` 直接。
+- `Bytes` と `&b"..."[..]` の比較で `clippy::op_ref` を crate level で `#![allow]` した (`assert_eq!` マクロが unsized `[u8]` を扱えないため `&b"..."[..]` 形式が必要)。
+
+### Phase 4: 内部パーサ・受信バッファの zero-copy 化
+
+- `RecvBuffer.data: BytesMut` 化し、`consumed: usize` フィールドを撤廃して `Buf::advance` でゼロコピー消費。
+- `frame::decode_frame` を `BytesMut::split_to(...).freeze()` ベースに書き直し、`stream::request::process_raw` から呼び出して `Frame::Data(DataPayload::new(payload))` を zero-copy 構築。
+
+### Phase 4-B: `Connection::feed_stream` の Bytes 化
+
+- 公開 API を 2 つに分割:
+  - `Connection::feed_stream(stream_id, data: &[u8], fin)`: 既存呼び出し互換 (内部で `Bytes::copy_from_slice`)。
+  - `Connection::feed_stream_bytes(stream_id, data: Bytes, fin)`: zero-copy 用 (issue 0059 の主目的)。
+- 内部 dispatch (`handle_unidirectional_stream` / `handle_new_unidirectional_stream` / `resolve_wt_uni_stream_session_id` / `dispatch_client_bidi_stream` / `handle_wt_bidi_stream` / `resolve_wt_bidi_stream_header` / `handle_bidirectional_stream`) を `&Bytes` または `Bytes` 値渡しに変更。
+- WebTransport bidi/uni stream の Event 発行で:
+  - 確定済みストリーム: `data.clone()` (refcount のみ)。
+  - 単一チャンクで varint 完結する WT bidi/uni Open: `data.slice(signal_len + id_len..)` で zero-copy 切り出し。
+  - pending バッファ経由 (varint align) のみやむを得ず `Bytes::copy_from_slice` を残す。
+
+### Phase 5: 公開 API・テスト・examples・interop の追従
+
+- `H3InitData.{control_data,encoder_data,decoder_data}` / `Connection::take_stream_data` の戻り値 / `Connection::send_datagram` の戻り値を `Bytes` 化。
+- `H3Request` / `H3Response` / `H3ClientRequest` / `H3ClientResponse` の headers/body を `Bytes` 化。`header_bytes(Bytes, Bytes)` / `body_bytes(Bytes)` を追加。
+- `webtransport::Datagram.payload: Bytes`、`Session::buffer_datagram(impl Into<Bytes>)`、`Session::take_buffered_datagrams() -> Vec<Bytes>` 化。
+- PBT の strategy を `Bytes` 出力に変更し、tests / examples / interop コードを追従。
+
+### 検証
+
+- `cargo test --workspace`: 62 ファイル全 pass、failed 0
+- `cargo clippy --workspace --all-targets -- -D warnings`: warning なし
+- `cargo fmt -- --check`: 通過
+- 簡易ベンチでのアロケーション削減実測は本 issue では実施せず、後続 issue として残す
+
+### 残作業 (別 issue)
+
+- `tokio-ngtcp2` アダプタの Bytes 化 (nghttp3 FFI バッファとの整合確認、`Bytes::from_owner` の検討を含むため別 issue)
+- `Buf` / `BufMut` トレイト境界によるパーサ完全抽象化 (no_std 化の本格対応として別 issue)
+- アロケーション削減ベンチ

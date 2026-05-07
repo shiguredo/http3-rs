@@ -26,7 +26,7 @@
 //! // デコード
 //! let decoder = Decoder::new();
 //! let decoded = decoder.decode(&buf[..len]).unwrap();
-//! assert_eq!(decoded[0].name, b":method");
+//! assert_eq!(decoded[0].name, &b":method"[..]);
 //! ```
 
 mod decoder;

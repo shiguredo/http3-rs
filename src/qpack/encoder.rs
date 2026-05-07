@@ -14,21 +14,33 @@ use super::huffman;
 use super::table::{STATIC_TABLE, find_static_entry};
 
 /// ヘッダーフィールド
+///
+/// name/value は `Bytes` で保持する (issue 0059 Phase 3)。
+/// 動的テーブルへの insert は cheap clone (refcount のみ) で済む。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
     /// ヘッダー名
-    pub name: Vec<u8>,
+    pub name: bytes::Bytes,
     /// ヘッダー値
-    pub value: Vec<u8>,
+    pub value: bytes::Bytes,
 }
 
 impl Header {
-    /// 新しいヘッダーを作成
-    pub fn new(name: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Self {
+    /// 新しいヘッダーを作成 (内部で `copy_from_slice` で `Bytes` 化する)
+    ///
+    /// バイトリテラル (`b":method"` 等) や `&[u8]` を素直に受け入れる API。
+    /// すでに `Bytes` を持っているなら [`Self::from_bytes`] を使うと
+    /// refcount だけで構築でき、コピーを避けられる。
+    pub fn new(name: impl AsRef<[u8]>, value: impl AsRef<[u8]>) -> Self {
         Self {
-            name: name.into(),
-            value: value.into(),
+            name: bytes::Bytes::copy_from_slice(name.as_ref()),
+            value: bytes::Bytes::copy_from_slice(value.as_ref()),
         }
+    }
+
+    /// 既存の `Bytes` から zero-copy でヘッダーを作成
+    pub fn from_bytes(name: bytes::Bytes, value: bytes::Bytes) -> Self {
+        Self { name, value }
     }
 }
 
@@ -793,7 +805,7 @@ impl DynamicEncoder {
     }
 
     /// エントリを動的テーブルに挿入
-    pub fn insert(&mut self, name: Vec<u8>, value: Vec<u8>) -> Option<u64> {
+    pub fn insert(&mut self, name: bytes::Bytes, value: bytes::Bytes) -> Option<u64> {
         self.table.insert(name, value)
     }
 
@@ -801,9 +813,9 @@ impl DynamicEncoder {
     pub fn insert_with_static_name_ref(
         &mut self,
         name_index: usize,
-        value: Vec<u8>,
+        value: bytes::Bytes,
     ) -> Option<u64> {
-        let name = STATIC_TABLE.get(name_index)?.name.to_vec();
+        let name = bytes::Bytes::from_static(STATIC_TABLE.get(name_index)?.name);
         self.table.insert(name, value)
     }
 
@@ -811,7 +823,7 @@ impl DynamicEncoder {
     pub fn insert_with_dynamic_name_ref(
         &mut self,
         relative_index: u64,
-        value: Vec<u8>,
+        value: bytes::Bytes,
     ) -> Option<u64> {
         let name = self
             .table
@@ -967,7 +979,10 @@ mod tests {
         encoder.set_peer_max_blocked_streams(100);
 
         // 動的テーブルにエントリを挿入
-        encoder.insert(b":authority".to_vec(), b"www.example.com".to_vec());
+        encoder.insert(
+            bytes::Bytes::from_static(b":authority"),
+            bytes::Bytes::from_static(b"www.example.com"),
+        );
         assert_eq!(encoder.table().len(), 1);
 
         // エンコード
@@ -989,7 +1004,10 @@ mod tests {
         encoder.set_peer_max_blocked_streams(2);
 
         // 動的テーブルにエントリを挿入
-        encoder.insert(b":authority".to_vec(), b"www.example.com".to_vec());
+        encoder.insert(
+            bytes::Bytes::from_static(b":authority"),
+            bytes::Bytes::from_static(b"www.example.com"),
+        );
 
         // blocked_streams_count < peer_max_blocked_streams: 動的テーブルを使用
         let headers = vec![Header::new(b":authority", b"www.example.com")];
@@ -1013,7 +1031,10 @@ mod tests {
 
         // :method = GET は静的テーブルにある (インデックス 17)
         // しかし、動的テーブルに追加すると動的テーブルが優先される
-        encoder.insert(b":method".to_vec(), b"GET".to_vec());
+        encoder.insert(
+            bytes::Bytes::from_static(b":method"),
+            bytes::Bytes::from_static(b"GET"),
+        );
 
         let headers = vec![Header::new(b":method", b"GET")];
         let mut buf = vec![0u8; 64];
@@ -1030,11 +1051,11 @@ mod tests {
         encoder.set_table_capacity(1024);
 
         // :authority (静的テーブルインデックス 0) を参照して挿入
-        let idx = encoder.insert_with_static_name_ref(0, b"example.com".to_vec());
+        let idx = encoder.insert_with_static_name_ref(0, bytes::Bytes::from_static(b"example.com"));
         assert_eq!(idx, Some(0));
 
         let entry = encoder.table().get_by_absolute_index(0).unwrap();
-        assert_eq!(entry.name, b":authority");
-        assert_eq!(entry.value, b"example.com");
+        assert_eq!(entry.name, &b":authority"[..]);
+        assert_eq!(entry.value, &b"example.com"[..]);
     }
 }

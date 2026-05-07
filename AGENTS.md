@@ -1,6 +1,7 @@
 # AGENTS
 
 - Premature Optimization is the Root of All Evil
+- 一切妥協をしないこと
 - 一切忖度しないこと
 - 常に日本語を利用すること
 - 全角と半角の間には半角スペースを入れること
@@ -8,7 +9,6 @@
 - コメントは全て日本語
 - ログメッセージは全て英語
 - エラーメッセージは全て英語
-- RFC 準拠を最優先すること
 
 ## レビューについて
 
@@ -29,11 +29,11 @@
 - コミットメッセージは日本語で書くこと
 - コミットメッセージは命令形で書くこと
 - コミットメッセージは〜するという形で書くこと
+- フックをスキップしないこと
 
 ## サンプルについて
 
 - サンプルは **お手本** なので性能と堅牢性を両立させること
-- サンプルは RFC に準拠していること
 
 ## issues について
 
@@ -45,12 +45,22 @@
   - 例: `0002-fmt-enhance-support-for-joins.md`
 - 仕様的に対応が難しい場合は issues/pending/ へ移動すること
 - issue を作成したらコミットすること
+- issue をコミットするときはコミットメッセージに issue の番号とタイトルを記載すること
 - 1 issue 完了ごとに 1 コミットすること
 - Issue の作成日はファイルのタイトルの後に `Created: YYYY-MM-DD` として記載すること
 - Issue の完了日はファイルのタイトルの後に `Completed: YYYY-MM-DD` として記載すること
 - Issue を作成した LLM の Model と Version をファイルのタイトルの後に `Model: <model-name> <version>` として記載すること
-  - Opus 4.6 や GPT-5.4 など
+  - Opus 4.7 や GPT-5.5 など
+  - モデルが複数ある場合は GPT-5.5 / Opus 4.7 のように両方記載すること
 - Issue はなぜこの対応が必要なのかの根拠を明確にすること
+
+### git ブランチの命名規則
+
+- Git Flow を使うこと
+- バグ修正は prefix を `feature/fix-` でブランチを切って対応すること
+- 機能追加は prefix を `feature/add-` でブランチを切って対応すること
+- 後方互換のない変更は prefix を `feature/change-` でブランチを切って対応すること
+- ブランチ名に issue の番号を含めないこと
 
 ### issue が実は解決してなかった場合
 
@@ -111,11 +121,11 @@
 # 前回の計測結果をクリアする
 cargo llvm-cov clean --workspace
 # src/<module>.rs 内の #[cfg(test)] mod tests を実行する
-cargo llvm-cov --no-report -p {crate} --lib -- <module>
+cargo llvm-cov --no-report -p shiguredo_http11 --lib -- <module>
 # tests/test_<module>.rs の単体テストを実行する
-cargo llvm-cov --no-report -p {crate} --test test_<module>
+cargo llvm-cov --no-report -p shiguredo_http11 --test test_<module>
 # pbt/tests/prop_<module>.rs の PBT を実行する
-cargo llvm-cov --no-report -p {crate} --test prop_<module>
+cargo llvm-cov --no-report -p pbt --test prop_<module>
 # 上記すべての計測結果をマージしてレポートを出力する
 cargo llvm-cov report
 ```
@@ -141,20 +151,32 @@ cargo llvm-cov report
 
 - 性能より堅牢性を優先すること
 - 依存は最小限にすること
-- draft 由来の機能を実装する場合は、根拠資料名、節番号、将来変更される可能性があることをコードコメントで明記すること
 - PBT(Property-Based Testing) や Fuzzing でテストを行うこと
+- 資料を由来の機能を実装する場合は、根拠資料名、節番号、将来変更される可能性があることをコードコメントで明記すること
+
+### ライブラリ
+
+- バージョン番号はマイナーバージョンまで指定すること
+  - 例: `spam = "0.3.10"` ではなく `spam = "0.3"` とする
+  - 例: `egg = "1.0.1"` ではなく `egg = "1.0"` とする
+- 依存ライブラリには用途をコメントで明記すること
 - PBT は proptest を使うこと
 - Fuzzing は cargo-fuzz を使うこと
-- HTTP/1.1 は shiguredo_http11 を使うこと
 - TLS は rustls を使う事
 - 非同期処理は tokio を使うこと
-- ログはできるだけださないが、使う場合は log を使うこと
 - 暗号ライブラリは aws-lc-rs を使うこと
+- JSON は nojson を使うこと
+- 引数のパースは noargs を使うこと
+- base64 は base64ct を使うこと
+- ログは tracing を使うこと
+  - ログのフィルタリングは tracing-subscriber を使うこと
 
-## QUIC
+## http3-rs
+
+### QUIC
 
 - ngtcp2 / nghttp3 を正としてテストを行うこと
 
-## RFC について
+### RFC について
 
 - refs/ 以下にある RFC を参照すること

@@ -216,26 +216,27 @@ impl ControlStreamRecv {
                         return Ok(None);
                     }
 
-                    // フレームをデコード
-                    let (frame, consumed) = frame::decode_frame(data).map_err(|e| match e {
-                        // サーバープッシュ関連フレームは接続エラー
-                        // CANCEL_PUSH / MAX_PUSH_ID は本来 control stream で受信可能だが、
-                        // サーバープッシュ非対応のため H3_FRAME_UNEXPECTED で拒否する
-                        // (詳細は frame/decoder.rs のコメントを参照)
-                        crate::error::FrameDecodeError::ServerPushNotSupported(_) => {
-                            Error::ConnectionError(ErrorCode::FrameUnexpected)
-                        }
-                        // HTTP/2 専用設定 ID は設定エラー (RFC 9114 Section 7.2.4)
-                        crate::error::FrameDecodeError::InvalidSettingsId(_) => {
-                            Error::ConnectionError(ErrorCode::SettingsError)
-                        }
-                        // payload 途中切れはフレームエラー (RFC 9114 Section 7.1)
-                        crate::error::FrameDecodeError::InvalidLength => {
-                            Error::ConnectionError(ErrorCode::FrameError)
-                        }
-                        other => Error::FrameDecode(other),
-                    })?;
-                    self.recv_buf.consume(consumed);
+                    // フレームをデコード (buf を破壊的に消費)
+                    let frame = frame::decode_frame(self.recv_buf.data_mut())
+                        .map_err(|e| match e {
+                            // サーバープッシュ関連フレームは接続エラー
+                            // CANCEL_PUSH / MAX_PUSH_ID は本来 control stream で受信可能だが、
+                            // サーバープッシュ非対応のため H3_FRAME_UNEXPECTED で拒否する
+                            // (詳細は frame/decoder.rs のコメントを参照)
+                            crate::error::FrameDecodeError::ServerPushNotSupported(_) => {
+                                Error::ConnectionError(ErrorCode::FrameUnexpected)
+                            }
+                            // HTTP/2 専用設定 ID は設定エラー (RFC 9114 Section 7.2.4)
+                            crate::error::FrameDecodeError::InvalidSettingsId(_) => {
+                                Error::ConnectionError(ErrorCode::SettingsError)
+                            }
+                            // payload 途中切れはフレームエラー (RFC 9114 Section 7.1)
+                            crate::error::FrameDecodeError::InvalidLength => {
+                                Error::ConnectionError(ErrorCode::FrameError)
+                            }
+                            other => Error::FrameDecode(other),
+                        })?
+                        .expect("header と総長は確認済みなので Some を返す");
 
                     // SETTINGS が最初のフレームである必要がある (RFC 9114 Section 6.2.1)
                     if self.recv_state == ControlRecvState::WaitingSettings {

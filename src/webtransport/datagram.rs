@@ -23,6 +23,8 @@
 //!
 //! - Section 4.5: Datagrams
 
+use bytes::Bytes;
+
 use crate::varint;
 
 /// `Datagram::new` のバリデーションエラー
@@ -40,12 +42,13 @@ pub enum DatagramError {
 ///
 /// QUIC DATAGRAM フレームのペイロードに格納される HTTP Datagram。
 /// Quarter Stream ID = session_id / 4 として送受信される。
+/// payload は cheap clone のため Bytes (issue 0059)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Datagram {
     /// WebTransport セッション ID (CONNECT ストリーム ID)
     pub session_id: u64,
     /// WebTransport ペイロード
-    pub payload: Vec<u8>,
+    pub payload: Bytes,
 }
 
 impl Datagram {
@@ -56,13 +59,13 @@ impl Datagram {
     /// `Err(DatagramError::InvalidSessionId)` を返す。
     ///
     /// Sans I/O 境界として呼び出し側にエラー判定を委ねるため、パニックしない。
-    pub fn new(session_id: u64, payload: Vec<u8>) -> Result<Self, DatagramError> {
+    pub fn new(session_id: u64, payload: impl Into<Bytes>) -> Result<Self, DatagramError> {
         if !session_id.is_multiple_of(4) {
             return Err(DatagramError::InvalidSessionId);
         }
         Ok(Self {
             session_id,
-            payload,
+            payload: payload.into(),
         })
     }
 
@@ -98,7 +101,7 @@ impl Datagram {
             return None;
         }
         let session_id = qsi.checked_mul(4)?;
-        let payload = buf[varint_len..].to_vec();
+        let payload = Bytes::copy_from_slice(&buf[varint_len..]);
         let consumed = buf.len();
         Some((
             Self {

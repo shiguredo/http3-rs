@@ -15,12 +15,13 @@ const ENTRY_OVERHEAD: u64 = 32;
 
 prop_compose! {
     /// 有効なヘッダー名を生成 (ASCII 小文字のみ)
+    /// issue 0059 Phase 3: Bytes 戻りで生成して clone を refcount だけにする
     fn valid_header_name()(
         len in 1usize..64,
     )(
         name in prop::collection::vec(prop::char::range('a', 'z'), len)
-    ) -> Vec<u8> {
-        name.into_iter().map(|c| c as u8).collect()
+    ) -> bytes::Bytes {
+        bytes::Bytes::from(name.into_iter().map(|c| c as u8).collect::<Vec<u8>>())
     }
 }
 
@@ -30,8 +31,8 @@ prop_compose! {
         len in 0usize..256,
     )(
         value in prop::collection::vec(0x20u8..0x7f, len)
-    ) -> Vec<u8> {
-        value
+    ) -> bytes::Bytes {
+        bytes::Bytes::from(value)
     }
 }
 
@@ -249,7 +250,10 @@ proptest! {
         // テーブルにエントリを追加
         let mut table = DynamicTable::with_capacity(4096);
         for i in 0..=index {
-            table.insert(format!("name{}", i).into_bytes(), b"value".to_vec());
+            table.insert(
+                bytes::Bytes::from(format!("name{}", i).into_bytes()),
+                bytes::Bytes::from_static(b"value"),
+            );
         }
 
         let instruction = receiver.process(&mut table).unwrap();
@@ -508,9 +512,9 @@ proptest! {
         let decoded = decoder.decode(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded.len(), 2);
-        prop_assert_eq!(&decoded[0].name, b":method");
-        prop_assert_eq!(&decoded[0].value, b"GET");
-        prop_assert_eq!(&decoded[1].name, b":path");
+        prop_assert_eq!(&decoded[0].name, &b":method"[..]);
+        prop_assert_eq!(&decoded[0].value, &b"GET"[..]);
+        prop_assert_eq!(&decoded[1].name, &b":path"[..]);
         prop_assert_eq!(&decoded[1].value, &value);
     }
 

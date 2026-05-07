@@ -908,16 +908,16 @@ mod tests {
         let req = ConnectRequest::new("https", "example.com", "/wt");
         let headers = req.to_headers();
         assert_eq!(headers.len(), 5);
-        assert_eq!(headers[0].name, b":method");
-        assert_eq!(headers[0].value, b"CONNECT");
-        assert_eq!(headers[1].name, b":protocol");
+        assert_eq!(headers[0].name, &b":method"[..]);
+        assert_eq!(headers[0].value, &b"CONNECT"[..]);
+        assert_eq!(headers[1].name, &b":protocol"[..]);
         assert_eq!(headers[1].value, PROTOCOL_WEBTRANSPORT_H3.as_bytes());
-        assert_eq!(headers[2].name, b":scheme");
-        assert_eq!(headers[2].value, b"https");
-        assert_eq!(headers[3].name, b":authority");
-        assert_eq!(headers[3].value, b"example.com");
-        assert_eq!(headers[4].name, b":path");
-        assert_eq!(headers[4].value, b"/wt");
+        assert_eq!(headers[2].name, &b":scheme"[..]);
+        assert_eq!(headers[2].value, &b"https"[..]);
+        assert_eq!(headers[3].name, &b":authority"[..]);
+        assert_eq!(headers[3].value, &b"example.com"[..]);
+        assert_eq!(headers[4].name, &b":path"[..]);
+        assert_eq!(headers[4].value, &b"/wt"[..]);
     }
 
     #[test]
@@ -925,7 +925,7 @@ mod tests {
         let req =
             ConnectRequest::new("https", "example.com", "/wt").draft_version(DraftVersion::Draft02);
         let headers = req.to_headers();
-        assert_eq!(headers[1].name, b":protocol");
+        assert_eq!(headers[1].name, &b":protocol"[..]);
         assert_eq!(headers[1].value, PROTOCOL_WEBTRANSPORT_DRAFT02.as_bytes());
     }
 
@@ -934,7 +934,7 @@ mod tests {
         let req =
             ConnectRequest::new("https", "example.com", "/wt").draft_version(DraftVersion::Draft07);
         let headers = req.to_headers();
-        assert_eq!(headers[1].name, b":protocol");
+        assert_eq!(headers[1].name, &b":protocol"[..]);
         assert_eq!(headers[1].value, PROTOCOL_WEBTRANSPORT_DRAFT02.as_bytes());
     }
 
@@ -944,8 +944,8 @@ mod tests {
             ConnectRequest::new("https", "example.com", "/wt").origin("https://client.example");
         let headers = req.to_headers();
         assert_eq!(headers.len(), 6);
-        assert_eq!(headers[5].name, b"origin");
-        assert_eq!(headers[5].value, b"https://client.example");
+        assert_eq!(headers[5].name, &b"origin"[..]);
+        assert_eq!(headers[5].value, &b"https://client.example"[..]);
     }
 
     #[test]
@@ -954,8 +954,8 @@ mod tests {
             .available_protocols(vec!["moq".to_string(), "chat".to_string()]);
         let headers = req.to_headers();
         assert_eq!(headers.len(), 6);
-        assert_eq!(headers[5].name, b"wt-available-protocols");
-        assert_eq!(headers[5].value, b"\"moq\", \"chat\"");
+        assert_eq!(headers[5].name, &b"wt-available-protocols"[..]);
+        assert_eq!(headers[5].value, &b"\"moq\", \"chat\""[..]);
     }
 
     #[test]
@@ -1041,7 +1041,7 @@ mod tests {
         let headers = original.to_headers();
         let pairs: Vec<(&[u8], &[u8])> = headers
             .iter()
-            .map(|h| (h.name.as_slice(), h.value.as_slice()))
+            .map(|h| (h.name.as_ref(), h.value.as_ref()))
             .collect();
         let parsed = ConnectRequest::from_headers(&pairs).unwrap();
         assert_eq!(parsed.scheme, original.scheme);
@@ -1055,8 +1055,8 @@ mod tests {
         let resp = ConnectResponse::new(200);
         let headers = resp.to_headers();
         assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].name, b":status");
-        assert_eq!(headers[0].value, b"200");
+        assert_eq!(headers[0].name, &b":status"[..]);
+        assert_eq!(headers[0].value, &b"200"[..]);
     }
 
     #[test]
@@ -1064,8 +1064,8 @@ mod tests {
         let resp = ConnectResponse::new(200).with_protocol("moq");
         let headers = resp.to_headers();
         assert_eq!(headers.len(), 2);
-        assert_eq!(headers[1].name, b"wt-protocol");
-        assert_eq!(headers[1].value, b"\"moq\"");
+        assert_eq!(headers[1].name, &b"wt-protocol"[..]);
+        assert_eq!(headers[1].value, &b"\"moq\""[..]);
     }
 
     #[test]

@@ -2015,6 +2015,7 @@ dependencies = [
 name = "pbt"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "proptest",
  "shiguredo_http3",
 ]
@@ -3116,6 +3117,9 @@ dependencies = [
 [[package]]
 name = "shiguredo_http3"
 version = "2026.1.0-canary.1"
+dependencies = [
+ "bytes",
+]
 
 [[package]]
 name = "shiguredo_ngtcp2"

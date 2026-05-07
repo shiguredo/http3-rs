@@ -1,3 +1,7 @@
+// issue 0059 Phase 3: Bytes 比較で `bytes == &b"..."[..]` 形式が必要なため
+// clippy::op_ref を抑制する (`Bytes: PartialEq<&[u8]>` impl 経由でのみ動く)
+#![allow(clippy::op_ref)]
+
 //! shiguredo_http3 - Sans I/O HTTP/3 ライブラリ
 //!
 //! QUIC 非依存の HTTP/3 実装。任意の QUIC 実装と組み合わせて使用可能。

@@ -1,3 +1,6 @@
+// issue 0059 Phase 3: Bytes 比較で `bytes == &b"..."[..]` 形式を許容するため
+#![allow(clippy::op_ref)]
+
 //! tokio-s2n-quic - s2n-quic ベースの async HTTP/3 + WebTransport
 //!
 //! s2n-quic の tokio ネイティブ設計を活かし、

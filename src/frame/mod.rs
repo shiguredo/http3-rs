@@ -17,6 +17,8 @@ mod encoder;
 pub use decoder::{FrameHeader, decode_frame, decode_frame_header};
 pub use encoder::{encode_frame, encode_frame_header, encoded_frame_len};
 
+use bytes::Bytes;
+
 /// フレームタイプ (RFC 9114 Section 7.2)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u64)]
@@ -75,7 +77,8 @@ pub enum Frame {
     /// 送信される正当なフレームのため、デコードして単調性検証だけ行う。
     MaxPushId(u64),
     /// 不明なフレーム (スキップ用)
-    Unknown { frame_type: u64, payload: Vec<u8> },
+    /// payload は zero-copy 切り出しのため Bytes (issue 0059)
+    Unknown { frame_type: u64, payload: Bytes },
 }
 
 impl Frame {
@@ -93,31 +96,39 @@ impl Frame {
 }
 
 /// DATA フレームペイロード
+///
+/// payload は Bytes でラップする (issue 0059)。
+/// QUIC アダプタ層から受け取ったバッファを再アロケートせずに保持し、
+/// イベント経由で転送する際の clone を O(1) refcount 操作にする。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataPayload {
     /// ペイロードデータ
-    pub data: Vec<u8>,
+    pub data: Bytes,
 }
 
 impl DataPayload {
     /// 新しい DATA ペイロードを作成
-    pub fn new(data: Vec<u8>) -> Self {
-        Self { data }
+    pub fn new(data: impl Into<Bytes>) -> Self {
+        Self { data: data.into() }
     }
 }
 
 /// HEADERS フレームペイロード
+///
+/// encoded_field_section は Bytes でラップする (issue 0059)。
+/// QUIC 受信バッファから zero-copy で切り出した payload をそのまま保持し、
+/// QPACK デコード処理に渡す際の clone を refcount 操作にする。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadersPayload {
     /// QPACK エンコード済みヘッダーブロック
-    pub encoded_field_section: Vec<u8>,
+    pub encoded_field_section: Bytes,
 }
 
 impl HeadersPayload {
     /// 新しい HEADERS ペイロードを作成
-    pub fn new(encoded_field_section: Vec<u8>) -> Self {
+    pub fn new(encoded_field_section: impl Into<Bytes>) -> Self {
         Self {
-            encoded_field_section,
+            encoded_field_section: encoded_field_section.into(),
         }
     }
 }
@@ -186,7 +197,7 @@ mod tests {
 
         let unknown = Frame::Unknown {
             frame_type: 0x99,
-            payload: vec![],
+            payload: Bytes::new(),
         };
         assert_eq!(unknown.frame_type(), 0x99);
     }

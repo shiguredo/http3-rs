@@ -35,7 +35,7 @@ fn build_headers_frame(headers: &[Header]) -> Vec<u8> {
 
 /// draft-02 クライアントの SETTINGS を持つ Connection を作成し、
 /// 制御ストリームデータを返す
-fn build_draft02_client_ctrl() -> Vec<u8> {
+fn build_draft02_client_ctrl() -> bytes::Bytes {
     let wt = webtransport::Settings::new().enable_webtransport_draft02(true);
     // draft-02 では enable_connect_protocol は不要
     let settings = Settings {
@@ -53,7 +53,7 @@ fn build_draft02_client_ctrl() -> Vec<u8> {
 /// draft-07 クライアントの SETTINGS を持つ Connection を作成し、
 /// 制御ストリームデータを返す
 /// Safari と同じパターン: ENABLE_CONNECT_PROTOCOL なし
-fn build_draft07_client_ctrl() -> Vec<u8> {
+fn build_draft07_client_ctrl() -> bytes::Bytes {
     let wt = webtransport::Settings::new().webtransport_max_sessions_draft07(1);
     let settings = Settings {
         enable_connect_protocol: None,
@@ -70,7 +70,7 @@ fn build_draft07_client_ctrl() -> Vec<u8> {
 /// draft-14 クライアントの SETTINGS を持つ Connection を作成し、
 /// 制御ストリームデータを返す
 /// ENABLE_CONNECT_PROTOCOL あり
-fn build_draft14_client_ctrl_with_ecp() -> Vec<u8> {
+fn build_draft14_client_ctrl_with_ecp() -> bytes::Bytes {
     let wt = webtransport::Settings::new()
         .wt_max_sessions_draft14(1)
         .wt_initial_max_streams_uni(100)
@@ -87,7 +87,7 @@ fn build_draft14_client_ctrl_with_ecp() -> Vec<u8> {
 }
 
 /// draft-14 クライアントの SETTINGS (ENABLE_CONNECT_PROTOCOL なし)
-fn build_draft14_client_ctrl_without_ecp() -> Vec<u8> {
+fn build_draft14_client_ctrl_without_ecp() -> bytes::Bytes {
     let wt = webtransport::Settings::new()
         .wt_max_sessions_draft14(1)
         .wt_initial_max_streams_uni(100)
@@ -106,7 +106,7 @@ fn build_draft14_client_ctrl_without_ecp() -> Vec<u8> {
 }
 
 /// draft-15 クライアントの SETTINGS (ENABLE_CONNECT_PROTOCOL あり)
-fn build_draft15_client_ctrl_with_ecp() -> Vec<u8> {
+fn build_draft15_client_ctrl_with_ecp() -> bytes::Bytes {
     let wt = webtransport::Settings::new().wt_enabled(1);
     let settings = Settings::new()
         .h3_datagram(true)
@@ -118,7 +118,7 @@ fn build_draft15_client_ctrl_with_ecp() -> Vec<u8> {
 }
 
 /// draft-15 クライアントの SETTINGS (ENABLE_CONNECT_PROTOCOL なし)
-fn build_draft15_client_ctrl_without_ecp() -> Vec<u8> {
+fn build_draft15_client_ctrl_without_ecp() -> bytes::Bytes {
     let wt = webtransport::Settings::new().wt_enabled(1);
     let settings = Settings {
         enable_connect_protocol: None,

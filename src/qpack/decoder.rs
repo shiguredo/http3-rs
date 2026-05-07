@@ -14,12 +14,15 @@ use super::huffman;
 use super::table::{STATIC_TABLE_LEN, get_static_entry};
 
 /// デコードされたヘッダー
+///
+/// name/value は `Bytes` で保持する (issue 0059 Phase 3)。
+/// 動的テーブル参照時は entry の `Bytes` を clone するだけで refcount 共有できる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedHeader {
     /// ヘッダー名
-    pub name: Vec<u8>,
+    pub name: bytes::Bytes,
     /// ヘッダー値
-    pub value: Vec<u8>,
+    pub value: bytes::Bytes,
 }
 
 /// QPACK 動的デコードの結果 (RFC 9204 Section 2.1.2)
@@ -144,8 +147,8 @@ impl Decoder {
 
         Ok((
             DecodedHeader {
-                name: entry.name.to_vec(),
-                value: entry.value.to_vec(),
+                name: bytes::Bytes::from_static(entry.name),
+                value: bytes::Bytes::from_static(entry.value),
             },
             consumed,
         ))
@@ -176,7 +179,7 @@ impl Decoder {
         }
 
         let entry = get_static_entry(index as usize).ok_or(QpackError::InvalidIndex(index))?;
-        let name = entry.name.to_vec();
+        let name = bytes::Bytes::from_static(entry.name);
 
         // Value
         let (value, value_len) = self.decode_string(&data[offset..])?;
@@ -212,8 +215,8 @@ impl Decoder {
         Ok((DecodedHeader { name, value }, offset))
     }
 
-    /// 文字列をデコード
-    fn decode_string(&self, data: &[u8]) -> Result<(Vec<u8>, usize), QpackError> {
+    /// 文字列をデコード (issue 0059 Phase 3: 戻り値を Bytes 化)
+    fn decode_string(&self, data: &[u8]) -> Result<(bytes::Bytes, usize), QpackError> {
         if data.is_empty() {
             return Err(QpackError::BufferTooShort);
         }
@@ -229,21 +232,21 @@ impl Decoder {
         let encoded = &data[prefix_len..total_len];
 
         let decoded = if is_huffman {
-            huffman::decode(encoded)?
+            bytes::Bytes::from(huffman::decode(encoded)?)
         } else {
-            encoded.to_vec()
+            bytes::Bytes::copy_from_slice(encoded)
         };
 
         Ok((decoded, total_len))
     }
 
-    /// 長さ指定で文字列をデコード
+    /// 長さ指定で文字列をデコード (issue 0059 Phase 3: 戻り値を Bytes 化)
     fn decode_string_with_len(
         &self,
         data: &[u8],
         length: usize,
         is_huffman: bool,
-    ) -> Result<(Vec<u8>, usize), QpackError> {
+    ) -> Result<(bytes::Bytes, usize), QpackError> {
         if data.len() < length {
             return Err(QpackError::BufferTooShort);
         }
@@ -251,9 +254,9 @@ impl Decoder {
         let encoded = &data[..length];
 
         let decoded = if is_huffman {
-            huffman::decode(encoded)?
+            bytes::Bytes::from(huffman::decode(encoded)?)
         } else {
-            encoded.to_vec()
+            bytes::Bytes::copy_from_slice(encoded)
         };
 
         Ok((decoded, length))
@@ -514,8 +517,8 @@ impl DynamicDecoder {
             let entry = get_static_entry(index as usize).ok_or(QpackError::InvalidIndex(index))?;
             Ok((
                 DecodedHeader {
-                    name: entry.name.to_vec(),
-                    value: entry.value.to_vec(),
+                    name: bytes::Bytes::from_static(entry.name),
+                    value: bytes::Bytes::from_static(entry.value),
                 },
                 consumed,
             ))
@@ -599,7 +602,7 @@ impl DynamicDecoder {
                 return Err(QpackError::InvalidIndex(index));
             }
             let entry = get_static_entry(index as usize).ok_or(QpackError::InvalidIndex(index))?;
-            entry.name.to_vec()
+            bytes::Bytes::from_static(entry.name)
         } else {
             // absolute_index = base - index - 1
             // RFC 9204 Section 2.2.3: absolute index >= Required Insert Count は
@@ -687,7 +690,7 @@ impl DynamicDecoder {
     }
 
     /// エントリを動的テーブルに挿入
-    pub fn insert(&mut self, name: Vec<u8>, value: Vec<u8>) -> Option<u64> {
+    pub fn insert(&mut self, name: bytes::Bytes, value: bytes::Bytes) -> Option<u64> {
         self.table.insert(name, value)
     }
 
@@ -739,8 +742,8 @@ fn decode_integer(data: &[u8], prefix_bits: u8) -> Result<(u64, usize), QpackErr
     Ok((value, offset))
 }
 
-/// 文字列をデコード
-fn decode_string(data: &[u8]) -> Result<(Vec<u8>, usize), QpackError> {
+/// 文字列をデコード (issue 0059 Phase 3: 戻り値を Bytes 化)
+fn decode_string(data: &[u8]) -> Result<(bytes::Bytes, usize), QpackError> {
     if data.is_empty() {
         return Err(QpackError::BufferTooShort);
     }
@@ -756,20 +759,20 @@ fn decode_string(data: &[u8]) -> Result<(Vec<u8>, usize), QpackError> {
     let encoded = &data[prefix_len..total_len];
 
     let decoded = if is_huffman {
-        huffman::decode(encoded)?
+        bytes::Bytes::from(huffman::decode(encoded)?)
     } else {
-        encoded.to_vec()
+        bytes::Bytes::copy_from_slice(encoded)
     };
 
     Ok((decoded, total_len))
 }
 
-/// 長さ指定で文字列をデコード
+/// 長さ指定で文字列をデコード (issue 0059 Phase 3: 戻り値を Bytes 化)
 fn decode_string_with_len(
     data: &[u8],
     length: usize,
     is_huffman: bool,
-) -> Result<(Vec<u8>, usize), QpackError> {
+) -> Result<(bytes::Bytes, usize), QpackError> {
     if data.len() < length {
         return Err(QpackError::BufferTooShort);
     }
@@ -777,9 +780,9 @@ fn decode_string_with_len(
     let encoded = &data[..length];
 
     let decoded = if is_huffman {
-        huffman::decode(encoded)?
+        bytes::Bytes::from(huffman::decode(encoded)?)
     } else {
-        encoded.to_vec()
+        bytes::Bytes::copy_from_slice(encoded)
     };
 
     Ok((decoded, length))
@@ -799,8 +802,8 @@ mod tests {
         let headers = decoder.decode(&data).unwrap();
 
         assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].name, b":method");
-        assert_eq!(headers[0].value, b"GET");
+        assert_eq!(headers[0].name, &b":method"[..]);
+        assert_eq!(headers[0].value, &b"GET"[..]);
     }
 
     #[test]
@@ -820,8 +823,8 @@ mod tests {
         let headers = decoder.decode(&data).unwrap();
 
         assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].name, b":status");
-        assert_eq!(headers[0].value, b"201");
+        assert_eq!(headers[0].name, &b":status"[..]);
+        assert_eq!(headers[0].value, &b"201"[..]);
     }
 
     #[test]
@@ -863,10 +866,10 @@ mod tests {
         let decoded = decoder.decode(&buf[..len]).unwrap();
 
         assert_eq!(decoded.len(), original.len());
-        assert_eq!(decoded[0].name, b":method");
-        assert_eq!(decoded[0].value, b"GET");
-        assert_eq!(decoded[1].name, b":authority");
-        assert_eq!(decoded[1].value, b"www.example.com");
+        assert_eq!(decoded[0].name, &b":method"[..]);
+        assert_eq!(decoded[0].value, &b"GET"[..]);
+        assert_eq!(decoded[1].name, &b":authority"[..]);
+        assert_eq!(decoded[1].value, &b"www.example.com"[..]);
     }
 
     #[test]
@@ -895,8 +898,8 @@ mod tests {
         };
 
         assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].name, b":method");
-        assert_eq!(headers[0].value, b"GET");
+        assert_eq!(headers[0].name, &b":method"[..]);
+        assert_eq!(headers[0].value, &b"GET"[..]);
         assert_eq!(decoder.last_required_insert_count(), 0);
     }
 
@@ -913,8 +916,14 @@ mod tests {
         decoder.set_table_capacity(1024);
 
         // 動的テーブルに同じエントリを挿入
-        encoder.insert(b":authority".to_vec(), b"www.example.com".to_vec());
-        decoder.insert(b":authority".to_vec(), b"www.example.com".to_vec());
+        encoder.insert(
+            bytes::Bytes::from_static(b":authority"),
+            bytes::Bytes::from_static(b"www.example.com"),
+        );
+        decoder.insert(
+            bytes::Bytes::from_static(b":authority"),
+            bytes::Bytes::from_static(b"www.example.com"),
+        );
 
         // エンコード
         let headers = vec![Header::new(b":authority", b"www.example.com")];
@@ -927,8 +936,8 @@ mod tests {
         };
 
         assert_eq!(decoded.len(), 1);
-        assert_eq!(decoded[0].name, b":authority");
-        assert_eq!(decoded[0].value, b"www.example.com");
+        assert_eq!(decoded[0].name, &b":authority"[..]);
+        assert_eq!(decoded[0].value, &b"www.example.com"[..]);
     }
 
     #[test]
@@ -938,7 +947,10 @@ mod tests {
         decoder.set_table_capacity(1024);
 
         // 動的テーブルにエントリを挿入
-        decoder.insert(b"custom-header".to_vec(), b"custom-value".to_vec());
+        decoder.insert(
+            bytes::Bytes::from_static(b"custom-header"),
+            bytes::Bytes::from_static(b"custom-value"),
+        );
 
         // 手動でエンコードされたデータ:
         // Required Insert Count = 2 (エンコード値)
@@ -954,8 +966,8 @@ mod tests {
         };
 
         assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].name, b"custom-header");
-        assert_eq!(headers[0].value, b"custom-value");
+        assert_eq!(headers[0].name, &b"custom-header"[..]);
+        assert_eq!(headers[0].value, &b"custom-value"[..]);
         // 動的テーブルを参照したので Required Insert Count > 0
         assert_eq!(decoder.last_required_insert_count(), 1);
     }
@@ -985,9 +997,18 @@ mod tests {
         decoder.set_table_capacity(1024);
 
         // 動的テーブルにエントリを 3 つ挿入 (insert_count = 3)
-        decoder.insert(b"name0".to_vec(), b"value0".to_vec()); // abs=0
-        decoder.insert(b"name1".to_vec(), b"value1".to_vec()); // abs=1
-        decoder.insert(b"name2".to_vec(), b"value2".to_vec()); // abs=2
+        decoder.insert(
+            bytes::Bytes::from_static(b"name0"),
+            bytes::Bytes::from_static(b"value0"),
+        ); // abs=0
+        decoder.insert(
+            bytes::Bytes::from_static(b"name1"),
+            bytes::Bytes::from_static(b"value1"),
+        ); // abs=1
+        decoder.insert(
+            bytes::Bytes::from_static(b"name2"),
+            bytes::Bytes::from_static(b"value2"),
+        ); // abs=2
 
         // Required Insert Count = 2, Base = 3 (Sign=0, DeltaBase=1)
         // → Base > RIC なので relative_index=0 → absolute=2 >= RIC=2 → エラー

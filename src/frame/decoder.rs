@@ -1,5 +1,7 @@
 //! HTTP/3 フレームデコーダー
 
+use bytes::{Buf, BytesMut};
+
 use crate::error::FrameDecodeError;
 use crate::settings::SettingsId;
 use crate::varint;
@@ -54,25 +56,36 @@ pub fn decode_frame_header(buf: &[u8]) -> Result<FrameHeader, FrameDecodeError> 
     })
 }
 
-/// フレームをデコードする
+/// フレームを `BytesMut` から破壊的にデコードする (issue 0059 Phase 4)
 ///
-/// 成功時は `(Frame, 消費バイト数)` を返す
-pub fn decode_frame(buf: &[u8]) -> Result<(Frame, usize), FrameDecodeError> {
-    let header = decode_frame_header(buf)?;
+/// - `Ok(Some(frame))`: フレームを 1 つ取り出した。`buf` は frame_total_len 分前進している
+/// - `Ok(None)`: 必要なバイト数が揃っていない (呼び出し側は `is_fin()` 等を確認すること)
+/// - `Err(_)`: パースエラー
+///
+/// DATA フレームの payload は `BytesMut::split_to(len).freeze()` で取り出すため、
+/// 内部バッファからの実コピーが発生しない (zero-copy)。
+pub fn decode_frame(buf: &mut BytesMut) -> Result<Option<Frame>, FrameDecodeError> {
+    let header = match decode_frame_header(buf.as_ref()) {
+        Ok(h) => h,
+        Err(FrameDecodeError::BufferTooShort) => return Ok(None),
+        Err(e) => return Err(e),
+    };
 
     let total_len = header.total_len();
     if buf.len() < total_len {
-        return Err(FrameDecodeError::BufferTooShort);
+        return Ok(None);
     }
 
-    let payload = &buf[header.header_len..total_len];
+    // ヘッダ部分を読み飛ばし、payload を切り出す
+    buf.advance(header.header_len);
+    let payload = buf.split_to(header.payload_len as usize).freeze();
 
     let frame = match FrameType::from_type(header.frame_type) {
-        Some(FrameType::Data) => decode_data_frame(payload)?,
-        Some(FrameType::Headers) => decode_headers_frame(payload)?,
-        Some(FrameType::Settings) => decode_settings_frame(payload)?,
-        Some(FrameType::Goaway) => decode_goaway_frame(payload)?,
-        Some(FrameType::MaxPushId) => decode_max_push_id_frame(payload)?,
+        Some(FrameType::Data) => Frame::Data(DataPayload::new(payload)),
+        Some(FrameType::Headers) => Frame::Headers(HeadersPayload::new(payload)),
+        Some(FrameType::Settings) => decode_settings_frame(&payload)?,
+        Some(FrameType::Goaway) => decode_goaway_frame(&payload)?,
+        Some(FrameType::MaxPushId) => decode_max_push_id_frame(&payload)?,
         Some(FrameType::CancelPush | FrameType::PushPromise) => {
             // サーバープッシュはサポートしない
             //
@@ -88,19 +101,11 @@ pub fn decode_frame(buf: &[u8]) -> Result<(Frame, usize), FrameDecodeError> {
         }
         None => Frame::Unknown {
             frame_type: header.frame_type,
-            payload: payload.to_vec(),
+            payload,
         },
     };
 
-    Ok((frame, total_len))
-}
-
-fn decode_data_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
-    Ok(Frame::Data(DataPayload::new(payload.to_vec())))
-}
-
-fn decode_headers_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
-    Ok(Frame::Headers(HeadersPayload::new(payload.to_vec())))
+    Ok(Some(frame))
 }
 
 fn decode_settings_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
@@ -188,18 +193,21 @@ mod tests {
     #[test]
     fn test_decode_settings_frame_http2_setting() {
         // SETTINGS frame with HTTP/2-only setting (ENABLE_PUSH=0x02)
-        let buf = [0x04, 0x02, 0x02, 0x01];
-        let result = decode_frame(&buf);
+        let mut buf = BytesMut::from(&[0x04, 0x02, 0x02, 0x01][..]);
+        let result = decode_frame(&mut buf);
         assert_eq!(result, Err(FrameDecodeError::InvalidSettingsId(0x02)));
     }
 
     #[test]
     fn test_decode_frame_buffer_too_short() {
-        let buf = [0x00]; // Missing length
-        assert_eq!(decode_frame(&buf), Err(FrameDecodeError::BufferTooShort));
+        // データ不足は Ok(None) を返し、buf は前進しない
+        let mut buf = BytesMut::from(&[0x00][..]); // Missing length
+        assert_eq!(decode_frame(&mut buf), Ok(None));
+        assert_eq!(buf.len(), 1);
 
-        let buf = [0x00, 0x05, 0x01, 0x02]; // Payload too short
-        assert_eq!(decode_frame(&buf), Err(FrameDecodeError::BufferTooShort));
+        let mut buf = BytesMut::from(&[0x00, 0x05, 0x01, 0x02][..]); // Payload too short
+        assert_eq!(decode_frame(&mut buf), Ok(None));
+        assert_eq!(buf.len(), 4);
     }
 
     #[test]
@@ -217,21 +225,21 @@ mod tests {
         // SETTINGS フレームに同一 ID が 2 回含まれる場合 (RFC 9114 Section 7.2.4)
         // QPACK_MAX_TABLE_CAPACITY (0x01) = 4, QPACK_MAX_TABLE_CAPACITY (0x01) = 8
         // Frame: type=0x04, len=4, payload=[0x01, 0x04, 0x01, 0x08]
-        let buf = [0x04, 0x04, 0x01, 0x04, 0x01, 0x08];
-        let result = decode_frame(&buf);
+        let mut buf = BytesMut::from(&[0x04, 0x04, 0x01, 0x04, 0x01, 0x08][..]);
+        let result = decode_frame(&mut buf);
         assert_eq!(result, Err(FrameDecodeError::InvalidSettingsId(0x01)));
     }
 
     #[test]
     fn test_decode_server_push_frames_not_supported() {
         // CANCEL_PUSH (0x03) - サーバープッシュはサポートしない
-        let buf = [0x03, 0x01, 0x00];
-        let result = decode_frame(&buf);
+        let mut buf = BytesMut::from(&[0x03, 0x01, 0x00][..]);
+        let result = decode_frame(&mut buf);
         assert_eq!(result, Err(FrameDecodeError::ServerPushNotSupported(0x03)));
 
         // PUSH_PROMISE (0x05) - サーバープッシュはサポートしない
-        let buf = [0x05, 0x02, 0x00, 0x00];
-        let result = decode_frame(&buf);
+        let mut buf = BytesMut::from(&[0x05, 0x02, 0x00, 0x00][..]);
+        let result = decode_frame(&mut buf);
         assert_eq!(result, Err(FrameDecodeError::ServerPushNotSupported(0x05)));
     }
 
@@ -239,8 +247,12 @@ mod tests {
     fn test_decode_max_push_id_frame() {
         // MAX_PUSH_ID (0x0d): サーバープッシュ非対応でも control stream 上では
         // 受信できなければならない (RFC 9114 Section 7.2.7)。デコード自体は成功する。
-        let buf = [0x0d, 0x01, 0x05];
-        let result = decode_frame(&buf).unwrap();
-        assert_eq!(result, (Frame::MaxPushId(5), 3));
+        let mut buf = BytesMut::from(&[0x0d, 0x01, 0x05][..]);
+        let result = decode_frame(&mut buf).unwrap();
+        assert_eq!(result, Some(Frame::MaxPushId(5)));
+        assert!(
+            buf.is_empty(),
+            "decode_frame should consume the entire frame"
+        );
     }
 }

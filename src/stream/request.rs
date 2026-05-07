@@ -2,6 +2,8 @@
 //!
 //! 双方向ストリームで HTTP リクエスト/レスポンスを送受信。
 
+use bytes::Bytes;
+
 use crate::error::{Error, ErrorCode};
 use crate::frame::{self, DataPayload, Frame, HeadersPayload};
 use crate::qpack::DecodedHeader;
@@ -82,7 +84,8 @@ pub struct RequestStream {
     /// QPACK ブロック中のエンコード済みヘッダー
     ///
     /// HEADERS/Trailers フレームのペイロード。ブロック解除時にデコードする。
-    qpack_blocked_header: Option<(Vec<u8>, bool)>,
+    /// payload は zero-copy 切り出しの Bytes (issue 0059)
+    qpack_blocked_header: Option<(Bytes, bool)>,
 }
 
 impl RequestStream {
@@ -263,7 +266,7 @@ impl RequestStream {
                 return Ok(None);
             }
 
-            // フレームヘッダーをチェック
+            // フレームヘッダーをチェック (peek、buf は前進しない)
             let header = match frame::decode_frame_header(data) {
                 Ok(h) => h,
                 Err(crate::error::FrameDecodeError::BufferTooShort) => {
@@ -298,18 +301,19 @@ impl RequestStream {
                 return Err(Error::ConnectionError(ErrorCode::FrameUnexpected));
             }
 
-            // フレームをデコード
-            let (frame, consumed) = frame::decode_frame(data).map_err(|e| match e {
-                // サーバープッシュ関連フレームは接続エラー
-                // PUSH_PROMISE は本来 request stream で受信可能だが、
-                // サーバープッシュ非対応のため H3_FRAME_UNEXPECTED で拒否する
-                // (詳細は frame/decoder.rs のコメントを参照)
-                crate::error::FrameDecodeError::ServerPushNotSupported(_) => {
-                    Error::ConnectionError(ErrorCode::FrameUnexpected)
-                }
-                other => Error::FrameDecode(other),
-            })?;
-            self.recv_buf.consume(consumed);
+            // フレームをデコード (DATA payload は zero-copy で Bytes に切り出される)
+            let frame = frame::decode_frame(self.recv_buf.data_mut())
+                .map_err(|e| match e {
+                    // サーバープッシュ関連フレームは接続エラー
+                    // PUSH_PROMISE は本来 request stream で受信可能だが、
+                    // サーバープッシュ非対応のため H3_FRAME_UNEXPECTED で拒否する
+                    // (詳細は frame/decoder.rs のコメントを参照)
+                    crate::error::FrameDecodeError::ServerPushNotSupported(_) => {
+                        Error::ConnectionError(ErrorCode::FrameUnexpected)
+                    }
+                    other => Error::FrameDecode(other),
+                })?
+                .expect("header と総長は確認済みなので Some を返す");
 
             match frame {
                 Frame::Headers(payload) => {
@@ -448,7 +452,7 @@ impl RequestStream {
         &mut self,
         blocked: bool,
         ricnt: u64,
-        blocked_header: Option<(Vec<u8>, bool)>,
+        blocked_header: Option<(Bytes, bool)>,
     ) {
         self.qpack_blocked = blocked;
         self.qpack_ricnt = ricnt;
@@ -461,7 +465,7 @@ impl RequestStream {
     }
 
     /// QPACK ブロック中のエンコード済みヘッダーを取り出す
-    pub fn take_qpack_blocked_header(&mut self) -> Option<(Vec<u8>, bool)> {
+    pub fn take_qpack_blocked_header(&mut self) -> Option<(Bytes, bool)> {
         self.qpack_blocked_header.take()
     }
 }
@@ -480,14 +484,15 @@ pub enum ReceivedData {
 /// 受信データの種類 (生データ)
 ///
 /// QPACK デコード前のデータを返す。Connection が動的テーブルを使用してデコードする。
+/// payload は zero-copy 切り出しの Bytes (issue 0059)
 #[derive(Debug, Clone)]
 pub enum RawReceivedData {
     /// エンコードされたフィールドセクション (ヘッダーセクション)
-    Headers(Vec<u8>),
+    Headers(Bytes),
     /// エンコードされたトレーラーセクション (RFC 9114 Section 4.1)
-    Trailers(Vec<u8>),
-    /// ボディデータ
-    Data(Vec<u8>),
+    Trailers(Bytes),
+    /// ボディデータ (issue 0059: Bytes 化試験対象)
+    Data(Bytes),
     /// ストリーム終了
     StreamEnd,
 }

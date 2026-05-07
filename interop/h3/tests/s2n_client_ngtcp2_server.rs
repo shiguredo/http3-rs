@@ -3,6 +3,9 @@
 //! s2n-quic クライアント (shiguredo_http3) から ngtcp2 サーバー (nghttp3) への
 //! HTTP/3 通信を RFC 9114 に基づいてテストする。
 
+// issue 0059 Phase 3: Bytes 比較で `bytes == &b"..."[..]` 形式を許容するため
+#![allow(clippy::op_ref)]
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -261,21 +264,21 @@ async fn test_response_custom_headers() {
             assert_eq!(
                 headers
                     .iter()
-                    .find(|(n, _)| n == b":status")
-                    .map(|(_, v)| v.as_slice()),
-                Some(b"200".as_slice()),
+                    .find(|(n, _)| n == &b":status"[..])
+                    .map(|(_, v)| v.as_ref()),
+                Some(b"200".as_ref()),
                 ":status が 200 でない"
             );
             assert!(
                 headers
                     .iter()
-                    .any(|(n, v)| n == b"x-server" && v == b"nghttp3"),
+                    .any(|(n, v)| n == &b"x-server"[..] && v == &b"nghttp3"[..]),
                 "x-server ヘッダーがない"
             );
             assert!(
                 headers
                     .iter()
-                    .any(|(n, v)| n == b"x-custom-header" && v == b"custom-value"),
+                    .any(|(n, v)| n == &b"x-custom-header"[..] && v == &b"custom-value"[..]),
                 "x-custom-header ヘッダーがない"
             );
         }
@@ -303,8 +306,8 @@ async fn test_status_404() {
             Duration::from_secs(10),
             server.run(move |_addr, event| match event {
                 Http3Event::Header { stream_id, header } => {
-                    if header.name == b":path" {
-                        request_paths.insert(stream_id, header.value.clone());
+                    if header.name == &b":path"[..] {
+                        request_paths.insert(stream_id, header.value.to_vec());
                     }
                     None
                 }

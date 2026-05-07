@@ -109,9 +109,13 @@ proptest! {
         let mut buf = Vec::new();
         capsule.encode_as_data_frame(&mut buf);
 
-        // DATA フレームとしてデコード
-        let (frame, consumed) = shiguredo_http3::frame::decode_frame(&buf)
-            .expect("decode_frame should succeed");
+        // DATA フレームとしてデコード (issue 0059: 新 API は &mut BytesMut)
+        let mut decode_buf = bytes::BytesMut::from(&buf[..]);
+        let initial_len = decode_buf.len();
+        let frame = shiguredo_http3::frame::decode_frame(&mut decode_buf)
+            .expect("decode_frame should succeed")
+            .expect("decode_frame should return Some for complete frame");
+        let consumed = initial_len - decode_buf.len();
         prop_assert_eq!(consumed, buf.len(), "consumed != buf.len()");
 
         // DATA フレームからペイロードを取り出す

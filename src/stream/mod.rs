@@ -216,12 +216,14 @@ impl SendBuffer {
 }
 
 /// 受信バッファ
+///
+/// 内部は `BytesMut` (issue 0059)。`advance` で先頭を捨てるため
+/// `consumed` オフセット管理は不要。`split_to(len).freeze()` で
+/// 内部バッファから zero-copy で `Bytes` を取り出せる。
 #[derive(Debug, Default)]
 pub struct RecvBuffer {
     /// バッファデータ
-    data: Vec<u8>,
-    /// 消費済みオフセット
-    consumed: usize,
+    data: bytes::BytesMut,
     /// FIN 受信済み
     fin: bool,
 }
@@ -249,21 +251,24 @@ impl RecvBuffer {
 
     /// 読み取り可能なデータを取得
     pub fn peek(&self) -> &[u8] {
-        &self.data[self.consumed..]
+        &self.data
     }
 
-    /// データを消費
+    /// 内部 `BytesMut` への可変借用 (zero-copy デコード用)
+    ///
+    /// `frame::decode_frame(buf.data_mut())` の形で利用する。
+    pub fn data_mut(&mut self) -> &mut bytes::BytesMut {
+        &mut self.data
+    }
+
+    /// データを消費 (`advance` で先頭を捨てる)
     pub fn consume(&mut self, len: usize) {
-        self.consumed += len;
-        if self.consumed >= self.data.len() / 2 {
-            self.data.drain(..self.consumed);
-            self.consumed = 0;
-        }
+        bytes::Buf::advance(&mut self.data, len);
     }
 
     /// 読み取り可能なデータがあるか
     pub fn has_data(&self) -> bool {
-        self.consumed < self.data.len()
+        !self.data.is_empty()
     }
 
     /// すべてのデータを読み取り済みで FIN も受信済みか

@@ -19,19 +19,23 @@ use std::collections::VecDeque;
 const ENTRY_OVERHEAD: u64 = 32;
 
 /// 動的テーブルエントリ
+///
+/// name/value は `Bytes` で保持する (issue 0059 Phase 3)。
+/// 同じヘッダーが Encoder から複数の参照として共有される場合、
+/// refcount のみで複製できる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DynamicEntry {
     /// ヘッダー名
-    pub name: Vec<u8>,
+    pub name: bytes::Bytes,
     /// ヘッダー値
-    pub value: Vec<u8>,
+    pub value: bytes::Bytes,
     /// 絶対インデックス (挿入時に割り当て)
     pub absolute_index: u64,
 }
 
 impl DynamicEntry {
     /// 新しいエントリを作成
-    pub fn new(name: Vec<u8>, value: Vec<u8>, absolute_index: u64) -> Self {
+    pub fn new(name: bytes::Bytes, value: bytes::Bytes, absolute_index: u64) -> Self {
         Self {
             name,
             value,
@@ -164,7 +168,7 @@ impl DynamicTable {
     ///
     /// 成功した場合は挿入されたエントリの絶対インデックスを返す。
     /// エントリが容量を超える場合は `None` を返す。
-    pub fn insert(&mut self, name: Vec<u8>, value: Vec<u8>) -> Option<u64> {
+    pub fn insert(&mut self, name: bytes::Bytes, value: bytes::Bytes) -> Option<u64> {
         let entry_size = ENTRY_OVERHEAD + name.len() as u64 + value.len() as u64;
 
         // エントリが容量を超える場合はエラー
@@ -196,11 +200,11 @@ impl DynamicTable {
         &mut self,
         name_index: u64,
         is_static: bool,
-        value: Vec<u8>,
+        value: bytes::Bytes,
         static_table: &[crate::qpack::table::StaticEntry],
     ) -> Option<u64> {
         let name = if is_static {
-            static_table.get(name_index as usize)?.name.to_vec()
+            bytes::Bytes::from_static(static_table.get(name_index as usize)?.name)
         } else {
             self.get_by_absolute_index(name_index)?.name.clone()
         };
@@ -336,23 +340,35 @@ mod tests {
     fn test_insert_entry() {
         let mut table = DynamicTable::with_capacity(1024);
 
-        let idx = table.insert(b":authority".to_vec(), b"www.example.com".to_vec());
+        let idx = table.insert(
+            bytes::Bytes::from_static(b":authority"),
+            bytes::Bytes::from_static(b"www.example.com"),
+        );
         assert_eq!(idx, Some(0));
         assert_eq!(table.len(), 1);
         assert_eq!(table.insert_count(), 1);
 
         let entry = table.get_by_absolute_index(0).unwrap();
-        assert_eq!(entry.name, b":authority");
-        assert_eq!(entry.value, b"www.example.com");
+        assert_eq!(entry.name, &b":authority"[..]);
+        assert_eq!(entry.value, &b"www.example.com"[..]);
     }
 
     #[test]
     fn test_insert_multiple_entries() {
         let mut table = DynamicTable::with_capacity(1024);
 
-        let idx1 = table.insert(b"name1".to_vec(), b"value1".to_vec());
-        let idx2 = table.insert(b"name2".to_vec(), b"value2".to_vec());
-        let idx3 = table.insert(b"name3".to_vec(), b"value3".to_vec());
+        let idx1 = table.insert(
+            bytes::Bytes::from_static(b"name1"),
+            bytes::Bytes::from_static(b"value1"),
+        );
+        let idx2 = table.insert(
+            bytes::Bytes::from_static(b"name2"),
+            bytes::Bytes::from_static(b"value2"),
+        );
+        let idx3 = table.insert(
+            bytes::Bytes::from_static(b"name3"),
+            bytes::Bytes::from_static(b"value3"),
+        );
 
         assert_eq!(idx1, Some(0));
         assert_eq!(idx2, Some(1));
@@ -360,22 +376,22 @@ mod tests {
         assert_eq!(table.len(), 3);
 
         // 絶対インデックスでアクセス
-        assert_eq!(table.get_by_absolute_index(0).unwrap().name, b"name1");
-        assert_eq!(table.get_by_absolute_index(1).unwrap().name, b"name2");
-        assert_eq!(table.get_by_absolute_index(2).unwrap().name, b"name3");
+        assert_eq!(table.get_by_absolute_index(0).unwrap().name, &b"name1"[..]);
+        assert_eq!(table.get_by_absolute_index(1).unwrap().name, &b"name2"[..]);
+        assert_eq!(table.get_by_absolute_index(2).unwrap().name, &b"name3"[..]);
 
         // エンコーダー相対インデックスでアクセス (0 = 最新)
         assert_eq!(
             table.get_by_relative_index_encoder(0).unwrap().name,
-            b"name3"
+            &b"name3"[..]
         );
         assert_eq!(
             table.get_by_relative_index_encoder(1).unwrap().name,
-            b"name2"
+            &b"name2"[..]
         );
         assert_eq!(
             table.get_by_relative_index_encoder(2).unwrap().name,
-            b"name1"
+            &b"name1"[..]
         );
     }
 
@@ -385,12 +401,18 @@ mod tests {
         let mut table = DynamicTable::with_capacity(50);
 
         // 最初のエントリを挿入 (32 + 5 + 6 = 43)
-        let idx1 = table.insert(b"name1".to_vec(), b"value1".to_vec());
+        let idx1 = table.insert(
+            bytes::Bytes::from_static(b"name1"),
+            bytes::Bytes::from_static(b"value1"),
+        );
         assert_eq!(idx1, Some(0));
         assert_eq!(table.len(), 1);
 
         // 2 つ目のエントリを挿入すると 1 つ目がエビクトされる
-        let idx2 = table.insert(b"name2".to_vec(), b"value2".to_vec());
+        let idx2 = table.insert(
+            bytes::Bytes::from_static(b"name2"),
+            bytes::Bytes::from_static(b"value2"),
+        );
         assert_eq!(idx2, Some(1));
         assert_eq!(table.len(), 1);
         assert_eq!(table.dropped_count(), 1);
@@ -406,7 +428,10 @@ mod tests {
         let mut table = DynamicTable::with_capacity(50);
 
         // 容量を超えるエントリは挿入できない
-        let idx = table.insert(b"very_long_name".to_vec(), b"very_long_value".to_vec());
+        let idx = table.insert(
+            bytes::Bytes::from_static(b"very_long_name"),
+            bytes::Bytes::from_static(b"very_long_value"),
+        );
         assert_eq!(idx, None);
         assert!(table.is_empty());
     }
@@ -415,9 +440,18 @@ mod tests {
     fn test_set_capacity() {
         let mut table = DynamicTable::with_capacity(200);
 
-        table.insert(b"name1".to_vec(), b"value1".to_vec());
-        table.insert(b"name2".to_vec(), b"value2".to_vec());
-        table.insert(b"name3".to_vec(), b"value3".to_vec());
+        table.insert(
+            bytes::Bytes::from_static(b"name1"),
+            bytes::Bytes::from_static(b"value1"),
+        );
+        table.insert(
+            bytes::Bytes::from_static(b"name2"),
+            bytes::Bytes::from_static(b"value2"),
+        );
+        table.insert(
+            bytes::Bytes::from_static(b"name3"),
+            bytes::Bytes::from_static(b"value3"),
+        );
         assert_eq!(table.len(), 3);
 
         // 容量を減らすとエビクトが発生
@@ -430,9 +464,18 @@ mod tests {
     fn test_find_entry() {
         let mut table = DynamicTable::with_capacity(1024);
 
-        table.insert(b":method".to_vec(), b"GET".to_vec());
-        table.insert(b":method".to_vec(), b"POST".to_vec());
-        table.insert(b":path".to_vec(), b"/".to_vec());
+        table.insert(
+            bytes::Bytes::from_static(b":method"),
+            bytes::Bytes::from_static(b"GET"),
+        );
+        table.insert(
+            bytes::Bytes::from_static(b":method"),
+            bytes::Bytes::from_static(b"POST"),
+        );
+        table.insert(
+            bytes::Bytes::from_static(b":path"),
+            bytes::Bytes::from_static(b"/"),
+        );
 
         // 完全一致
         let (exact, name_only) = table.find_entry(b":method", b"GET");
@@ -454,10 +497,22 @@ mod tests {
     fn test_relative_index_repr() {
         let mut table = DynamicTable::with_capacity(1024);
 
-        table.insert(b"name0".to_vec(), b"value0".to_vec()); // abs=0
-        table.insert(b"name1".to_vec(), b"value1".to_vec()); // abs=1
-        table.insert(b"name2".to_vec(), b"value2".to_vec()); // abs=2
-        table.insert(b"name3".to_vec(), b"value3".to_vec()); // abs=3
+        table.insert(
+            bytes::Bytes::from_static(b"name0"),
+            bytes::Bytes::from_static(b"value0"),
+        ); // abs=0
+        table.insert(
+            bytes::Bytes::from_static(b"name1"),
+            bytes::Bytes::from_static(b"value1"),
+        ); // abs=1
+        table.insert(
+            bytes::Bytes::from_static(b"name2"),
+            bytes::Bytes::from_static(b"value2"),
+        ); // abs=2
+        table.insert(
+            bytes::Bytes::from_static(b"name3"),
+            bytes::Bytes::from_static(b"value3"),
+        ); // abs=3
 
         // Base = 3 の場合
         // relative=0 -> abs=3-0-1=2 -> name2
@@ -465,15 +520,15 @@ mod tests {
         // relative=2 -> abs=3-2-1=0 -> name0
         assert_eq!(
             table.get_by_relative_index_repr(0, 3).unwrap().name,
-            b"name2"
+            &b"name2"[..]
         );
         assert_eq!(
             table.get_by_relative_index_repr(1, 3).unwrap().name,
-            b"name1"
+            &b"name1"[..]
         );
         assert_eq!(
             table.get_by_relative_index_repr(2, 3).unwrap().name,
-            b"name0"
+            &b"name0"[..]
         );
 
         // 範囲外
@@ -484,16 +539,34 @@ mod tests {
     fn test_post_base_index() {
         let mut table = DynamicTable::with_capacity(1024);
 
-        table.insert(b"name0".to_vec(), b"value0".to_vec()); // abs=0
-        table.insert(b"name1".to_vec(), b"value1".to_vec()); // abs=1
-        table.insert(b"name2".to_vec(), b"value2".to_vec()); // abs=2
-        table.insert(b"name3".to_vec(), b"value3".to_vec()); // abs=3
+        table.insert(
+            bytes::Bytes::from_static(b"name0"),
+            bytes::Bytes::from_static(b"value0"),
+        ); // abs=0
+        table.insert(
+            bytes::Bytes::from_static(b"name1"),
+            bytes::Bytes::from_static(b"value1"),
+        ); // abs=1
+        table.insert(
+            bytes::Bytes::from_static(b"name2"),
+            bytes::Bytes::from_static(b"value2"),
+        ); // abs=2
+        table.insert(
+            bytes::Bytes::from_static(b"name3"),
+            bytes::Bytes::from_static(b"value3"),
+        ); // abs=3
 
         // Base = 2 の場合
         // post_base=0 -> abs=2+0=2 -> name2
         // post_base=1 -> abs=2+1=3 -> name3
-        assert_eq!(table.get_by_post_base_index(0, 2).unwrap().name, b"name2");
-        assert_eq!(table.get_by_post_base_index(1, 2).unwrap().name, b"name3");
+        assert_eq!(
+            table.get_by_post_base_index(0, 2).unwrap().name,
+            b"name2"[..]
+        );
+        assert_eq!(
+            table.get_by_post_base_index(1, 2).unwrap().name,
+            b"name3"[..]
+        );
 
         // 範囲外
         assert!(table.get_by_post_base_index(2, 2).is_none());
@@ -503,8 +576,14 @@ mod tests {
     fn test_duplicate() {
         let mut table = DynamicTable::with_capacity(1024);
 
-        table.insert(b"name".to_vec(), b"value".to_vec()); // abs=0, rel=0
-        table.insert(b"other".to_vec(), b"data".to_vec()); // abs=1, rel=0, old rel=1
+        table.insert(
+            bytes::Bytes::from_static(b"name"),
+            bytes::Bytes::from_static(b"value"),
+        ); // abs=0, rel=0
+        table.insert(
+            bytes::Bytes::from_static(b"other"),
+            bytes::Bytes::from_static(b"data"),
+        ); // abs=1, rel=0, old rel=1
 
         // 相対インデックス 1 (最古のエントリ) を複製
         let idx = table.duplicate(1);
@@ -512,16 +591,22 @@ mod tests {
         assert_eq!(table.len(), 3);
 
         let entry = table.get_by_absolute_index(2).unwrap();
-        assert_eq!(entry.name, b"name");
-        assert_eq!(entry.value, b"value");
+        assert_eq!(entry.name, &b"name"[..]);
+        assert_eq!(entry.value, &b"value"[..]);
     }
 
     #[test]
     fn test_clear() {
         let mut table = DynamicTable::with_capacity(1024);
 
-        table.insert(b"name1".to_vec(), b"value1".to_vec());
-        table.insert(b"name2".to_vec(), b"value2".to_vec());
+        table.insert(
+            bytes::Bytes::from_static(b"name1"),
+            bytes::Bytes::from_static(b"value1"),
+        );
+        table.insert(
+            bytes::Bytes::from_static(b"name2"),
+            bytes::Bytes::from_static(b"value2"),
+        );
         assert_eq!(table.len(), 2);
 
         table.clear();
@@ -538,7 +623,10 @@ mod tests {
         let mut table = DynamicTable::with_capacity(50);
 
         // 最初のエントリを挿入 (32 + 5 + 6 = 43)
-        let idx1 = table.insert(b"name1".to_vec(), b"value1".to_vec());
+        let idx1 = table.insert(
+            bytes::Bytes::from_static(b"name1"),
+            bytes::Bytes::from_static(b"value1"),
+        );
         assert_eq!(idx1, Some(0));
 
         // eviction_limit を設定: abs_index 0 は evict 不可にする
@@ -546,7 +634,10 @@ mod tests {
         table.set_eviction_limit(1);
 
         // 2 つ目のエントリを挿入しようとするが、1 つ目を evict できないので失敗
-        let idx2 = table.insert(b"name2".to_vec(), b"value2".to_vec());
+        let idx2 = table.insert(
+            bytes::Bytes::from_static(b"name2"),
+            bytes::Bytes::from_static(b"value2"),
+        );
         assert_eq!(idx2, None);
         assert_eq!(table.len(), 1);
         assert_eq!(table.dropped_count(), 0);
@@ -555,7 +646,10 @@ mod tests {
         table.set_eviction_limit(0);
 
         // 今度は eviction が成功
-        let idx3 = table.insert(b"name3".to_vec(), b"value3".to_vec());
+        let idx3 = table.insert(
+            bytes::Bytes::from_static(b"name3"),
+            bytes::Bytes::from_static(b"value3"),
+        );
         assert_eq!(idx3, Some(1));
         assert_eq!(table.len(), 1);
         assert_eq!(table.dropped_count(), 1);
@@ -566,9 +660,18 @@ mod tests {
     fn test_eviction_limit_on_set_capacity() {
         let mut table = DynamicTable::with_capacity(200);
 
-        table.insert(b"name1".to_vec(), b"value1".to_vec()); // abs=0 (最古、末尾)
-        table.insert(b"name2".to_vec(), b"value2".to_vec()); // abs=1
-        table.insert(b"name3".to_vec(), b"value3".to_vec()); // abs=2 (最新、先頭)
+        table.insert(
+            bytes::Bytes::from_static(b"name1"),
+            bytes::Bytes::from_static(b"value1"),
+        ); // abs=0 (最古、末尾)
+        table.insert(
+            bytes::Bytes::from_static(b"name2"),
+            bytes::Bytes::from_static(b"value2"),
+        ); // abs=1
+        table.insert(
+            bytes::Bytes::from_static(b"name3"),
+            bytes::Bytes::from_static(b"value3"),
+        ); // abs=2 (最新、先頭)
         assert_eq!(table.len(), 3);
 
         // abs_index < 1 のエントリ (abs=0) を保護

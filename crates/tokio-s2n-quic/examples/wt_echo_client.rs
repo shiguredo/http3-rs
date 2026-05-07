@@ -36,7 +36,7 @@ async fn main() -> tokio_s2n_quic::Result<()> {
         let recv_data = bi_stream.recv().await?;
         let echo = String::from_utf8_lossy(&recv_data);
         eprintln!("受信: {echo}");
-        assert_eq!(msg.as_bytes(), recv_data.as_slice(), "エコーが一致しない");
+        assert_eq!(msg.as_bytes(), &recv_data[..], "エコーが一致しない");
     }
     eprintln!("エコーテスト完了");
 

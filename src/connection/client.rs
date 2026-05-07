@@ -46,9 +46,19 @@ impl ClientConnection {
             .init_h3_streams(control_stream_id, encoder_stream_id, decoder_stream_id)
     }
 
-    /// QUIC からストリームデータを受信
+    /// QUIC からストリームデータを受信 (`&[u8]` 互換)
     pub fn feed_stream(&mut self, stream_id: u64, data: &[u8], fin: bool) -> Result<(), Error> {
         self.inner.feed_stream(stream_id, data, fin)
+    }
+
+    /// QUIC からストリームデータを受信 (zero-copy, issue 0059 Phase 4-B)
+    pub fn feed_stream_bytes(
+        &mut self,
+        stream_id: u64,
+        data: bytes::Bytes,
+        fin: bool,
+    ) -> Result<(), Error> {
+        self.inner.feed_stream_bytes(stream_id, data, fin)
     }
 
     /// イベントを取得
@@ -77,7 +87,8 @@ impl ClientConnection {
     ///
     /// ストリームの送信バッファにある全データを 1 回の呼び出しで返す。
     /// ループで繰り返し呼ぶ必要はない。
-    pub fn take_stream_data(&mut self, stream_id: u64) -> Option<(Vec<u8>, bool)> {
+    /// payload は cheap clone のため Bytes (issue 0059)
+    pub fn take_stream_data(&mut self, stream_id: u64) -> Option<(bytes::Bytes, bool)> {
         self.inner.take_stream_data(stream_id)
     }
 
@@ -124,7 +135,8 @@ impl ClientConnection {
     /// WebTransport データグラムを送信用にエンコードする
     ///
     /// (draft-ietf-webtrans-http3-15 Section 4.5)
-    pub fn send_datagram(&self, session_id: u64, payload: &[u8]) -> Result<Vec<u8>, Error> {
+    /// payload は cheap clone のため Bytes (issue 0059)
+    pub fn send_datagram(&self, session_id: u64, payload: &[u8]) -> Result<bytes::Bytes, Error> {
         self.inner.send_datagram(session_id, payload)
     }
 

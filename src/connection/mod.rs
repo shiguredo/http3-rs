@@ -133,7 +133,8 @@ struct WtSession {
     buffered_streams: Vec<u64>,
     buffered_stream_entries: HashMap<u64, BufferedStreamEntry>,
     /// セッション確立前のバッファリングされたデータグラム (Section 4.6)
-    buffered_datagrams: Vec<Vec<u8>>,
+    /// payload は cheap clone のため Bytes (issue 0059)
+    buffered_datagrams: Vec<bytes::Bytes>,
     /// CONNECT ストリーム上の Capsule デコードバッファ (Section 5.6)
     ///
     /// Capsule が複数の DATA フレームにまたがる場合のバッファリング用。
@@ -407,7 +408,7 @@ impl WtSession {
     ///
     /// バッファ上限を超えた場合は `false` を返す。
     /// 呼び出し元はデータグラムを破棄すること。
-    fn buffer_datagram(&mut self, data: Vec<u8>) -> bool {
+    fn buffer_datagram(&mut self, data: bytes::Bytes) -> bool {
         if self.buffered_datagrams.len() >= WT_MAX_BUFFERED_DATAGRAMS {
             return false;
         }
@@ -416,7 +417,7 @@ impl WtSession {
     }
 
     /// バッファリングされたデータグラムを取り出す (セッション確立後に呼び出す)
-    fn take_buffered_datagrams(&mut self) -> Vec<Vec<u8>> {
+    fn take_buffered_datagrams(&mut self) -> Vec<bytes::Bytes> {
         std::mem::take(&mut self.buffered_datagrams)
     }
 }
@@ -435,15 +436,16 @@ pub struct H3InitData {
     /// 制御ストリーム ID
     pub control_stream_id: u64,
     /// 制御ストリームの初期データ (SETTINGS フレーム)
-    pub control_data: Vec<u8>,
+    /// payload は cheap clone のため Bytes (issue 0059)
+    pub control_data: bytes::Bytes,
     /// QPACK エンコーダーストリーム ID
     pub encoder_stream_id: u64,
     /// QPACK エンコーダーストリームの初期データ (stream type)
-    pub encoder_data: Vec<u8>,
+    pub encoder_data: bytes::Bytes,
     /// QPACK デコーダーストリーム ID
     pub decoder_stream_id: u64,
     /// QPACK デコーダーストリームの初期データ (stream type)
-    pub decoder_data: Vec<u8>,
+    pub decoder_data: bytes::Bytes,
 }
 
 /// 接続ロール
@@ -872,7 +874,8 @@ impl Connection {
     /// (draft-ietf-webtrans-http3-15 Section 4.5)
     ///
     /// セッションが存在しないか Established でない場合はエラーを返す。
-    pub fn send_datagram(&self, session_id: u64, payload: &[u8]) -> Result<Vec<u8>, Error> {
+    /// payload は cheap clone のため Bytes (issue 0059)
+    pub fn send_datagram(&self, session_id: u64, payload: &[u8]) -> Result<bytes::Bytes, Error> {
         // SETTINGS_H3_DATAGRAM のネゴシエーション確認 (RFC 9297 Section 3)
         // ローカルとピアの両方が SETTINGS_H3_DATAGRAM=1 を送受信済みでなければならない
         let local_datagram = self.local_settings.h3_datagram == Some(true);
@@ -908,7 +911,7 @@ impl Connection {
             .map_err(|_| Error::ConnectionError(ErrorCode::InternalError))?;
         let mut buf = Vec::new();
         datagram.encode(&mut buf);
-        Ok(buf)
+        Ok(bytes::Bytes::from(buf))
     }
 
     /// ストリーム ID が自身が開始した単方向ストリームかどうかを検証する (RFC 9114 Section 6.2)
@@ -1087,8 +1090,26 @@ impl Connection {
         &mut self.qpack_dynamic_decoder
     }
 
-    /// QUIC からストリームデータを受信
+    /// QUIC からストリームデータを受信 (`&[u8]` 互換)
+    ///
+    /// 内部で `Bytes::copy_from_slice` によるコピーが発生する。
+    /// 呼び出し側が既に `Bytes` を保持している場合は `feed_stream_bytes` を
+    /// 使うことで zero-copy 転送できる (issue 0059 Phase 4-B)。
     pub fn feed_stream(&mut self, stream_id: u64, data: &[u8], fin: bool) -> Result<(), Error> {
+        self.feed_stream_bytes(stream_id, bytes::Bytes::copy_from_slice(data), fin)
+    }
+
+    /// QUIC からストリームデータを受信 (zero-copy, issue 0059 Phase 4-B)
+    ///
+    /// QUIC アダプタ層 (s2n-quic 等) が既に `Bytes` を保持している場合、
+    /// 内部の WebTransport データ Event 発行時に refcount clone のみで
+    /// zero-copy に転送される。
+    pub fn feed_stream_bytes(
+        &mut self,
+        stream_id: u64,
+        data: bytes::Bytes,
+        fin: bool,
+    ) -> Result<(), Error> {
         if self.error.is_some() {
             return Err(Error::ConnectionError(ErrorCode::InternalError));
         }
@@ -1097,7 +1118,7 @@ impl Connection {
 
         // 単方向ストリームの場合
         if kind.is_unidirectional() {
-            self.handle_unidirectional_stream(stream_id, data, fin)?;
+            self.handle_unidirectional_stream(stream_id, &data, fin)?;
             return Ok(());
         }
 
@@ -1106,7 +1127,7 @@ impl Connection {
             // WebTransport の能力ネゴシエーションが完了している場合のみ受け入れる
             // (draft-ietf-webtrans-http3-15 Section 3.1, 4.3)
             if self.is_wt_fully_negotiated() {
-                self.handle_wt_bidi_stream(stream_id, data, fin)?;
+                self.handle_wt_bidi_stream(stream_id, &data, fin)?;
                 return Ok(());
             }
             // WebTransport 無効時は接続エラー (RFC 9114 Section 6.1)
@@ -1117,13 +1138,13 @@ impl Connection {
         if self.wt_bidi_streams.contains_key(&stream_id)
             || self.pending_wt_bidi_streams.contains_key(&stream_id)
         {
-            self.handle_wt_bidi_stream(stream_id, data, fin)?;
+            self.handle_wt_bidi_stream(stream_id, &data, fin)?;
             return Ok(());
         }
 
         // ディスパッチ保留中のクライアント開始 bidi stream に後続データが到着した場合
         if self.pending_bidi_dispatch.contains_key(&stream_id) {
-            return self.dispatch_client_bidi_stream(stream_id, data, fin);
+            return self.dispatch_client_bidi_stream(stream_id, &data, fin);
         }
 
         // サーバー側: クライアント開始の新規 bidi stream は先頭 varint で
@@ -1135,19 +1156,22 @@ impl Connection {
             && self.is_wt_fully_negotiated()
             && !self.streams.contains_key(&stream_id)
         {
-            return self.dispatch_client_bidi_stream(stream_id, data, fin);
+            return self.dispatch_client_bidi_stream(stream_id, &data, fin);
         }
 
         // 双方向ストリーム (リクエスト/レスポンス)
-        self.handle_bidirectional_stream(stream_id, data, fin)?;
+        self.handle_bidirectional_stream(stream_id, &data, fin)?;
         Ok(())
     }
 
     /// 単方向ストリームを処理
+    ///
+    /// `data` は parent `Bytes` の参照 (issue 0059 Phase 4-B)。
+    /// WebTransport データ Event 発行時には refcount clone で zero-copy 転送する。
     fn handle_unidirectional_stream(
         &mut self,
         stream_id: u64,
-        data: &[u8],
+        data: &bytes::Bytes,
         fin: bool,
     ) -> Result<(), Error> {
         // 無視対象のストリームは後続データを破棄 (RFC 9114 Section 6.2)
@@ -1201,14 +1225,16 @@ impl Connection {
                         }
                         session.add_received_data(data_len);
                     }
+                    // issue 0059 Phase 4-B: parent Bytes から refcount clone (zero-copy)
                     self.events.push_back(Event::WebTransportUniStreamData {
                         stream_id,
-                        data: data.to_vec(),
+                        data: data.clone(),
                     });
                 }
             } else if self.pending_wt_uni_streams.contains_key(&stream_id) {
                 // セッション ID 未確定の WT 単方向ストリーム
-                self.resolve_wt_uni_stream_session_id(stream_id, data)?;
+                // refcount clone (cheap)
+                self.resolve_wt_uni_stream_session_id(stream_id, data.clone())?;
             } else {
                 // 新しいストリーム: 後続の処理に委譲
                 return self.handle_new_unidirectional_stream(stream_id, data, fin);
@@ -1266,10 +1292,14 @@ impl Connection {
     }
 
     /// 新しい単方向ストリームを処理 (ストリームタイプのデコード)
+    ///
+    /// `data` は parent `Bytes` の参照 (issue 0059 Phase 4-B)。
+    /// 単一チャンクで varint が完結すれば payload を `Bytes::slice_ref` で
+    /// zero-copy 切り出しし、`resolve_wt_uni_stream_session_id` に Bytes として渡す。
     fn handle_new_unidirectional_stream(
         &mut self,
         stream_id: u64,
-        data: &[u8],
+        data: &bytes::Bytes,
         fin: bool,
     ) -> Result<(), Error> {
         // 既知のストリームではない場合のみここに到達する
@@ -1366,7 +1396,15 @@ impl Connection {
                     return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
                 }
                 // セッション ID (varint) をパース
-                self.resolve_wt_uni_stream_session_id(stream_id, remaining)?;
+                // issue 0059 Phase 4-B: 単一チャンク (has_pending == false) なら parent Bytes
+                // から zero-copy で remaining を切り出し、Event::WebTransportUniStreamData に
+                // refcount のみで渡す
+                let remaining_bytes: bytes::Bytes = if has_pending {
+                    bytes::Bytes::copy_from_slice(remaining)
+                } else {
+                    data.slice(type_len..)
+                };
+                self.resolve_wt_uni_stream_session_id(stream_id, remaining_bytes)?;
             }
             _ => {
                 // 未知ストリームタイプ: 後続データを破棄 (RFC 9114 Section 6.2)
@@ -1411,13 +1449,19 @@ impl Connection {
     /// ストリームタイプ (0x54) が確定した後、セッション ID (varint) をパースする。
     /// varint が不完全な場合は `pending_wt_uni_streams` にバッファリングする。
     /// (draft-ietf-webtrans-http3-15 Section 4.2)
+    ///
+    /// `data` は parent `Bytes` の値渡し (issue 0059 Phase 4-B)。
+    /// pending バッファ未使用かつ varint が単一チャンクで完結する場合に限り、
+    /// payload (session_id 後の WebTransport ストリームデータ) を `data.slice(...)` で
+    /// zero-copy 切り出しして Event 発火する。
     fn resolve_wt_uni_stream_session_id(
         &mut self,
         stream_id: u64,
-        data: &[u8],
+        data: bytes::Bytes,
     ) -> Result<(), Error> {
+        let has_pending = self.pending_wt_uni_streams.contains_key(&stream_id);
         let buf = if let Some(pending) = self.pending_wt_uni_streams.get_mut(&stream_id) {
-            pending.extend_from_slice(data);
+            pending.extend_from_slice(&data);
             pending.clone()
         } else {
             data.to_vec()
@@ -1521,9 +1565,15 @@ impl Connection {
                         }
                         session.add_received_data(data_len);
                     }
+                    // issue 0059 Phase 4-B: 単一チャンクなら parent Bytes から zero-copy 切り出し
+                    let remaining_bytes: bytes::Bytes = if has_pending {
+                        bytes::Bytes::copy_from_slice(remaining)
+                    } else {
+                        data.slice(id_len..)
+                    };
                     self.events.push_back(Event::WebTransportUniStreamData {
                         stream_id,
-                        data: remaining.to_vec(),
+                        data: remaining_bytes,
                     });
                 }
                 Ok(())
@@ -1543,13 +1593,17 @@ impl Connection {
     /// それ以外ならリクエストストリームとして処理する。
     /// varint が不完全な場合は `pending_bidi_dispatch` にバッファリングする。
     /// (draft-ietf-webtrans-http3-15 Section 4.3)
+    ///
+    /// `data` は parent `Bytes` の参照 (issue 0059 Phase 4-B)。
+    /// pending バッファ未使用なら下流関数に `data.clone()` (refcount cheap) で渡す。
     fn dispatch_client_bidi_stream(
         &mut self,
         stream_id: u64,
-        data: &[u8],
+        data: &bytes::Bytes,
         fin: bool,
     ) -> Result<(), Error> {
         // バッファリング中のデータがあれば結合する
+        let has_pending = self.pending_bidi_dispatch.contains_key(&stream_id);
         let buf = if let Some(pending) = self.pending_bidi_dispatch.get_mut(&stream_id) {
             pending.extend_from_slice(data);
             pending.clone()
@@ -1563,7 +1617,7 @@ impl Connection {
             if fin {
                 // データなしで FIN: 空のリクエストストリームとして処理
                 self.pending_bidi_dispatch.remove(&stream_id);
-                self.handle_bidirectional_stream(stream_id, &[], fin)?;
+                self.handle_bidirectional_stream(stream_id, &bytes::Bytes::new(), fin)?;
             }
             return Ok(());
         }
@@ -1572,11 +1626,19 @@ impl Connection {
         let first_byte = buf[0];
         let varint_prefix = first_byte >> 6;
 
+        // issue 0059 Phase 4-B: 単一チャンクの場合は parent Bytes をそのまま渡し、
+        // pending 経由の場合は連結 Vec から Bytes::from で構築する
+        let dispatch_bytes: bytes::Bytes = if has_pending {
+            bytes::Bytes::from(buf.clone())
+        } else {
+            data.clone()
+        };
+
         if varint_prefix == 0 {
             // 1 バイト varint (値 0x00-0x3F): HTTP/3 フレームタイプ
             // 0x41 は 2 バイト varint (prefix = 0x01) なのでここには来ない
             self.pending_bidi_dispatch.remove(&stream_id);
-            self.handle_bidirectional_stream(stream_id, &buf, fin)?;
+            self.handle_bidirectional_stream(stream_id, &dispatch_bytes, fin)?;
             return Ok(());
         }
 
@@ -1587,10 +1649,10 @@ impl Connection {
                 self.pending_bidi_dispatch.remove(&stream_id);
                 if value == crate::webtransport::stream::BIDIRECTIONAL_SIGNAL_VALUE {
                     // WT_STREAM (0x41): WT bidi ストリームとして処理
-                    self.handle_wt_bidi_stream(stream_id, &buf, fin)?;
+                    self.handle_wt_bidi_stream(stream_id, &dispatch_bytes, fin)?;
                 } else {
                     // 0x41 以外: リクエストストリームとして処理
-                    self.handle_bidirectional_stream(stream_id, &buf, fin)?;
+                    self.handle_bidirectional_stream(stream_id, &dispatch_bytes, fin)?;
                 }
                 Ok(())
             }
@@ -1613,10 +1675,12 @@ impl Connection {
     /// bidi stream を処理する。先頭の signal value (0x41) と session_id (varint) を
     /// パースし、確定後はアプリケーションペイロードをイベントで通知する。
     /// (draft-ietf-webtrans-http3-15 Section 4.3)
+    /// `data` は parent `Bytes` の参照 (issue 0059 Phase 4-B)。
+    /// WebTransport データ Event 発行時には refcount clone で zero-copy 転送する。
     fn handle_wt_bidi_stream(
         &mut self,
         stream_id: u64,
-        data: &[u8],
+        data: &bytes::Bytes,
         fin: bool,
     ) -> Result<(), Error> {
         // 既に確定済みの WT bidi stream: データ/FIN を処理
@@ -1661,9 +1725,10 @@ impl Connection {
                     }
                     session.add_received_data(data_len);
                 }
+                // issue 0059 Phase 4-B: parent Bytes から refcount clone (zero-copy)
                 self.events.push_back(Event::WebTransportBidiStreamData {
                     stream_id,
-                    data: data.to_vec(),
+                    data: data.clone(),
                 });
             }
             if fin {
@@ -1679,7 +1744,8 @@ impl Connection {
         }
 
         // signal value + session_id の解決を試みる
-        self.resolve_wt_bidi_stream_header(stream_id, data)?;
+        // refcount clone (cheap)
+        self.resolve_wt_bidi_stream_header(stream_id, data.clone())?;
 
         // FIN チェック: ヘッダー解決中に FIN が来た場合
         if fin {
@@ -2186,9 +2252,17 @@ impl Connection {
     /// 先頭の signal value (0x41) と session_id (varint) をパースする。
     /// varint が不完全な場合は `pending_wt_bidi_streams` にバッファリングする。
     /// (draft-ietf-webtrans-http3-15 Section 4.3)
-    fn resolve_wt_bidi_stream_header(&mut self, stream_id: u64, data: &[u8]) -> Result<(), Error> {
+    ///
+    /// `data` は parent `Bytes` の値渡し (issue 0059 Phase 4-B)。
+    /// pending バッファ未使用なら payload を `data.slice(...)` で zero-copy 切り出しする。
+    fn resolve_wt_bidi_stream_header(
+        &mut self,
+        stream_id: u64,
+        data: bytes::Bytes,
+    ) -> Result<(), Error> {
+        let has_pending = self.pending_wt_bidi_streams.contains_key(&stream_id);
         let buf = if let Some(pending) = self.pending_wt_bidi_streams.get_mut(&stream_id) {
-            pending.extend_from_slice(data);
+            pending.extend_from_slice(&data);
             pending.clone()
         } else {
             data.to_vec()
@@ -2309,9 +2383,15 @@ impl Connection {
                         }
                         session.add_received_data(data_len);
                     }
+                    // issue 0059 Phase 4-B: 単一チャンクなら parent Bytes から zero-copy 切り出し
+                    let payload_bytes: bytes::Bytes = if has_pending {
+                        bytes::Bytes::copy_from_slice(payload)
+                    } else {
+                        data.slice(signal_len + id_len..)
+                    };
                     self.events.push_back(Event::WebTransportBidiStreamData {
                         stream_id,
-                        data: payload.to_vec(),
+                        data: payload_bytes,
                     });
                 }
                 Ok(())
@@ -2582,10 +2662,13 @@ impl Connection {
     /// QPACK ブロック中のストリームはフレーム解析を停止し、
     /// 受信データをストリームの内部バッファに保持する。
     /// ブロック解除は `retry_blocked_streams()` (drain_events 経由) で行う。
+    /// `data` は parent `Bytes` の参照 (issue 0059 Phase 4-B)。
+    /// `RequestStream::receive` は `&[u8]` を取り内部 `BytesMut` に extend するため、
+    /// ここでは `Deref` で渡す (内部はどのみち shared バッファに集約する)。
     fn handle_bidirectional_stream(
         &mut self,
         stream_id: u64,
-        data: &[u8],
+        data: &bytes::Bytes,
         fin: bool,
     ) -> Result<(), Error> {
         // ストリームを取得または作成
@@ -2840,8 +2923,8 @@ impl Connection {
                 if draft.is_some() {
                     let proto_header = headers
                         .iter()
-                        .find(|h| h.name == b":protocol")
-                        .map(|h| h.value.as_slice())
+                        .find(|h| h.name == &b":protocol"[..])
+                        .map(|h| h.value.as_ref())
                         .ok_or(Error::StreamError(ErrorCode::MessageError))?;
                     let mutual = self.mutually_advertised_wt_drafts();
                     let proto_ok = mutual
@@ -2855,7 +2938,7 @@ impl Connection {
                 // (draft-ietf-webtrans-http3-15 Section 3.2)
                 let scheme_is_https = headers
                     .iter()
-                    .any(|h| h.name == b":scheme" && h.value == b"https");
+                    .any(|h| h.name == &b":scheme"[..] && h.value == &b"https"[..]);
                 if !scheme_is_https {
                     return Err(Error::StreamError(ErrorCode::MessageError));
                 }
@@ -2895,7 +2978,7 @@ impl Connection {
                 // クライアントの WT-Available-Protocols を保存する
                 // (draft-ietf-webtrans-http3-15 Section 3.3)
                 for h in &headers {
-                    if h.name == b"wt-available-protocols" {
+                    if h.name == &b"wt-available-protocols"[..] {
                         if let Ok(value) = std::str::from_utf8(&h.value) {
                             session.available_protocols =
                                 crate::webtransport::ConnectRequest::parse_available_protocols(
@@ -2952,7 +3035,7 @@ impl Connection {
                 let wt_protocol_invalid = if let Some(session) = self.wt_sessions.get(&stream_id) {
                     if session.state == WtSessionState::Pending {
                         let selected = headers.iter().find_map(|h| {
-                            if h.name == b"wt-protocol" {
+                            if h.name == &b"wt-protocol"[..] {
                                 std::str::from_utf8(&h.value)
                                     .ok()
                                     .and_then(crate::webtransport::ConnectResponse::parse_protocol)
@@ -3052,15 +3135,16 @@ impl Connection {
                                     break;
                                 }
                                 session.add_received_data(data_len);
+                                let entry_bytes = bytes::Bytes::from(entry_data);
                                 buffered_events.push(if is_bidi {
                                     Event::WebTransportBidiStreamData {
                                         stream_id: buffered_stream_id,
-                                        data: entry_data,
+                                        data: entry_bytes,
                                     }
                                 } else {
                                     Event::WebTransportUniStreamData {
                                         stream_id: buffered_stream_id,
-                                        data: entry_data,
+                                        data: entry_bytes,
                                     }
                                 });
                             }
@@ -3284,12 +3368,13 @@ impl Connection {
     ///
     /// ストリームの送信バッファにある全データを 1 回の呼び出しで返す。
     /// ループで繰り返し呼ぶ必要はない。
-    pub fn take_stream_data(&mut self, stream_id: u64) -> Option<(Vec<u8>, bool)> {
+    /// payload は cheap clone のため Bytes (issue 0059)
+    pub fn take_stream_data(&mut self, stream_id: u64) -> Option<(bytes::Bytes, bool)> {
         let (data, fin) = self.get_stream_data(stream_id)?;
         if data.is_empty() && !fin {
             return None;
         }
-        let data = data.to_vec();
+        let data = bytes::Bytes::copy_from_slice(data);
         let len = data.len();
         self.consume_stream_data(stream_id, len);
         Some((data, fin))
@@ -3391,7 +3476,7 @@ impl Connection {
             let expected_proto = draft.protocol_value().as_bytes();
             let proto_ok = headers
                 .iter()
-                .any(|h| h.name == b":protocol" && h.value == expected_proto);
+                .any(|h| h.name == &b":protocol"[..] && h.value == expected_proto);
             if !proto_ok {
                 return Err(Error::ConnectionError(ErrorCode::InternalError));
             }
@@ -3436,7 +3521,7 @@ impl Connection {
         // HEAD リクエストの場合は Content-Length 検証でのレスポンス body チェックをスキップする
         if headers
             .iter()
-            .any(|h| h.name == b":method" && h.value == b"HEAD")
+            .any(|h| h.name == &b":method"[..] && h.value == &b"HEAD"[..])
         {
             stream.set_is_head_request(true);
         }
@@ -3444,8 +3529,8 @@ impl Connection {
         // 2xx レスポンス受信時に is_connect を設定するために追跡する
         let is_connect = headers
             .iter()
-            .any(|h| h.name == b":method" && h.value == b"CONNECT");
-        let has_protocol = headers.iter().any(|h| h.name == b":protocol");
+            .any(|h| h.name == &b":method"[..] && h.value == &b"CONNECT"[..]);
+        let has_protocol = headers.iter().any(|h| h.name == &b":protocol"[..]);
         if is_connect && !has_protocol {
             // plain CONNECT ではストリームを open のまま維持する必要がある (RFC 9114 Section 4.4)
             if fin {
@@ -3462,7 +3547,7 @@ impl Connection {
             let mut session = WtSession::new();
             // WT-Available-Protocols を保存 (Section 3.3)
             for h in headers {
-                if h.name == b"wt-available-protocols" {
+                if h.name == &b"wt-available-protocols"[..] {
                     if let Ok(value) = std::str::from_utf8(&h.value) {
                         session.available_protocols =
                             crate::webtransport::ConnectRequest::parse_available_protocols(value);
@@ -3503,7 +3588,7 @@ impl Connection {
             && let Some(session) = self.wt_sessions.get(&stream_id)
         {
             let selected = headers.iter().find_map(|h| {
-                if h.name == b"wt-protocol" {
+                if h.name == &b"wt-protocol"[..] {
                     std::str::from_utf8(&h.value)
                         .ok()
                         .and_then(crate::webtransport::ConnectResponse::parse_protocol)
@@ -3557,12 +3642,12 @@ impl Connection {
         // 1xx 中間レスポンスかどうかを判定 (RFC 9114 Section 4.1)
         // HTTP/3 は 101 (Switching Protocols) をサポートしない (RFC 9114 Section 4.5)
         let is_interim = headers.iter().any(|h| {
-            h.name == b":status"
+            h.name == &b":status"[..]
                 && h.value.len() == 3
                 && h.value[0] == b'1'
                 && h.value[1].is_ascii_digit()
                 && h.value[2].is_ascii_digit()
-                && h.value != b"101"
+                && h.value != &b"101"[..]
         });
 
         stream.send_encoded_headers(&qpack_buf, fin, is_interim)?;
@@ -3628,15 +3713,16 @@ impl Connection {
                         break;
                     }
                     session.add_received_data(data_len);
+                    let entry_bytes = bytes::Bytes::from(entry_data);
                     buffered_events.push(if is_bidi {
                         Event::WebTransportBidiStreamData {
                             stream_id: buffered_stream_id,
-                            data: entry_data,
+                            data: entry_bytes,
                         }
                     } else {
                         Event::WebTransportUniStreamData {
                             stream_id: buffered_stream_id,
-                            data: entry_data,
+                            data: entry_bytes,
                         }
                     });
                 }
@@ -3908,9 +3994,10 @@ impl Connection {
 fn is_webtransport_connect(headers: &[Header]) -> bool {
     let is_connect = headers
         .iter()
-        .any(|h| h.name == b":method" && h.value == b"CONNECT");
+        .any(|h| h.name == &b":method"[..] && h.value == &b"CONNECT"[..]);
     let is_wt_protocol = headers.iter().any(|h| {
-        h.name == b":protocol" && (h.value == b"webtransport-h3" || h.value == b"webtransport")
+        h.name == &b":protocol"[..]
+            && (h.value == &b"webtransport-h3"[..] || h.value == &b"webtransport"[..])
     });
     is_connect && is_wt_protocol
 }
@@ -3921,9 +4008,10 @@ fn is_webtransport_connect(headers: &[Header]) -> bool {
 fn is_webtransport_connect_decoded(headers: &[crate::qpack::DecodedHeader]) -> bool {
     let is_connect = headers
         .iter()
-        .any(|h| h.name == b":method" && h.value == b"CONNECT");
+        .any(|h| h.name == &b":method"[..] && h.value == &b"CONNECT"[..]);
     let is_wt_protocol = headers.iter().any(|h| {
-        h.name == b":protocol" && (h.value == b"webtransport-h3" || h.value == b"webtransport")
+        h.name == &b":protocol"[..]
+            && (h.value == &b"webtransport-h3"[..] || h.value == &b"webtransport"[..])
     });
     is_connect && is_wt_protocol
 }
@@ -3931,15 +4019,15 @@ fn is_webtransport_connect_decoded(headers: &[crate::qpack::DecodedHeader]) -> b
 fn is_plain_connect(headers: &[crate::qpack::DecodedHeader]) -> bool {
     let is_connect = headers
         .iter()
-        .any(|h| h.name == b":method" && h.value == b"CONNECT");
-    let has_protocol = headers.iter().any(|h| h.name == b":protocol");
+        .any(|h| h.name == &b":method"[..] && h.value == &b"CONNECT"[..]);
+    let has_protocol = headers.iter().any(|h| h.name == &b":protocol"[..]);
     is_connect && !has_protocol
 }
 
 fn is_informational_status(headers: &[crate::qpack::DecodedHeader]) -> bool {
     headers
         .iter()
-        .find(|h| h.name == b":status")
+        .find(|h| h.name == &b":status"[..])
         .and_then(|h| std::str::from_utf8(&h.value).ok())
         .and_then(|s| s.parse::<u16>().ok())
         // HTTP/3 は 101 (Switching Protocols) をサポートしない (RFC 9114 Section 4.5)
@@ -3953,7 +4041,7 @@ fn is_informational_status(headers: &[crate::qpack::DecodedHeader]) -> bool {
 fn is_success_status(headers: &[crate::qpack::DecodedHeader]) -> bool {
     headers
         .iter()
-        .find(|h| h.name == b":status")
+        .find(|h| h.name == &b":status"[..])
         .and_then(|h| std::str::from_utf8(&h.value).ok())
         .and_then(|s| s.parse::<u16>().ok())
         .map(|code| (200..300).contains(&code))
@@ -3966,7 +4054,7 @@ fn is_success_status(headers: &[crate::qpack::DecodedHeader]) -> bool {
 fn is_success_status_raw(headers: &[Header]) -> bool {
     headers
         .iter()
-        .find(|h| h.name == b":status")
+        .find(|h| h.name == &b":status"[..])
         .and_then(|h| std::str::from_utf8(&h.value).ok())
         .and_then(|s| s.parse::<u16>().ok())
         .map(|code| (200..300).contains(&code))
@@ -3980,7 +4068,7 @@ fn is_success_status_raw(headers: &[Header]) -> bool {
 fn is_no_body_status(headers: &[crate::qpack::DecodedHeader]) -> bool {
     headers
         .iter()
-        .find(|h| h.name == b":status")
+        .find(|h| h.name == &b":status"[..])
         .and_then(|h| std::str::from_utf8(&h.value).ok())
         .and_then(|s| s.parse::<u16>().ok())
         .map(|code| code < 200 || code == 204 || code == 304)
@@ -4213,8 +4301,8 @@ mod tests {
         use crate::qpack::DecodedHeader;
 
         let make = |name: &[u8], value: &[u8]| DecodedHeader {
-            name: name.to_vec(),
-            value: value.to_vec(),
+            name: bytes::Bytes::copy_from_slice(name),
+            value: bytes::Bytes::copy_from_slice(value),
         };
 
         // 1xx は informational (101 を除く)
@@ -4310,7 +4398,7 @@ mod tests {
             Event::WebTransportUniStreamData {
                 stream_id: 2,
                 ref data,
-            } if data == &[0xAA, 0xBB]
+            } if data == &[0xAA, 0xBB][..]
         ));
     }
 
@@ -4331,7 +4419,7 @@ mod tests {
             Event::WebTransportUniStreamData {
                 stream_id: 2,
                 ref data,
-            } if data == &[0xCC, 0xDD]
+            } if data == &[0xCC, 0xDD][..]
         ));
     }
 
@@ -4464,7 +4552,7 @@ mod tests {
             Event::WebTransportBidiStreamData {
                 stream_id: 1,
                 ref data,
-            } if data == &[0xAA, 0xBB]
+            } if data == &[0xAA, 0xBB][..]
         ));
     }
 
@@ -4484,7 +4572,7 @@ mod tests {
             Event::WebTransportBidiStreamData {
                 stream_id: 1,
                 ref data,
-            } if data == &[0xCC, 0xDD]
+            } if data == &[0xCC, 0xDD][..]
         ));
     }
 
@@ -4625,7 +4713,7 @@ mod tests {
             Event::WebTransportBidiStreamData {
                 stream_id: 0,
                 ref data,
-            } if data == &[0xAA, 0xBB]
+            } if data == &[0xAA, 0xBB][..]
         ));
     }
 

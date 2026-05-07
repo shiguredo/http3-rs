@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use bytes::Bytes;
+
 use super::capsule::{Capsule, MAX_STREAMS_LIMIT};
 use super::error::{Error, ErrorCode};
 use super::stream::Stream;
@@ -314,7 +316,8 @@ pub struct Session {
     /// セッション確立前のバッファリングされたストリーム (RFC Section 4.6)
     buffered_streams: Vec<BufferedStream>,
     /// セッション確立前のバッファリングされたデータグラム (RFC Section 4.6)
-    buffered_datagrams: Vec<Vec<u8>>,
+    /// payload は cheap clone のため Bytes (issue 0059)
+    buffered_datagrams: Vec<Bytes>,
     /// HTTP/3 GOAWAY を受信したかどうか (RFC Section 4.7)
     goaway_received: bool,
     /// WT_CLOSE_SESSION を受信したかどうか (RFC Section 6)
@@ -819,16 +822,16 @@ impl Session {
     ///
     /// `true` を返した場合はバッファ済み。
     /// `false` を返した場合は上限超過のためデータグラムを破棄すること。
-    pub fn buffer_datagram(&mut self, data: Vec<u8>) -> bool {
+    pub fn buffer_datagram(&mut self, data: impl Into<Bytes>) -> bool {
         if self.buffered_datagrams.len() >= MAX_BUFFERED_DATAGRAMS {
             return false;
         }
-        self.buffered_datagrams.push(data);
+        self.buffered_datagrams.push(data.into());
         true
     }
 
     /// バッファリングされたデータグラムを取り出す (セッション確立後に呼び出す)
-    pub fn take_buffered_datagrams(&mut self) -> Vec<Vec<u8>> {
+    pub fn take_buffered_datagrams(&mut self) -> Vec<Bytes> {
         std::mem::take(&mut self.buffered_datagrams)
     }
 

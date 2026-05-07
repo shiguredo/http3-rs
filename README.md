@@ -21,13 +21,13 @@ Please read <https://github.com/shiguredo/oss> before use.
 
 ## 概要
 
-Rust で実装された依存 0 かつ Sans I/O な HTTP/3 と WebTransport over HTTP/3 ライブラリです。
+Rust で実装された no_std かつ Sans I/O な HTTP/3 と WebTransport over HTTP/3 ライブラリです。
 
 ## 特徴
 
 - Sans I/O
   - <https://sans-io.readthedocs.io/index.html>
-- 依存ライブラリ 0
+- no_std 対応
 - QUIC 非依存
   - 任意の QUIC 実装と組み合わせ可能
 - RFC 9114 (HTTP/3) および RFC 9204 (QPACK) 準拠

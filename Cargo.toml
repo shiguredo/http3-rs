@@ -30,4 +30,10 @@ exclude = [
 edition = "2024"
 rust-version = "1.88"
 
+[workspace.dependencies]
+# 公開 API でのバイト列は Bytes を使う (issue 0059)
+# 将来の no_std 利用に備えて default-features を切る (alloc + core のみ)
+bytes = { version = "1.11", default-features = false }
+
 [dependencies]
+bytes = { workspace = true }

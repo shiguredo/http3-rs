@@ -17,8 +17,8 @@ pub struct H3Client {
     state: Arc<StdMutex<ClientConnectionState>>,
     /// 接続ハンドル
     handle: s2n_quic::connection::Handle,
-    /// QPACK データ送信チャンネル
-    qpack_tx: mpsc::UnboundedSender<(u64, Vec<u8>)>,
+    /// QPACK データ送信チャンネル (issue 0059: Bytes 化)
+    qpack_tx: mpsc::UnboundedSender<(u64, Bytes)>,
     /// 制御ストリームタスク
     _control_task: JoinHandle<()>,
     /// 単方向ストリーム処理タスク
@@ -72,22 +72,16 @@ impl H3Client {
             s.init_h3_streams(control_send.id(), encoder_send.id(), decoder_send.id())?
         };
 
-        // 初期データを各ストリームに送信
-        control_send
-            .send(Bytes::from(init_data.control_data))
-            .await?;
-        encoder_send
-            .send(Bytes::from(init_data.encoder_data))
-            .await?;
-        decoder_send
-            .send(Bytes::from(init_data.decoder_data))
-            .await?;
+        // 初期データを各ストリームに送信 (issue 0059: Bytes そのまま)
+        control_send.send(init_data.control_data).await?;
+        encoder_send.send(init_data.encoder_data).await?;
+        decoder_send.send(init_data.decoder_data).await?;
 
         let encoder_stream_id = init_data.encoder_stream_id;
         let decoder_stream_id = init_data.decoder_stream_id;
 
-        // QPACK データ送信用チャンネル
-        let (qpack_tx, mut qpack_rx) = mpsc::unbounded_channel::<(u64, Vec<u8>)>();
+        // QPACK データ送信用チャンネル (issue 0059: Bytes 化)
+        let (qpack_tx, mut qpack_rx) = mpsc::unbounded_channel::<(u64, Bytes)>();
 
         // QPACK ストリーム送信タスク
         // エンコーダーストリームとデコーダーストリームを保持し、
@@ -96,9 +90,9 @@ impl H3Client {
         let qpack_task = tokio::spawn(async move {
             while let Some((stream_id, data)) = qpack_rx.recv().await {
                 let send_result = if stream_id == encoder_stream_id {
-                    encoder_send.send(Bytes::from(data)).await
+                    encoder_send.send(data).await
                 } else if stream_id == decoder_stream_id {
-                    decoder_send.send(Bytes::from(data)).await
+                    decoder_send.send(data).await
                 } else {
                     continue;
                 };
@@ -130,17 +124,19 @@ impl H3Client {
                 let stream_id: u64 = recv_stream.id();
                 tokio::spawn(async move {
                     while let Ok(Some(data)) = recv_stream.receive().await {
+                        // issue 0059 Phase 4-B: Bytes をそのまま zero-copy で渡す
                         let _ = state
                             .lock()
                             .unwrap()
-                            .process_stream_data(stream_id, &data, false);
+                            .process_stream_data(stream_id, data, false);
                         // QPACK データをドレインして送信タスクに転送
                         flush_qpack(&state, &qpack_tx);
                     }
-                    let _ = state
-                        .lock()
-                        .unwrap()
-                        .process_stream_data(stream_id, &[], true);
+                    let _ =
+                        state
+                            .lock()
+                            .unwrap()
+                            .process_stream_data(stream_id, Bytes::new(), true);
                     flush_qpack(&state, &qpack_tx);
                 });
             }
@@ -171,14 +167,26 @@ impl H3Client {
             let mut s = self.state.lock().unwrap();
 
             let mut headers = Vec::new();
-            headers.push(Header::new(b":method", request.method.as_slice()));
-            headers.push(Header::new(b":path", request.path.as_slice()));
-            headers.push(Header::new(b":scheme", b"https"));
+            headers.push(Header::from_bytes(
+                Bytes::from_static(b":method"),
+                request.method.clone(),
+            ));
+            headers.push(Header::from_bytes(
+                Bytes::from_static(b":path"),
+                request.path.clone(),
+            ));
+            headers.push(Header::from_bytes(
+                Bytes::from_static(b":scheme"),
+                Bytes::from_static(b"https"),
+            ));
             if let Some(ref authority) = request.authority {
-                headers.push(Header::new(b":authority", authority.as_slice()));
+                headers.push(Header::from_bytes(
+                    Bytes::from_static(b":authority"),
+                    authority.clone(),
+                ));
             }
             for (name, value) in &request.headers {
-                headers.push(Header::new(name.as_slice(), value.as_slice()));
+                headers.push(Header::from_bytes(name.clone(), value.clone()));
             }
 
             let fin = request.body.is_empty();
@@ -202,25 +210,27 @@ impl H3Client {
         flush_qpack(&self.state, &self.qpack_tx);
 
         // リクエスト送信
-        send_stream.send(Bytes::from(request_data)).await?;
+        send_stream.send(request_data).await?;
         send_stream.finish()?;
 
-        // レスポンス受信
-        let mut response_headers: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-        let mut response_body = Vec::new();
+        // レスポンス受信 (issue 0059: Bytes 化)
+        let mut response_headers: Vec<(Bytes, Bytes)> = Vec::new();
+        let mut response_body = bytes::BytesMut::new();
         let mut finished = false;
 
         while !finished {
             let received: Result<Option<Bytes>, _> = recv_stream.receive().await;
+            // issue 0059 Phase 1: Bytes をそのまま流す (to_vec() コピー削減)
             let (data, fin) = match received {
-                Ok(Some(data)) => (data.to_vec(), false),
-                Ok(None) => (vec![], true),
+                Ok(Some(data)) => (data, false),
+                Ok(None) => (Bytes::new(), true),
                 Err(e) => return Err(crate::Error::transport(e)),
             };
 
             let events = {
                 let mut s = self.state.lock().unwrap();
-                s.process_stream_data(stream_id, &data, fin)?
+                // issue 0059 Phase 4-B: Bytes をそのまま zero-copy で渡す
+                s.process_stream_data(stream_id, data, fin)?
             };
 
             // ヘッダーデコード後に Section Ack が生成される可能性がある
@@ -248,7 +258,7 @@ impl H3Client {
 
         let status = response_headers
             .iter()
-            .find(|(name, _)| name == b":status")
+            .find(|(name, _)| name == &b":status"[..])
             .and_then(|(_, value)| std::str::from_utf8(value).ok())
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(0);
@@ -256,7 +266,7 @@ impl H3Client {
         Ok(H3ClientResponse {
             status,
             headers: response_headers,
-            body: response_body,
+            body: response_body.freeze(),
         })
     }
 }
@@ -264,7 +274,7 @@ impl H3Client {
 /// QPACK ストリームの送信待ちデータをドレインしてチャンネルに送信する
 fn flush_qpack(
     state: &Arc<StdMutex<ClientConnectionState>>,
-    tx: &mpsc::UnboundedSender<(u64, Vec<u8>)>,
+    tx: &mpsc::UnboundedSender<(u64, Bytes)>,
 ) {
     let data = state.lock().unwrap().drain_qpack_data();
     for item in data {
@@ -272,70 +282,85 @@ fn flush_qpack(
     }
 }
 
-/// HTTP/3 クライアントリクエスト (ビルダー)
+/// HTTP/3 クライアントリクエスト (ビルダー) (issue 0059: Bytes 化)
 pub struct H3ClientRequest {
     /// メソッド
-    method: Vec<u8>,
+    method: Bytes,
     /// パス
-    path: Vec<u8>,
+    path: Bytes,
     /// authority
-    authority: Option<Vec<u8>>,
+    authority: Option<Bytes>,
     /// ヘッダー
-    headers: Vec<(Vec<u8>, Vec<u8>)>,
+    headers: Vec<(Bytes, Bytes)>,
     /// ボディ
-    body: Vec<u8>,
+    body: Bytes,
 }
 
 impl H3ClientRequest {
     /// GET リクエストを作成する
-    pub fn get(path: impl Into<Vec<u8>>) -> Self {
+    pub fn get(path: impl AsRef<[u8]>) -> Self {
         Self {
-            method: b"GET".to_vec(),
-            path: path.into(),
+            method: Bytes::from_static(b"GET"),
+            path: Bytes::copy_from_slice(path.as_ref()),
             authority: None,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
         }
     }
 
     /// POST リクエストを作成する
-    pub fn post(path: impl Into<Vec<u8>>) -> Self {
+    pub fn post(path: impl AsRef<[u8]>) -> Self {
         Self {
-            method: b"POST".to_vec(),
-            path: path.into(),
+            method: Bytes::from_static(b"POST"),
+            path: Bytes::copy_from_slice(path.as_ref()),
             authority: None,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
         }
     }
 
     /// authority を設定する
-    pub fn authority(mut self, authority: impl Into<Vec<u8>>) -> Self {
-        self.authority = Some(authority.into());
+    pub fn authority(mut self, authority: impl AsRef<[u8]>) -> Self {
+        self.authority = Some(Bytes::copy_from_slice(authority.as_ref()));
         self
     }
 
     /// ヘッダーを追加する
-    pub fn header(mut self, name: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Self {
-        self.headers.push((name.into(), value.into()));
+    pub fn header(mut self, name: impl AsRef<[u8]>, value: impl AsRef<[u8]>) -> Self {
+        self.headers.push((
+            Bytes::copy_from_slice(name.as_ref()),
+            Bytes::copy_from_slice(value.as_ref()),
+        ));
+        self
+    }
+
+    /// ヘッダーを追加する (zero-copy)
+    pub fn header_bytes(mut self, name: Bytes, value: Bytes) -> Self {
+        self.headers.push((name, value));
         self
     }
 
     /// ボディを設定する
-    pub fn body(mut self, body: impl Into<Vec<u8>>) -> Self {
-        self.body = body.into();
+    pub fn body(mut self, body: impl AsRef<[u8]>) -> Self {
+        self.body = Bytes::copy_from_slice(body.as_ref());
+        self
+    }
+
+    /// ボディを設定する (zero-copy)
+    pub fn body_bytes(mut self, body: Bytes) -> Self {
+        self.body = body;
         self
     }
 }
 
-/// HTTP/3 クライアントレスポンス
+/// HTTP/3 クライアントレスポンス (issue 0059: Bytes 化)
 pub struct H3ClientResponse {
     /// ステータスコード
     status: u16,
     /// レスポンスヘッダー
-    headers: Vec<(Vec<u8>, Vec<u8>)>,
+    headers: Vec<(Bytes, Bytes)>,
     /// レスポンスボディ
-    body: Vec<u8>,
+    body: Bytes,
 }
 
 impl H3ClientResponse {
@@ -345,7 +370,7 @@ impl H3ClientResponse {
     }
 
     /// ヘッダーを取得する
-    pub fn headers(&self) -> &[(Vec<u8>, Vec<u8>)] {
+    pub fn headers(&self) -> &[(Bytes, Bytes)] {
         &self.headers
     }
 

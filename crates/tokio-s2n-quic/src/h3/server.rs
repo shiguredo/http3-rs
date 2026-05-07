@@ -70,8 +70,8 @@ pub struct H3ServerConnection {
     bidi_acceptor: BidirectionalStreamAcceptor,
     /// 接続ハンドル
     _handle: s2n_quic::connection::Handle,
-    /// QPACK データ送信チャンネル
-    qpack_tx: mpsc::UnboundedSender<(u64, Vec<u8>)>,
+    /// QPACK データ送信チャンネル (issue 0059: Bytes 化)
+    qpack_tx: mpsc::UnboundedSender<(u64, Bytes)>,
     /// 制御ストリームタスク
     _control_task: JoinHandle<()>,
     /// 単方向ストリーム処理タスク
@@ -98,22 +98,16 @@ impl H3ServerConnection {
             s.init_h3_streams(control_send.id(), encoder_send.id(), decoder_send.id())?
         };
 
-        // 初期データを各ストリームに送信
-        control_send
-            .send(Bytes::from(init_data.control_data))
-            .await?;
-        encoder_send
-            .send(Bytes::from(init_data.encoder_data))
-            .await?;
-        decoder_send
-            .send(Bytes::from(init_data.decoder_data))
-            .await?;
+        // 初期データを各ストリームに送信 (issue 0059: Bytes そのまま)
+        control_send.send(init_data.control_data).await?;
+        encoder_send.send(init_data.encoder_data).await?;
+        decoder_send.send(init_data.decoder_data).await?;
 
         let encoder_stream_id = init_data.encoder_stream_id;
         let decoder_stream_id = init_data.decoder_stream_id;
 
-        // QPACK データ送信用チャンネル
-        let (qpack_tx, mut qpack_rx) = mpsc::unbounded_channel::<(u64, Vec<u8>)>();
+        // QPACK データ送信用チャンネル (issue 0059: Bytes 化)
+        let (qpack_tx, mut qpack_rx) = mpsc::unbounded_channel::<(u64, Bytes)>();
 
         // QPACK ストリーム送信タスク
         // エンコーダーストリームとデコーダーストリームを保持し、
@@ -122,9 +116,9 @@ impl H3ServerConnection {
         let qpack_task = tokio::spawn(async move {
             while let Some((stream_id, data)) = qpack_rx.recv().await {
                 let send_result = if stream_id == encoder_stream_id {
-                    encoder_send.send(Bytes::from(data)).await
+                    encoder_send.send(data).await
                 } else if stream_id == decoder_stream_id {
-                    decoder_send.send(Bytes::from(data)).await
+                    decoder_send.send(data).await
                 } else {
                     continue;
                 };
@@ -156,22 +150,21 @@ impl H3ServerConnection {
                 let qpack_tx = qpack_tx_for_uni.clone();
                 let stream_id: u64 = recv_stream.id();
                 tokio::spawn(async move {
-                    let mut buf = Vec::new();
                     while let Ok(Some(data)) = recv_stream.receive().await {
-                        buf.extend_from_slice(&data);
+                        // issue 0059 Phase 4-B: Bytes をそのまま zero-copy で渡す
                         let _ = {
                             let mut s = state.lock().unwrap();
-                            s.process_stream_data(stream_id, &buf, false).ok()
+                            s.process_stream_data(stream_id, data, false).ok()
                         };
                         // SETTINGS 受信後に Set Capacity が生成される可能性がある
                         flush_qpack(&state, &qpack_tx);
-                        buf.clear();
                     }
                     // FIN
-                    let _ = state
-                        .lock()
-                        .unwrap()
-                        .process_stream_data(stream_id, &[], true);
+                    let _ =
+                        state
+                            .lock()
+                            .unwrap()
+                            .process_stream_data(stream_id, Bytes::new(), true);
                     flush_qpack(&state, &qpack_tx);
                 });
             }
@@ -206,23 +199,27 @@ impl H3ServerConnection {
             let _ = s.h3_conn.feed_stream(stream_id, &[], false);
         }
 
-        // リクエストデータを受信して Sans I/O に feed する
-        let mut headers: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-        let mut body = Vec::new();
+        // リクエストデータを受信して Sans I/O に feed する (issue 0059: Bytes 化)
+        let mut headers: Vec<(Bytes, Bytes)> = Vec::new();
+        let mut body = bytes::BytesMut::new();
         let mut headers_complete = false;
         let mut stream_ended = false;
 
         loop {
             let received: Result<Option<Bytes>, _> = recv_stream.receive().await;
+            // issue 0059 Phase 1: s2n-quic 由来の Bytes をそのまま流す。
+            // feed_stream は &[u8] を取るので Deref coercion 経由で渡し、
+            // to_vec() による不要なコピーを排除する。
             let (data, fin) = match received {
-                Ok(Some(data)) => (data.to_vec(), false),
-                Ok(None) => (vec![], true),
+                Ok(Some(data)) => (data, false),
+                Ok(None) => (Bytes::new(), true),
                 Err(e) => return Err(crate::Error::transport(e)),
             };
 
             let events = {
                 let mut s = self.state.lock().unwrap();
-                s.process_stream_data(stream_id, &data, fin)?
+                // issue 0059 Phase 4-B: Bytes をそのまま zero-copy で渡す
+                s.process_stream_data(stream_id, data, fin)?
             };
 
             // ヘッダーデコード後に Section Ack が生成される可能性がある
@@ -231,6 +228,7 @@ impl H3ServerConnection {
             for event in events {
                 match event {
                     Event::Header { name, value, .. } => {
+                        // issue 0059 Phase 5: Bytes をそのまま push (cheap clone)
                         headers.push((name, value));
                     }
                     Event::HeadersEnd { .. } => {
@@ -256,14 +254,15 @@ impl H3ServerConnection {
             loop {
                 let received: Result<Option<Bytes>, _> = recv_stream.receive().await;
                 let (data, fin) = match received {
-                    Ok(Some(data)) => (data.to_vec(), false),
-                    Ok(None) => (vec![], true),
+                    Ok(Some(data)) => (data, false),
+                    Ok(None) => (Bytes::new(), true),
                     Err(_) => break,
                 };
 
                 let events = {
                     let mut s = self.state.lock().unwrap();
-                    s.process_stream_data(stream_id, &data, fin)?
+                    // issue 0059 Phase 4-B: Bytes をそのまま zero-copy で渡す
+                    s.process_stream_data(stream_id, data, fin)?
                 };
 
                 // QPACK データのドレイン
@@ -290,7 +289,7 @@ impl H3ServerConnection {
         Ok(H3Request {
             headers,
             stream_id,
-            body,
+            body: body.freeze(),
             state: Arc::clone(&self.state),
             qpack_tx: self.qpack_tx.clone(),
             send_stream: StdMutex::new(Some(send_stream)),
@@ -301,7 +300,7 @@ impl H3ServerConnection {
 /// QPACK ストリームの送信待ちデータをドレインしてチャンネルに送信する
 fn flush_qpack(
     state: &Arc<StdMutex<ServerConnectionState>>,
-    tx: &mpsc::UnboundedSender<(u64, Vec<u8>)>,
+    tx: &mpsc::UnboundedSender<(u64, Bytes)>,
 ) {
     let data = state.lock().unwrap().drain_qpack_data();
     for item in data {
@@ -311,30 +310,30 @@ fn flush_qpack(
 
 /// HTTP/3 リクエスト
 pub struct H3Request {
-    /// リクエストヘッダー
-    headers: Vec<(Vec<u8>, Vec<u8>)>,
+    /// リクエストヘッダー (issue 0059: Bytes 化)
+    headers: Vec<(Bytes, Bytes)>,
     /// ストリーム ID
     stream_id: u64,
-    /// リクエストボディ
-    body: Vec<u8>,
+    /// リクエストボディ (issue 0059: Bytes 化、cheap clone)
+    body: Bytes,
     /// 接続状態
     state: Arc<StdMutex<ServerConnectionState>>,
-    /// QPACK データ送信チャンネル
-    qpack_tx: mpsc::UnboundedSender<(u64, Vec<u8>)>,
+    /// QPACK データ送信チャンネル (issue 0059: Bytes 化)
+    qpack_tx: mpsc::UnboundedSender<(u64, Bytes)>,
     /// 送信ストリーム (&self で使うため StdMutex<Option<>> で保持)
     send_stream: StdMutex<Option<SendStream>>,
 }
 
 impl H3Request {
     /// ヘッダーを取得する
-    pub fn headers(&self) -> &[(Vec<u8>, Vec<u8>)] {
+    pub fn headers(&self) -> &[(Bytes, Bytes)] {
         &self.headers
     }
 
     /// メソッドを取得する
     pub fn method(&self) -> &[u8] {
         for (name, value) in &self.headers {
-            if name == b":method" {
+            if name == &b":method"[..] {
                 return value;
             }
         }
@@ -344,7 +343,7 @@ impl H3Request {
     /// パスを取得する
     pub fn path(&self) -> &[u8] {
         for (name, value) in &self.headers {
-            if name == b":path" {
+            if name == &b":path"[..] {
                 return value;
             }
         }
@@ -372,7 +371,7 @@ impl H3Request {
                 response.status.to_string().as_bytes(),
             )];
             for (name, value) in &response.headers {
-                headers.push(Header::new(name.as_slice(), value.as_slice()));
+                headers.push(Header::from_bytes(name.clone(), value.clone()));
             }
 
             s.prepare_response(self.stream_id, &headers, &response.body)?;
@@ -395,7 +394,7 @@ impl H3Request {
             .ok_or_else(|| crate::Error::InvalidState("response already sent".to_string()))?;
 
         send_stream
-            .send(Bytes::from(data))
+            .send(data)
             .await
             .map_err(crate::Error::transport)?;
 
@@ -409,10 +408,10 @@ impl H3Request {
 pub struct H3Response {
     /// ステータスコード
     status: u16,
-    /// レスポンスヘッダー
-    headers: Vec<(Vec<u8>, Vec<u8>)>,
+    /// レスポンスヘッダー (issue 0059: Bytes 化)
+    headers: Vec<(Bytes, Bytes)>,
     /// レスポンスボディ
-    body: Vec<u8>,
+    body: Bytes,
 }
 
 impl H3Response {
@@ -421,19 +420,37 @@ impl H3Response {
         Self {
             status,
             headers: Vec::new(),
-            body: Vec::new(),
+            body: Bytes::new(),
         }
     }
 
     /// ヘッダーを追加する
-    pub fn header(mut self, name: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Self {
-        self.headers.push((name.into(), value.into()));
+    ///
+    /// `&'static [u8]` リテラルや `&[u8]` を受け、内部で `Bytes::copy_from_slice` で保持する。
+    /// すでに `Bytes` を持っているなら [`Self::header_bytes`] で zero-copy に渡せる。
+    pub fn header(mut self, name: impl AsRef<[u8]>, value: impl AsRef<[u8]>) -> Self {
+        self.headers.push((
+            Bytes::copy_from_slice(name.as_ref()),
+            Bytes::copy_from_slice(value.as_ref()),
+        ));
+        self
+    }
+
+    /// ヘッダーを追加する (zero-copy)
+    pub fn header_bytes(mut self, name: Bytes, value: Bytes) -> Self {
+        self.headers.push((name, value));
         self
     }
 
     /// ボディを設定する
-    pub fn body(mut self, body: impl Into<Vec<u8>>) -> Self {
-        self.body = body.into();
+    pub fn body(mut self, body: impl AsRef<[u8]>) -> Self {
+        self.body = Bytes::copy_from_slice(body.as_ref());
+        self
+    }
+
+    /// ボディを設定する (zero-copy)
+    pub fn body_bytes(mut self, body: Bytes) -> Self {
+        self.body = body;
         self
     }
 }

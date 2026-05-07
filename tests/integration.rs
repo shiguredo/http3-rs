@@ -87,12 +87,12 @@ fn test_client_server_exchange() -> Result<(), Box<dyn std::error::Error>> {
     assert!(
         received_headers
             .iter()
-            .any(|(n, v)| n == b":method" && v == b"GET")
+            .any(|(n, v)| n == &b":method"[..] && v == &b"GET"[..])
     );
     assert!(
         received_headers
             .iter()
-            .any(|(n, v)| n == b":path" && v == b"/index.html")
+            .any(|(n, v)| n == &b":path"[..] && v == &b"/index.html"[..])
     );
 
     // === Phase 3: レスポンス送信 ===
@@ -137,7 +137,7 @@ fn test_client_server_exchange() -> Result<(), Box<dyn std::error::Error>> {
     assert!(
         response_headers_received
             .iter()
-            .any(|(n, v)| n == b":status" && v == b"200")
+            .any(|(n, v)| n == &b":status"[..] && v == &b"200"[..])
     );
     assert_eq!(body_data, b"Hello, World!");
 

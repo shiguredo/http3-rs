@@ -114,7 +114,7 @@ impl ServerConnectionState {
         Ok(())
     }
 
-    fn take_control_pending(&mut self) -> Option<Vec<u8>> {
+    fn take_control_pending(&mut self) -> Option<bytes::Bytes> {
         let id = self.control_stream_id?;
         self.h3_conn.take_stream_data(id).map(|(d, _)| d)
     }
@@ -270,15 +270,9 @@ impl WtSessionRequest {
             init_data.control_data.len(),
             init_data.control_data
         );
-        control_send
-            .send(Bytes::from(init_data.control_data))
-            .await?;
-        encoder_send
-            .send(Bytes::from(init_data.encoder_data))
-            .await?;
-        decoder_send
-            .send(Bytes::from(init_data.decoder_data))
-            .await?;
+        control_send.send(init_data.control_data).await?;
+        encoder_send.send(init_data.encoder_data).await?;
+        decoder_send.send(init_data.decoder_data).await?;
         tracing::info!("WebTransport: H3 streams initialized (control, encoder, decoder)");
 
         // QUIC transport parameter レベルの前提条件を注入する
@@ -316,7 +310,7 @@ impl WtSessionRequest {
                 data
             );
             if !data.is_empty() {
-                control_send.send(Bytes::from(data)).await?;
+                control_send.send(data).await?;
             }
         }
 
@@ -448,7 +442,7 @@ impl WtSessionRequest {
                             let n = String::from_utf8_lossy(&name);
                             let v = String::from_utf8_lossy(&value);
                             tracing::info!("WebTransport: CONNECT header: {n}: {v}");
-                            collected_headers.push((name, value));
+                            collected_headers.push((name.to_vec(), value.to_vec()));
                         }
                         Event::HeadersEnd { .. } => {
                             tracing::info!("WebTransport: CONNECT headers complete");
@@ -499,7 +493,7 @@ impl WtSessionRequest {
                                 let n = String::from_utf8_lossy(&name);
                                 let v = String::from_utf8_lossy(&value);
                                 tracing::info!("WebTransport: CONNECT header: {n}: {v}");
-                                collected_headers.push((name, value));
+                                collected_headers.push((name.to_vec(), value.to_vec()));
                             }
                             Event::HeadersEnd { .. } => {
                                 tracing::info!("WebTransport: CONNECT headers complete");

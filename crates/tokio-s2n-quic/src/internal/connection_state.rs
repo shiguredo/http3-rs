@@ -45,8 +45,8 @@ impl ServerConnectionState {
     /// QPACK ストリームの送信待ちデータをドレインする
     ///
     /// エンコーダーストリーム / デコーダーストリームに蓄積されたデータを
-    /// (stream_id, data) のペアで返す。
-    pub(crate) fn drain_qpack_data(&mut self) -> Vec<(u64, Vec<u8>)> {
+    /// (stream_id, data) のペアで返す (issue 0059: Bytes 化)。
+    pub(crate) fn drain_qpack_data(&mut self) -> Vec<(u64, bytes::Bytes)> {
         let mut result = Vec::new();
         for stream_id in [self.encoder_stream_id, self.decoder_stream_id]
             .into_iter()
@@ -59,28 +59,28 @@ impl ServerConnectionState {
         result
     }
 
-    /// ストリームデータを処理してイベントを返す
+    /// ストリームデータを処理してイベントを返す (issue 0059 Phase 4-B: zero-copy)
     pub(crate) fn process_stream_data(
         &mut self,
         stream_id: u64,
-        data: &[u8],
+        data: bytes::Bytes,
         fin: bool,
     ) -> crate::Result<Vec<Event>> {
-        self.h3_conn.feed_stream(stream_id, data, fin)?;
+        self.h3_conn.feed_stream_bytes(stream_id, data, fin)?;
         Ok(self.h3_conn.drain_events()?)
     }
 
-    /// ストリームデータをフィードするだけでイベントをドレインしない
+    /// ストリームデータをフィードするだけでイベントをドレインしない (issue 0059 Phase 4-B: zero-copy)
     ///
     /// QPACK エンコーダーストリームなど、イベント生成とは独立して処理する
     /// 単方向ストリームに使用する。イベントは `drain_events` で後から取得する。
     pub(crate) fn feed_stream_only(
         &mut self,
         stream_id: u64,
-        data: &[u8],
+        data: bytes::Bytes,
         fin: bool,
     ) -> crate::Result<()> {
-        self.h3_conn.feed_stream(stream_id, data, fin)?;
+        self.h3_conn.feed_stream_bytes(stream_id, data, fin)?;
         Ok(())
     }
 
@@ -101,8 +101,8 @@ impl ServerConnectionState {
         Ok(())
     }
 
-    /// ストリームの送信データを取得する
-    pub(crate) fn get_stream_data(&mut self, stream_id: u64) -> Option<(Vec<u8>, bool)> {
+    /// ストリームの送信データを取得する (issue 0059: Bytes 化)
+    pub(crate) fn get_stream_data(&mut self, stream_id: u64) -> Option<(bytes::Bytes, bool)> {
         self.h3_conn.take_stream_data(stream_id)
     }
 }
@@ -148,8 +148,8 @@ impl ClientConnectionState {
     /// QPACK ストリームの送信待ちデータをドレインする
     ///
     /// エンコーダーストリーム / デコーダーストリームに蓄積されたデータを
-    /// (stream_id, data) のペアで返す。
-    pub(crate) fn drain_qpack_data(&mut self) -> Vec<(u64, Vec<u8>)> {
+    /// (stream_id, data) のペアで返す (issue 0059: Bytes 化)。
+    pub(crate) fn drain_qpack_data(&mut self) -> Vec<(u64, bytes::Bytes)> {
         let mut result = Vec::new();
         for stream_id in [self.encoder_stream_id, self.decoder_stream_id]
             .into_iter()
@@ -168,28 +168,28 @@ impl ClientConnectionState {
         Ok(stream_id)
     }
 
-    /// ストリームデータを処理してイベントを返す
+    /// ストリームデータを処理してイベントを返す (issue 0059 Phase 4-B: zero-copy)
     pub(crate) fn process_stream_data(
         &mut self,
         stream_id: u64,
-        data: &[u8],
+        data: bytes::Bytes,
         fin: bool,
     ) -> crate::Result<Vec<Event>> {
-        self.h3_conn.feed_stream(stream_id, data, fin)?;
+        self.h3_conn.feed_stream_bytes(stream_id, data, fin)?;
         Ok(self.h3_conn.drain_events()?)
     }
 
-    /// ストリームデータをフィードするだけでイベントをドレインしない
+    /// ストリームデータをフィードするだけでイベントをドレインしない (issue 0059 Phase 4-B: zero-copy)
     ///
     /// QPACK デコーダーストリームなど、イベント生成とは独立して処理する
     /// 単方向ストリームに使用する。イベントは `drain_events` で後から取得する。
     pub(crate) fn feed_stream_only(
         &mut self,
         stream_id: u64,
-        data: &[u8],
+        data: bytes::Bytes,
         fin: bool,
     ) -> crate::Result<()> {
-        self.h3_conn.feed_stream(stream_id, data, fin)?;
+        self.h3_conn.feed_stream_bytes(stream_id, data, fin)?;
         Ok(())
     }
 
@@ -198,8 +198,8 @@ impl ClientConnectionState {
         Ok(self.h3_conn.drain_events()?)
     }
 
-    /// ストリームの送信データを取得する
-    pub(crate) fn get_stream_data(&mut self, stream_id: u64) -> Option<(Vec<u8>, bool)> {
+    /// ストリームの送信データを取得する (issue 0059: Bytes 化)
+    pub(crate) fn get_stream_data(&mut self, stream_id: u64) -> Option<(bytes::Bytes, bool)> {
         self.h3_conn.take_stream_data(stream_id)
     }
 }

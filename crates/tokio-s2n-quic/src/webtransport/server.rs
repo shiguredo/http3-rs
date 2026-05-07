@@ -126,21 +126,15 @@ impl WtSessionRequest {
             data
         };
 
-        // 各ストリームの初期化データを送信
+        // 各ストリームの初期化データを送信 (issue 0059: Bytes そのまま)
         if !init_data.control_data.is_empty() {
-            control_send
-                .send(Bytes::from(init_data.control_data))
-                .await?;
+            control_send.send(init_data.control_data).await?;
         }
         if !init_data.encoder_data.is_empty() {
-            encoder_send
-                .send(Bytes::from(init_data.encoder_data))
-                .await?;
+            encoder_send.send(init_data.encoder_data).await?;
         }
         if !init_data.decoder_data.is_empty() {
-            decoder_send
-                .send(Bytes::from(init_data.decoder_data))
-                .await?;
+            decoder_send.send(init_data.decoder_data).await?;
         }
 
         let (handle, stream_acceptor) = connection.split();
@@ -234,10 +228,10 @@ impl WtSessionRequest {
                 for event in events {
                     match event {
                         Event::Header { name, value, .. } => {
-                            if name == b":path" {
-                                path = value;
-                            } else if name == b":authority" {
-                                authority = value;
+                            if name == &b":path"[..] {
+                                path = value.to_vec();
+                            } else if name == &b":authority"[..] {
+                                authority = value.to_vec();
                             }
                         }
                         Event::HeadersEnd { .. } => {
@@ -253,24 +247,26 @@ impl WtSessionRequest {
 
             tokio::select! {
                 received = recv_stream.receive() => {
+                    // issue 0059 Phase 1: Bytes をそのまま流す (to_vec() コピー削減)
                     let (data, fin) = match received {
-                        Ok(Some(data)) => (data.to_vec(), false),
-                        Ok(None) => (vec![], true),
+                        Ok(Some(data)) => (data, false),
+                        Ok(None) => (Bytes::new(), true),
                         Err(e) => return Err(crate::Error::transport(e)),
                     };
 
                     let events = {
                         let mut s = state.lock().unwrap();
-                        s.process_stream_data(connect_stream_id, &data, fin)?
+                        // issue 0059 Phase 4-B: Bytes をそのまま zero-copy で渡す
+                        s.process_stream_data(connect_stream_id, data, fin)?
                     };
 
                     for event in events {
                         match event {
                             Event::Header { name, value, .. } => {
-                                if name == b":path" {
-                                    path = value;
-                                } else if name == b":authority" {
-                                    authority = value;
+                                if name == &b":path"[..] {
+                                    path = value.to_vec();
+                                } else if name == &b":authority"[..] {
+                                    authority = value.to_vec();
                                 }
                             }
                             Event::HeadersEnd { .. } => {
@@ -335,7 +331,7 @@ impl WtSessionRequest {
         // レスポンスを送信
         let mut send_stream = self.send_stream;
         send_stream
-            .send(Bytes::from(data))
+            .send(data)
             .await
             .map_err(crate::Error::transport)?;
 
@@ -372,7 +368,7 @@ impl WtSessionRequest {
 
         let mut send_stream = self.send_stream;
         send_stream
-            .send(Bytes::from(data))
+            .send(data)
             .await
             .map_err(crate::Error::transport)?;
 
@@ -396,7 +392,8 @@ async fn route_uni_stream(
         ClassifiedUniStream, StreamHeaderDecodeError, classify_uni_stream_checked,
     };
 
-    let mut type_buf: Vec<u8> = Vec::new();
+    // issue 0059 Phase 1: BytesMut で蓄積し、advance + freeze で残留を zero-copy 切り出し
+    let mut type_buf = bytes::BytesMut::new();
 
     // ストリームタイプが確定するまでデータを読む
     let classified = loop {
@@ -411,7 +408,10 @@ async fn route_uni_stream(
             }
             Ok(None) => {
                 // ストリームが先に閉じた
-                let _ = state.lock().unwrap().feed_stream_only(stream_id, &[], true);
+                let _ = state
+                    .lock()
+                    .unwrap()
+                    .feed_stream_only(stream_id, Bytes::new(), true);
                 notify.notify_one();
                 return;
             }
@@ -422,26 +422,30 @@ async fn route_uni_stream(
     match classified {
         ClassifiedUniStream::WebTransport { data_offset, .. } => {
             // WT 単方向ストリームとして WtSession に渡す
-            let pending = type_buf[data_offset..].to_vec();
+            bytes::Buf::advance(&mut type_buf, data_offset);
+            let pending = type_buf.freeze();
             let wt_recv = WtRecvStream::new(stream_id, recv_stream, pending);
             let _ = uni_tx.send(wt_recv).await;
         }
         ClassifiedUniStream::Http3 { .. } => {
-            // H3 制御ストリームとしてフィード
+            // H3 制御ストリームとしてフィード (issue 0059 Phase 4-B: zero-copy)
             let _ = state
                 .lock()
                 .unwrap()
-                .feed_stream_only(stream_id, &type_buf, false);
+                .feed_stream_only(stream_id, type_buf.freeze(), false);
             notify.notify_one();
 
             while let Ok(Some(data)) = recv_stream.receive().await {
                 let _ = state
                     .lock()
                     .unwrap()
-                    .feed_stream_only(stream_id, &data, false);
+                    .feed_stream_only(stream_id, data, false);
                 notify.notify_one();
             }
-            let _ = state.lock().unwrap().feed_stream_only(stream_id, &[], true);
+            let _ = state
+                .lock()
+                .unwrap()
+                .feed_stream_only(stream_id, Bytes::new(), true);
             notify.notify_one();
         }
     }

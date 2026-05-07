@@ -1,10 +1,22 @@
 //! Property-Based Testing for HTTP/3 Frames (RFC 9114)
 
+use bytes::BytesMut;
 use proptest::prelude::*;
 use shiguredo_http3::frame::{
     DataPayload, Frame, FrameType, GoawayPayload, HeadersPayload, SettingsPayload, decode_frame,
     encode_frame, encoded_frame_len,
 };
+
+/// 旧 API 互換ヘルパ: `&[u8]` から 1 フレームをデコードし `(Frame, 消費長)` を返す。
+/// 新 `decode_frame(&mut BytesMut)` を pbt 既存ロジックに繋ぐためだけに使う。
+fn decode_one(buf: &[u8]) -> (Frame, usize) {
+    let mut buf = BytesMut::from(buf);
+    let initial = buf.len();
+    let frame = decode_frame(&mut buf)
+        .expect("decode_frame should succeed for roundtripped frame")
+        .expect("decode_frame should return Some for complete frame");
+    (frame, initial - buf.len())
+}
 
 prop_compose! {
     /// 有効なフレームタイプを生成
@@ -119,14 +131,12 @@ proptest! {
     /// Property: DATA フレームのエンコード/デコードラウンドトリップ
     #[test]
     fn prop_data_frame_roundtrip(payload in valid_payload()) {
-        let frame = Frame::Data(DataPayload {
-            data: payload.clone(),
-        });
+        let frame = Frame::Data(DataPayload::new(payload.clone()));
 
         let mut buf = vec![0u8; encoded_frame_len(&frame)];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
 
-        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
+        let (decoded, decoded_len) = decode_one(&buf[..encoded_len]);
 
         prop_assert_eq!(encoded_len, decoded_len, "Encoded/decoded length mismatch");
 
@@ -143,9 +153,7 @@ proptest! {
     /// Property: DATA フレームの長さはペイロード長と一致
     #[test]
     fn prop_data_frame_length_matches_payload(payload in valid_payload()) {
-        let frame = Frame::Data(DataPayload {
-            data: payload.clone(),
-        });
+        let frame = Frame::Data(DataPayload::new(payload.clone()));
 
         let expected_len = shiguredo_http3::varint::encoded_len(FrameType::Data as u64)
             + shiguredo_http3::varint::encoded_len(payload.len() as u64)
@@ -168,14 +176,12 @@ proptest! {
     /// Property: HEADERS フレームのエンコード/デコードラウンドトリップ
     #[test]
     fn prop_headers_frame_roundtrip(encoded_block in valid_encoded_headers()) {
-        let frame = Frame::Headers(HeadersPayload {
-            encoded_field_section: encoded_block.clone(),
-        });
+        let frame = Frame::Headers(HeadersPayload::new(encoded_block.clone()));
 
         let mut buf = vec![0u8; encoded_frame_len(&frame)];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
 
-        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
+        let (decoded, decoded_len) = decode_one(&buf[..encoded_len]);
 
         prop_assert_eq!(encoded_len, decoded_len);
 
@@ -207,7 +213,7 @@ proptest! {
         let mut buf = vec![0u8; encoded_frame_len(&frame)];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
 
-        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
+        let (decoded, decoded_len) = decode_one(&buf[..encoded_len]);
 
         prop_assert_eq!(encoded_len, decoded_len);
 
@@ -232,7 +238,7 @@ proptest! {
         let mut buf = vec![0u8; encoded_frame_len(&frame)];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
 
-        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
+        let (decoded, decoded_len) = decode_one(&buf[..encoded_len]);
 
         prop_assert_eq!(encoded_len, decoded_len);
 
@@ -257,7 +263,7 @@ proptest! {
         let mut buf = vec![0u8; encoded_frame_len(&frame)];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
 
-        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
+        let (decoded, decoded_len) = decode_one(&buf[..encoded_len]);
 
         prop_assert_eq!(encoded_len, decoded_len);
 
@@ -285,13 +291,13 @@ proptest! {
     ) {
         let frame = Frame::Unknown {
             frame_type: unknown_type,
-            payload: payload.clone(),
+            payload: bytes::Bytes::from(payload.clone()),
         };
 
         let mut buf = vec![0u8; encoded_frame_len(&frame)];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
 
-        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
+        let (decoded, decoded_len) = decode_one(&buf[..encoded_len]);
 
         prop_assert_eq!(encoded_len, decoded_len);
 
@@ -312,7 +318,7 @@ proptest! {
     /// Property: encoded_frame_len は常に実際のエンコード長と一致
     #[test]
     fn prop_encoded_frame_len_accurate(payload in valid_payload()) {
-        let frame = Frame::Data(DataPayload { data: payload });
+        let frame = Frame::Data(DataPayload::new(payload));
 
         let predicted_len = encoded_frame_len(&frame);
         let mut buf = vec![0u8; predicted_len + 100]; // 余裕を持たせる
