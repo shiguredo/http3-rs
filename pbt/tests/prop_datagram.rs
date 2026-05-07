@@ -121,7 +121,7 @@ proptest! {
     ) {
         // Quarter Stream ID を直接エンコードする
         let mut buf = Vec::new();
-        shiguredo_http3::varint::encode_into_vec(&mut buf, qsi);
+        shiguredo_http3::varint::encode_into(&mut buf, qsi);
         buf.extend_from_slice(&payload);
 
         let (decoded, consumed) = Datagram::decode(&buf)

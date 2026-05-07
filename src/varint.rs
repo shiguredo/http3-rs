@@ -2,6 +2,8 @@
 //!
 //! QUIC の可変長整数は 1, 2, 4, 8 バイトでエンコードされ、最大 2^62-1 まで表現可能。
 
+use bytes::BufMut;
+
 /// 可変長整数の最大値 (2^62 - 1)
 pub const MAX_VALUE: u64 = (1 << 62) - 1;
 
@@ -56,30 +58,36 @@ pub fn try_encoded_len(value: u64) -> Result<usize, EncodeError> {
     Ok(encoded_len(value))
 }
 
-/// 可変長整数を Vec に追記する
+/// 可変長整数を `BufMut` に追記する
 ///
+/// `Vec<u8>` も `BytesMut` も `BufMut` を実装するため、どちらの buffer にも追記できる。
 /// 呼び出し側が値 <= `MAX_VALUE` を保証している場面で使う内部向けヘルパー。
-/// 外部からは `try_encode_into_vec` を使うこと。
+/// 外部からは `try_encode_into` を使うこと。
 ///
 /// # Panics
 ///
 /// 値が `MAX_VALUE` を超える場合はパニックする
-pub fn encode_into_vec(buf: &mut Vec<u8>, value: u64) {
+pub fn encode_into<B: BufMut>(buf: &mut B, value: u64) {
     let len = encoded_len(value);
-    let start = buf.len();
-    buf.resize(start + len, 0);
-    encode(&mut buf[start..], value).expect("buffer is correctly sized");
+    // BufMut::put_u{8,16,32,64} は big-endian で書き込む (RFC 9000 Section 16 と一致)
+    match len {
+        1 => buf.put_u8(value as u8),
+        2 => buf.put_u16((value as u16) | 0x4000),
+        4 => buf.put_u32((value as u32) | 0x8000_0000),
+        8 => buf.put_u64(value | 0xc000_0000_0000_0000),
+        _ => unreachable!(),
+    }
 }
 
-/// 可変長整数を Vec に追記する (panic しない公開 API)
+/// 可変長整数を `BufMut` に追記する (panic しない公開 API)
 ///
 /// 値が `MAX_VALUE` を超える場合は `Err(EncodeError::ValueTooLarge)` を返す。
 /// Sans I/O 境界ではこちらを使うこと。
-pub fn try_encode_into_vec(buf: &mut Vec<u8>, value: u64) -> Result<(), EncodeError> {
+pub fn try_encode_into<B: BufMut>(buf: &mut B, value: u64) -> Result<(), EncodeError> {
     if value > MAX_VALUE {
         return Err(EncodeError::ValueTooLarge);
     }
-    encode_into_vec(buf, value);
+    encode_into(buf, value);
     Ok(())
 }
 

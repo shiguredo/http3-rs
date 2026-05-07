@@ -2,6 +2,8 @@
 //!
 //! WebTransport セッション管理とフロー制御のための Capsule を定義。
 
+use bytes::{BufMut, Bytes};
+
 use crate::varint;
 
 /// Maximum Streams の上限値 (2^60)
@@ -147,14 +149,14 @@ pub enum Capsule {
     Unknown {
         /// Capsule タイプ
         capsule_type: u64,
-        /// ペイロード
-        payload: Vec<u8>,
+        /// ペイロード (issue 0059: 他の Capsule バリアントとの整合性のため `Bytes` に統一)
+        payload: Bytes,
     },
 }
 
-/// 可変長整数を Vec にエンコード
-fn encode_varint(buf: &mut Vec<u8>, value: u64) {
-    varint::encode_into_vec(buf, value);
+/// 可変長整数を `BufMut` にエンコード
+fn encode_varint<B: BufMut>(buf: &mut B, value: u64) {
+    varint::encode_into(buf, value);
 }
 
 /// 可変長整数をデコード (Option を返す)
@@ -184,17 +186,19 @@ impl Capsule {
     ///
     /// 1 カプセル = 1 DATA フレームとして buf に追記する。
     /// CONNECT ストリーム上での WebTransport カプセル送信に使用する。
-    pub fn encode_as_data_frame(&self, buf: &mut Vec<u8>) {
-        let mut capsule_bytes = Vec::new();
+    pub fn encode_as_data_frame<B: BufMut>(&self, buf: &mut B) {
+        // capsule 全体の長さを事前に計算するため、内部で BytesMut にエンコードしてから
+        // DATA フレーム (タイプ + 長さ + ペイロード) として buf に追記する。
+        let mut capsule_bytes = bytes::BytesMut::new();
         self.encode(&mut capsule_bytes);
         // DATA フレーム: タイプ (0x00) + ペイロード長 + ペイロード
         encode_varint(buf, 0x00);
         encode_varint(buf, capsule_bytes.len() as u64);
-        buf.extend_from_slice(&capsule_bytes);
+        buf.put_slice(&capsule_bytes);
     }
 
     /// Capsule をエンコード
-    pub fn encode(&self, buf: &mut Vec<u8>) {
+    pub fn encode<B: BufMut>(&self, buf: &mut B) {
         match self {
             Self::CloseSession {
                 error_code,
@@ -205,8 +209,8 @@ impl Capsule {
                     CapsuleType::CloseSession as u64,
                     4 + message.len(),
                 );
-                buf.extend_from_slice(&error_code.to_be_bytes());
-                buf.extend_from_slice(message.as_bytes());
+                buf.put_slice(&error_code.to_be_bytes());
+                buf.put_slice(message.as_bytes());
             }
 
             Self::DrainSession => {
@@ -258,13 +262,13 @@ impl Capsule {
                 payload,
             } => {
                 Self::encode_capsule_header(buf, *capsule_type, payload.len());
-                buf.extend_from_slice(payload);
+                buf.put_slice(payload);
             }
         }
     }
 
     /// Capsule ヘッダーをエンコード
-    fn encode_capsule_header(buf: &mut Vec<u8>, capsule_type: u64, length: usize) {
+    fn encode_capsule_header<B: BufMut>(buf: &mut B, capsule_type: u64, length: usize) {
         encode_varint(buf, capsule_type);
         encode_varint(buf, length as u64);
     }
@@ -386,7 +390,7 @@ impl Capsule {
 
             None => Ok(Self::Unknown {
                 capsule_type,
-                payload: payload.to_vec(),
+                payload: Bytes::copy_from_slice(payload),
             }),
         }
     }
@@ -565,7 +569,7 @@ mod tests {
     fn test_is_prohibited_in_http3() {
         let c = Capsule::Unknown {
             capsule_type: PROHIBITED_WT_MAX_STREAM_DATA_CAPSULE_TYPE,
-            payload: vec![],
+            payload: Bytes::new(),
         };
         assert!(c.is_prohibited_in_http3());
     }

@@ -1126,7 +1126,7 @@ mod tests {
         let mut session = Session::new(0);
         let result = session.process_capsule(&Capsule::Unknown {
             capsule_type: 0x190B4D3E,
-            payload: vec![],
+            payload: bytes::Bytes::new(),
         });
         assert_eq!(
             result,

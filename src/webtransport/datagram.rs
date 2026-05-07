@@ -23,7 +23,7 @@
 //!
 //! - Section 4.5: Datagrams
 
-use bytes::Bytes;
+use bytes::{BufMut, Bytes};
 
 use crate::varint;
 
@@ -79,9 +79,10 @@ impl Datagram {
     /// データグラムをエンコード (HTTP Datagram フォーマット)
     ///
     /// `buf` に Quarter Stream ID (varint) とペイロードを追記する。
-    pub fn encode(&self, buf: &mut Vec<u8>) {
-        varint::encode_into_vec(buf, self.quarter_stream_id());
-        buf.extend_from_slice(&self.payload);
+    /// `Vec<u8>` も `BytesMut` も `BufMut` を実装するため、どちらの buffer にも追記できる。
+    pub fn encode<B: BufMut>(&self, buf: &mut B) {
+        varint::encode_into(buf, self.quarter_stream_id());
+        buf.put_slice(&self.payload);
     }
 
     /// データグラムをデコード (HTTP Datagram フォーマット)

@@ -64,7 +64,7 @@ pub fn cleanup_certificate_files(cert_path: &PathBuf, key_path: &PathBuf) {
 /// QUIC 可変長整数をエンコードする (RFC 9000 Section 16)
 pub fn encode_varint(value: u64) -> Vec<u8> {
     let mut buf = Vec::new();
-    shiguredo_http3::varint::encode_into_vec(&mut buf, value);
+    shiguredo_http3::varint::encode_into(&mut buf, value);
     buf
 }
 

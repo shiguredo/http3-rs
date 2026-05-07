@@ -27,6 +27,8 @@
   - @voluntas
 - [UPDATE] `stream::SendBuffer.data` を `BytesMut` に変更し、`consumed` オフセットを廃止して `Buf::advance` でゼロコピー消費する (`RecvBuffer` と対称化) (issue 0059)
   - @voluntas
+- [UPDATE] `webtransport::{datagram::Datagram::encode, stream::StreamHeader::encode_unidirectional / encode_bidirectional, capsule::Capsule::encode / encode_as_data_frame}` の引数を `&mut Vec<u8>` から `&mut impl BufMut` に変更し、`Vec<u8>` でも `BytesMut` でも追記できるようにする (issue 0059)
+  - @voluntas
 - [ADD] `bytes` クレートを workspace dependencies に追加する (`default-features = false`、no_std 利用に備える) (issue 0059)
   - @voluntas
 - [ADD] `Connection::feed_stream_bytes(stream_id, Bytes, fin)` を追加する (zero-copy 用、既存の `feed_stream(&[u8])` も互換維持) (issue 0059)
@@ -48,6 +50,10 @@
 - [CHANGE] tokio-s2n-quic の `WtRecvStream::recv()` / `WtBiStream::recv()` / `WtSession::recv()` の戻り値および `H3Request` / `H3Response` / `H3ClientRequest` / `H3ClientResponse` の headers/body を `Vec<u8>` から `Bytes` に変更する (issue 0059)
   - @voluntas
 - [CHANGE] 未使用の `stream::request::ReceivedData` enum を削除する (`RawReceivedData` のみ使用されていたため dead code) (issue 0059)
+  - @voluntas
+- [CHANGE] `varint::encode_into_vec` を `varint::encode_into` にリネームし引数を `&mut impl BufMut` に変更する (`try_encode_into_vec` も同様に `try_encode_into` にリネーム) (issue 0059)
+  - @voluntas
+- [CHANGE] `webtransport::Capsule::Unknown.payload` を `Vec<u8>` から `Bytes` に変更する (他の Capsule バリアントとの整合性) (issue 0059)
   - @voluntas
 
 ### misc

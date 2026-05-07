@@ -52,7 +52,7 @@ prop_compose! {
         capsule_type in Just(capsule_type),
         payload in prop::collection::vec(any::<u8>(), payload_len)
     ) -> Capsule {
-        Capsule::Unknown { capsule_type, payload }
+        Capsule::Unknown { capsule_type, payload: bytes::Bytes::from(payload) }
     }
 }
 
@@ -768,7 +768,7 @@ prop_compose! {
 
 /// 可変長整数をエンコード
 fn encode_varint_for_test(buf: &mut Vec<u8>, value: u64) {
-    shiguredo_http3::varint::encode_into_vec(buf, value);
+    shiguredo_http3::varint::encode_into(buf, value);
 }
 
 proptest! {

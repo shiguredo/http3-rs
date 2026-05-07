@@ -2,6 +2,8 @@
 //!
 //! WebTransport データストリームの管理を提供。
 
+use bytes::BufMut;
+
 use crate::varint;
 
 /// WebTransport 単方向ストリームタイプ (0x54)
@@ -62,9 +64,9 @@ impl StreamHeader {
     ///     Session ID (i),
     /// }
     /// ```
-    pub fn encode_unidirectional(&self, buf: &mut Vec<u8>) {
-        varint::encode_into_vec(buf, UNIDIRECTIONAL_STREAM_TYPE);
-        varint::encode_into_vec(buf, self.session_id);
+    pub fn encode_unidirectional<B: BufMut>(&self, buf: &mut B) {
+        varint::encode_into(buf, UNIDIRECTIONAL_STREAM_TYPE);
+        varint::encode_into(buf, self.session_id);
     }
 
     /// 双方向ストリームヘッダーをエンコード
@@ -76,9 +78,9 @@ impl StreamHeader {
     ///     Session ID (i),
     /// }
     /// ```
-    pub fn encode_bidirectional(&self, buf: &mut Vec<u8>) {
-        varint::encode_into_vec(buf, BIDIRECTIONAL_SIGNAL_VALUE);
-        varint::encode_into_vec(buf, self.session_id);
+    pub fn encode_bidirectional<B: BufMut>(&self, buf: &mut B) {
+        varint::encode_into(buf, BIDIRECTIONAL_SIGNAL_VALUE);
+        varint::encode_into(buf, self.session_id);
     }
 
     /// 単方向ストリームヘッダーをデコード
@@ -420,8 +422,8 @@ mod tests {
     #[test]
     fn test_decode_unidirectional_checked_invalid_session_id() {
         let mut buf = Vec::new();
-        varint::encode_into_vec(&mut buf, UNIDIRECTIONAL_STREAM_TYPE);
-        varint::encode_into_vec(&mut buf, 5);
+        varint::encode_into(&mut buf, UNIDIRECTIONAL_STREAM_TYPE);
+        varint::encode_into(&mut buf, 5);
         let result = StreamHeader::decode_unidirectional_checked(&buf);
         assert_eq!(result, Err(StreamHeaderDecodeError::InvalidSessionId));
     }
@@ -429,8 +431,8 @@ mod tests {
     #[test]
     fn test_decode_bidirectional_checked_invalid_session_id() {
         let mut buf = Vec::new();
-        varint::encode_into_vec(&mut buf, BIDIRECTIONAL_SIGNAL_VALUE);
-        varint::encode_into_vec(&mut buf, 7);
+        varint::encode_into(&mut buf, BIDIRECTIONAL_SIGNAL_VALUE);
+        varint::encode_into(&mut buf, 7);
         let result = StreamHeader::decode_bidirectional_checked(&buf);
         assert_eq!(result, Err(StreamHeaderDecodeError::InvalidSessionId));
     }
@@ -442,8 +444,8 @@ mod tests {
     #[test]
     fn test_classify_uni_stream_checked_webtransport_valid() {
         let mut buf = Vec::new();
-        varint::encode_into_vec(&mut buf, UNIDIRECTIONAL_STREAM_TYPE);
-        varint::encode_into_vec(&mut buf, 0); // session_id = 0 (0 % 4 == 0)
+        varint::encode_into(&mut buf, UNIDIRECTIONAL_STREAM_TYPE);
+        varint::encode_into(&mut buf, 0); // session_id = 0 (0 % 4 == 0)
         let expected_offset = buf.len();
         buf.extend_from_slice(b"payload");
         let result = classify_uni_stream_checked(&buf).unwrap();
@@ -459,8 +461,8 @@ mod tests {
     #[test]
     fn test_classify_uni_stream_checked_webtransport_invalid_session_id() {
         let mut buf = Vec::new();
-        varint::encode_into_vec(&mut buf, UNIDIRECTIONAL_STREAM_TYPE);
-        varint::encode_into_vec(&mut buf, 5); // session_id = 5 (5 % 4 != 0)
+        varint::encode_into(&mut buf, UNIDIRECTIONAL_STREAM_TYPE);
+        varint::encode_into(&mut buf, 5); // session_id = 5 (5 % 4 != 0)
         let result = classify_uni_stream_checked(&buf);
         assert_eq!(result, Err(StreamHeaderDecodeError::InvalidSessionId));
     }
@@ -469,7 +471,7 @@ mod tests {
     fn test_classify_uni_stream_checked_http3() {
         // HTTP/3 制御ストリーム (type = 0x00)
         let mut buf = Vec::new();
-        varint::encode_into_vec(&mut buf, 0x00);
+        varint::encode_into(&mut buf, 0x00);
         buf.extend_from_slice(b"data");
         let result = classify_uni_stream_checked(&buf).unwrap();
         assert_eq!(
@@ -491,7 +493,7 @@ mod tests {
     fn test_classify_uni_stream_checked_session_id_buffer_too_short() {
         // ストリームタイプは読めるが session_id が不足
         let mut buf = Vec::new();
-        varint::encode_into_vec(&mut buf, UNIDIRECTIONAL_STREAM_TYPE);
+        varint::encode_into(&mut buf, UNIDIRECTIONAL_STREAM_TYPE);
         let result = classify_uni_stream_checked(&buf);
         assert_eq!(result, Err(StreamHeaderDecodeError::BufferTooShort));
     }

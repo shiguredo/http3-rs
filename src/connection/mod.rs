@@ -4959,8 +4959,8 @@ mod tests {
 
         // HEADERS フレーム: type=0x01, length=varint, payload=QPACK エンコード済み
         let mut frame = Vec::new();
-        crate::varint::encode_into_vec(&mut frame, 0x01); // HEADERS frame type
-        crate::varint::encode_into_vec(&mut frame, qpack_len as u64);
+        crate::varint::encode_into(&mut frame, 0x01); // HEADERS frame type
+        crate::varint::encode_into(&mut frame, qpack_len as u64);
         frame.extend_from_slice(&qpack_buf);
         frame
     }
@@ -5483,7 +5483,7 @@ mod tests {
             let stream_id = 10 + (i as u64) * 4;
             // ストリームタイプ 0x54 + session_id varint
             let mut buf = vec![0x40, 0x54];
-            crate::varint::encode_into_vec(&mut buf, session_id);
+            crate::varint::encode_into(&mut buf, session_id);
             server.feed_stream(stream_id, &buf, false).unwrap();
         }
         assert_eq!(server.count_pending_wt_sessions(), WT_MAX_PENDING_SESSIONS);
@@ -5492,7 +5492,7 @@ mod tests {
         let overflow_session_id = ((WT_MAX_PENDING_SESSIONS + 1) * 4) as u64;
         let overflow_stream_id = 10 + (WT_MAX_PENDING_SESSIONS as u64) * 4;
         let mut buf = vec![0x40, 0x54];
-        crate::varint::encode_into_vec(&mut buf, overflow_session_id);
+        crate::varint::encode_into(&mut buf, overflow_session_id);
         server.feed_stream(overflow_stream_id, &buf, false).unwrap();
 
         // 最終イベントが BufferedStreamRejected であること
@@ -5519,7 +5519,7 @@ mod tests {
             let session_id = ((i + 1) * 4) as u64;
             let qsi = session_id / 4;
             let mut buf = Vec::new();
-            crate::varint::encode_into_vec(&mut buf, qsi);
+            crate::varint::encode_into(&mut buf, qsi);
             buf.extend_from_slice(b"x");
             server.feed_datagram(&buf).unwrap();
         }
@@ -5528,7 +5528,7 @@ mod tests {
         // 上限超過の datagram は破棄され、Pending セッション数は増えない
         let overflow_session_id = ((WT_MAX_PENDING_SESSIONS + 1) * 4) as u64;
         let mut buf = Vec::new();
-        crate::varint::encode_into_vec(&mut buf, overflow_session_id / 4);
+        crate::varint::encode_into(&mut buf, overflow_session_id / 4);
         buf.extend_from_slice(b"x");
         server.feed_datagram(&buf).unwrap();
         assert_eq!(server.count_pending_wt_sessions(), WT_MAX_PENDING_SESSIONS);
