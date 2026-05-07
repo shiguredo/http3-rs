@@ -29,6 +29,12 @@
   - @voluntas
 - [UPDATE] `webtransport::{datagram::Datagram::encode, stream::StreamHeader::encode_unidirectional / encode_bidirectional, capsule::Capsule::encode / encode_as_data_frame}` の引数を `&mut Vec<u8>` から `&mut impl BufMut` に変更し、`Vec<u8>` でも `BytesMut` でも追記できるようにする (issue 0059)
   - @voluntas
+- [UPDATE] `Connection` 内部の `BufferedStreamEntry::data` / `WtSession::capsule_buf` を `Vec<u8>` から `BytesMut` に変更し、`capsule_buf` の Capsule デコード経路で `clone()` を排除して `Buf::advance` でゼロコピー消費する (issue 0059)
+  - @voluntas
+- [UPDATE] `Connection::pending_uni_streams` / `pending_wt_uni_streams` / `pending_wt_bidi_streams` / `pending_bidi_dispatch` の HashMap 値を `Vec<u8>` から `BytesMut` に変更する (型統一、varint pending buffer は ≤8 bytes のため clone コストは無視できる) (issue 0059)
+  - @voluntas
+- [UPDATE] `Connection::send_datagram` のエンコード経路を `BytesMut::with_capacity` + `freeze()` に変更し、`Vec::new() → Bytes::from(buf)` の中間確保を排除する (issue 0059)
+  - @voluntas
 - [ADD] `bytes` クレートを workspace dependencies に追加する (`default-features = false`、no_std 利用に備える) (issue 0059)
   - @voluntas
 - [ADD] `Connection::feed_stream_bytes(stream_id, Bytes, fin)` を追加する (zero-copy 用、既存の `feed_stream(&[u8])` も互換維持) (issue 0059)

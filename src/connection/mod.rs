@@ -97,8 +97,8 @@ const WT_MAX_BUFFERED_STREAM_BYTES: usize = 64 * 1024;
 struct BufferedStreamEntry {
     /// 双方向ストリームかどうか
     is_bidi: bool,
-    /// 受信済みペイロード (Open 後 〜 FIN まで)
-    data: Vec<u8>,
+    /// 受信済みペイロード (Open 後 〜 FIN まで) (issue 0059: take().freeze() で zero-copy 取り出し)
+    data: bytes::BytesMut,
     /// FIN を受信済みかどうか
     fin: bool,
 }
@@ -107,7 +107,7 @@ impl BufferedStreamEntry {
     fn new(is_bidi: bool) -> Self {
         Self {
             is_bidi,
-            data: Vec::new(),
+            data: bytes::BytesMut::new(),
             fin: false,
         }
     }
@@ -138,7 +138,8 @@ struct WtSession {
     /// CONNECT ストリーム上の Capsule デコードバッファ (Section 5.6)
     ///
     /// Capsule が複数の DATA フレームにまたがる場合のバッファリング用。
-    capsule_buf: Vec<u8>,
+    /// `BytesMut` で保持し、`Buf::advance` でゼロコピー消費する (issue 0059)。
+    capsule_buf: bytes::BytesMut,
     /// リクエスト時の WT-Available-Protocols (Section 3.3)
     ///
     /// クライアントが送信した WT-Available-Protocols の値を保持する。
@@ -197,7 +198,7 @@ impl WtSession {
             buffered_streams: Vec::new(),
             buffered_stream_entries: HashMap::new(),
             buffered_datagrams: Vec::new(),
-            capsule_buf: Vec::new(),
+            capsule_buf: bytes::BytesMut::new(),
             available_protocols: Vec::new(),
             flow_control_enabled: false,
             close_session_received: false,
@@ -536,7 +537,9 @@ pub struct Connection {
     /// ストリームタイプ未確定の単方向ストリーム (バッファ)
     ///
     /// varint が複数チャンクにまたがる場合のバッファリング用。
-    pending_uni_streams: HashMap<u64, Vec<u8>>,
+    /// バッファサイズは varint 最大長 (8 バイト) 程度のため、`BytesMut` の clone も
+    /// データコピーだがコストは無視できる (issue 0059: 型統一のため `BytesMut` に揃える)。
+    pending_uni_streams: HashMap<u64, bytes::BytesMut>,
     /// WebTransport 単方向ストリーム (ストリーム ID → セッション ID)
     ///
     /// セッション ID が確定した WT 単方向ストリームを追跡する。
@@ -545,8 +548,8 @@ pub struct Connection {
     /// WebTransport 単方向ストリームのセッション ID 未確定バッファ
     ///
     /// ストリームタイプ (0x54) は確定したが、セッション ID の varint が
-    /// 複数チャンクにまたがる場合のバッファリング用。
-    pending_wt_uni_streams: HashMap<u64, Vec<u8>>,
+    /// 複数チャンクにまたがる場合のバッファリング用 (issue 0059: 型統一のため `BytesMut`)。
+    pending_wt_uni_streams: HashMap<u64, bytes::BytesMut>,
     /// WebTransport 双方向ストリーム (ストリーム ID → セッション ID)
     ///
     /// signal value (0x41) とセッション ID が確定した WT 双方向ストリームを追跡する。
@@ -555,16 +558,16 @@ pub struct Connection {
     /// WebTransport 双方向ストリームのセッション ID 未確定バッファ
     ///
     /// WT_STREAM (0x41) 確定後、session_id の varint が
-    /// 複数チャンクにまたがる場合のバッファリング用。
+    /// 複数チャンクにまたがる場合のバッファリング用 (issue 0059: 型統一のため `BytesMut`)。
     /// (draft-ietf-webtrans-http3-15 Section 4.3)
-    pending_wt_bidi_streams: HashMap<u64, Vec<u8>>,
+    pending_wt_bidi_streams: HashMap<u64, bytes::BytesMut>,
     /// クライアント開始の新規 bidi stream のディスパッチ保留バッファ
     ///
     /// サーバー側で WebTransport が有効な場合、先頭 varint が不完全で
     /// WT bidi (0x41) かリクエストか判定できないストリームをバッファリングする。
     /// `pending_wt_bidi_streams` とは異なり、0x41 でなければリクエストに戻す。
-    /// (draft-ietf-webtrans-http3-15 Section 4.3)
-    pending_bidi_dispatch: HashMap<u64, Vec<u8>>,
+    /// (draft-ietf-webtrans-http3-15 Section 4.3, issue 0059: 型統一のため `BytesMut`)
+    pending_bidi_dispatch: HashMap<u64, bytes::BytesMut>,
     /// WebTransport セッション表 (セッション ID → セッション状態)
     ///
     /// CONNECT stream の stream_id がセッション ID となる。
@@ -907,11 +910,14 @@ impl Connection {
         }
 
         // session_id は wt_sessions に登録済み = 既に 4 の倍数として検証済み
-        let datagram = crate::webtransport::Datagram::new(session_id, payload.to_vec())
-            .map_err(|_| Error::ConnectionError(ErrorCode::InternalError))?;
-        let mut buf = Vec::new();
+        // (issue 0059: payload を Bytes::copy_from_slice、エンコードを BytesMut で行い freeze で zero-copy)
+        let datagram =
+            crate::webtransport::Datagram::new(session_id, bytes::Bytes::copy_from_slice(payload))
+                .map_err(|_| Error::ConnectionError(ErrorCode::InternalError))?;
+        // QSI varint (最大 8 バイト) + payload 長 を予約
+        let mut buf = bytes::BytesMut::with_capacity(8 + payload.len());
         datagram.encode(&mut buf);
-        Ok(bytes::Bytes::from(buf))
+        Ok(buf.freeze())
     }
 
     /// ストリーム ID が自身が開始した単方向ストリームかどうかを検証する (RFC 9114 Section 6.2)
@@ -1311,7 +1317,7 @@ impl Connection {
             buf.extend_from_slice(data);
             buf.clone()
         } else {
-            data.to_vec()
+            bytes::BytesMut::from(&data[..])
         };
 
         let (stream_type, type_len) = match crate::varint::decode(&type_data) {
@@ -1319,7 +1325,8 @@ impl Connection {
             Err(crate::varint::DecodeError::BufferTooShort) => {
                 // バッファ不足: 次のチャンクを待つ
                 if !has_pending {
-                    self.pending_uni_streams.insert(stream_id, data.to_vec());
+                    self.pending_uni_streams
+                        .insert(stream_id, bytes::BytesMut::from(&data[..]));
                 }
                 // has_pending の場合は既に上で extend 済み
                 return Ok(());
@@ -1464,7 +1471,7 @@ impl Connection {
             pending.extend_from_slice(&data);
             pending.clone()
         } else {
-            data.to_vec()
+            bytes::BytesMut::from(&data[..])
         };
 
         if buf.is_empty() {
@@ -1608,7 +1615,7 @@ impl Connection {
             pending.extend_from_slice(data);
             pending.clone()
         } else {
-            data.to_vec()
+            bytes::BytesMut::from(&data[..])
         };
 
         if buf.is_empty() {
@@ -1796,17 +1803,24 @@ impl Connection {
         }
 
         // Capsule を逐次デコード
-        while let Some(session) = self.wt_sessions.get(&session_id) {
-            if session.capsule_buf.is_empty() {
-                break;
-            }
-            let buf = session.capsule_buf.clone();
+        // (issue 0059: capsule_buf を clone せずに immutable borrow で decode し、
+        //  decode 結果を使ってから mutable borrow で advance する)
+        loop {
+            let decode_result = {
+                let Some(session) = self.wt_sessions.get(&session_id) else {
+                    break;
+                };
+                if session.capsule_buf.is_empty() {
+                    break;
+                }
+                crate::webtransport::Capsule::decode(&session.capsule_buf)
+            };
 
-            match crate::webtransport::Capsule::decode(&buf) {
+            match decode_result {
                 Ok(Some((capsule, consumed))) => {
-                    // バッファから消費済み部分を除去
+                    // バッファから消費済み部分を除去 (zero-copy advance)
                     if let Some(session) = self.wt_sessions.get_mut(&session_id) {
-                        session.capsule_buf.drain(..consumed);
+                        bytes::Buf::advance(&mut session.capsule_buf, consumed);
                     }
 
                     // Capsule を処理してイベントに変換
@@ -2265,7 +2279,7 @@ impl Connection {
             pending.extend_from_slice(&data);
             pending.clone()
         } else {
-            data.to_vec()
+            bytes::BytesMut::from(&data[..])
         };
 
         if buf.is_empty() {
