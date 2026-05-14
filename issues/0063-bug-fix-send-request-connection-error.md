@@ -33,4 +33,5 @@ return Err(Error::StreamError(ErrorCode::RequestRejected));
 ## 影響範囲
 
 - `src/connection/mod.rs:3402,3414`
-- `tests/test_webtransport_draft_connect.rs:674` (テストの期待値修正も必要)
+- `tests/test_webtransport_draft_connect.rs:674` — WT セッション上限超過 (3402) のテスト期待値修正が必要
+- GOAWAY 境界超過 (3414) のテストケースは既存になければ追加する

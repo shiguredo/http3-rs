@@ -29,5 +29,6 @@ let max_table_capacity = local_settings
 
 ## 影響範囲
 
-- `src/connection/mod.rs:666`
+- `src/connection/mod.rs:666` (`Connection::new`)
+- `src/connection/mod.rs:3876` (`send_stream_cancellation_if_needed`)
 - RFC 9204 Section 3.2.3

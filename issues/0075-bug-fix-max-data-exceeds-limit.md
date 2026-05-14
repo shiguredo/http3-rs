@@ -16,19 +16,15 @@ Model: deepseek-v4-pro
 
 ## 修正方針
 
-`WT_MAX_DATA` にも `WT_MAX_STREAMS` と同様の上限チェック (`2^62-1`) を追加する。
+`validate_max_data` に上限チェック (`2^62-1`) を追加し、
+`process_capsule` からの呼び出しで適用する。
 
 ```rust
-// process_capsule の MaxData 分岐に追加
+// validate_max_data に上限チェック追加
 if maximum > (1u64 << 62) - 1 {
-    return Err(CapsuleProcessError::Connection(
-        WtErrorCode::H3DatagramError as u64,
-    ));
+    return Err(CapsuleValidationError::MaxDataExceedsLimit);
 }
 ```
-
-または `validate_max_data` に上限チェックを追加し、
-`process_capsule` からそれを呼び出すようにする。
 
 ## 影響範囲
 

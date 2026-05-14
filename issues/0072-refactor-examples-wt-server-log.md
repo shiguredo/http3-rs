@@ -14,9 +14,13 @@ CLAUDE.md L151: 「ログはできるだけださないが、使う場合は log
 
 ## 修正方針
 
-2 つの選択肢がある:
-1. `tracing` → `log` に移行する (CLAUDE.md 遵守)
-2. CLAUDE.md の規約を更新し、サンプルでの `tracing` 使用を明示的に許可する
+CLAUDE.md L151 の「使う場合は log を使うこと」に従い、`tracing` → `log` に移行する。
+
+- `tracing::info!` → `log::info!`
+- `tracing::debug!` → `log::debug!`
+- `tracing::error!` → `log::error!`
+- `tracing::warn!` → `log::warn!`
+- `tracing-subscriber` を削除し、`env_logger` 等の log 互換バックエンドに置き換える
 
 ## 影響範囲
 

@@ -30,3 +30,9 @@ rust-version.workspace = true
 
 - `interop/h3/Cargo.toml`
 - `interop/wt/Cargo.toml`
+
+## 備考
+
+- `fuzz/Cargo.toml` にも `edition = "2024"` 直書きがあるが、fuzz は workspace exclude のため対象外
+- 他の workspace member は既に workspace 継承を使用しているため修正不要
+- CHANGES.md のエントリ「`[UPDATE] edition と rust-version を [workspace.package] で共通化...`」の意図に沿った修正であり、修正後 `cargo check --workspace` で確認する

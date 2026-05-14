@@ -5,7 +5,7 @@ Model: deepseek-v4-pro
 
 ## 概要
 
-`src/connection/mod.rs` が約 4500 行に肥大化しており、以下の責務が単一ファイルに混在している:
+`src/connection/mod.rs` が 5737 行に肥大化しており、以下の責務が単一ファイルに混在している:
 
 - HTTP/3 接続ステートマシン
 - QPACK エンコーダー/デコーダーストリームの処理
@@ -31,7 +31,7 @@ private 関数が 40 個を超え、`emit_header_events` と `process_stream_fra
 
 ## 影響範囲
 
-- `src/connection/mod.rs` (4500 行 → 縮小)
+- `src/connection/mod.rs` (5737 行 → 縮小)
 - 新規: `src/connection/wt_session.rs`
 - 新規: `src/connection/wt_receive.rs`
 - 新規: `src/connection/wt_dispatch.rs`

@@ -12,12 +12,9 @@ Model: deepseek-v4-pro
 
 ## 修正方針
 
-2 つの選択肢:
-1. ラッパーを削除し、`Connection` に統一する
-2. `Connection` 側の `send_request`/`send_response` を `pub(crate)` に落とし、
-   ラッパー経由でのみ呼べるようにする
-
-選択肢 2 を推奨。型レベルで役割を区別する意図は妥当なため。
+`Connection` 側の `send_request`/`send_response` を `pub(crate)` に落とし、
+`ClientConnection` / `ServerConnection` 経由でのみ呼べるようにする。
+型レベルで役割を区別する意図は妥当なため、ラッパーは残す。
 
 ## 影響範囲
 

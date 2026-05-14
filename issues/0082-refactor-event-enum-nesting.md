@@ -14,6 +14,9 @@ Model: deepseek-v4-pro
 `WebTransportBidiStreamOpen`, `WebTransportSessionEstablished`, `WebTransportDatagram` 等の
 WT イベントを `Event::WebTransport(WebTransportEvent)` にネスト化する。
 
+**依存**: 0059 (`bytes` クレート導入) 完了後に着手すること。0059 で `Vec<u8>` → `Bytes` が
+変更されるため。
+
 ```rust
 pub enum Event {
     SettingsReceived { ... },
@@ -26,7 +29,7 @@ pub enum Event {
 pub enum WebTransportEvent {
     BidiStreamOpen { stream_id: u64, session_id: u64 },
     SessionEstablished { session_id: u64, ... },
-    Datagram { session_id: u64, payload: Vec<u8> },
+    Datagram { session_id: u64, payload: Bytes },
     // ...
 }
 ```

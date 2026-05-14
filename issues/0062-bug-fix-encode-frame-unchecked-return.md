@@ -36,3 +36,7 @@ frame::encode_frame(&mut buf, &frame)
 
 - `src/stream/control.rs:76,95`
 - `src/stream/request.rs:172,221`
+
+## 備考
+
+`encoded_frame_len` で確保したバッファに書き込むため実用上 `None` にはならないが、不変条件が破綻した場合のサイレントデータ破損を防ぐため `.expect()` で早期発見する。リリースビルドでのオーバーヘッドは許容範囲。

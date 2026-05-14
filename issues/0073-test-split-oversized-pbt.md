@@ -7,7 +7,7 @@ Model: deepseek-v4-pro
 
 ### 問題 1: prop_webtransport.rs が過大 (1439 行)
 
-`pbt/tests/prop_webtransport.rs` が 1439 行あり、CLAUDE.md L86-88 の分割基準を満たしている。
+`pbt/tests/prop_webtransport.rs` が 1795 行あり、CLAUDE.md L86-88 の分割基準を満たしている。
 `src/webtransport/` はディレクトリモジュールのため、
 `pbt/tests/prop_webtransport/main.rs` にサブモジュール分割する必要がある。
 
