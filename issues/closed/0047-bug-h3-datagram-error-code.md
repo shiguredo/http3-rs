@@ -6,7 +6,7 @@ Model: Opus 4.6
 
 ## 概要
 
-`Connection::feed_datagram` は HTTP Datagram のデコード失敗時に `ErrorCode::GeneralProtocolError` (`H3_GENERAL_PROTOCOL_ERROR`) を返している。RFC 9297 Section 5 では Quarter Stream ID が短すぎる、もしくは 2^60-1 を超える場合は `H3_DATAGRAM_ERROR` (0x33) で接続を閉じることが規定されている。現状の実装ではエラーコードが仕様と一致しない。
+`Connection::feed_datagram` は HTTP Datagram のデコード失敗時に `ErrorCode::GeneralProtocolError` (`H3_GENERAL_PROTOCOL_ERROR`) を返している。RFC 9297 Section 2.1 では Quarter Stream ID が短すぎる、もしくは 2^60-1 を超える場合は `H3_DATAGRAM_ERROR` (0x33) で接続を閉じることが規定されている。現状の実装ではエラーコードが仕様と一致しない。
 
 ## 再現手順
 
@@ -20,7 +20,7 @@ Model: Opus 4.6
 
 ## 根拠
 
-- RFC 9297 Section 5: "An endpoint MUST terminate an HTTP/3 connection ... with a connection error of type H3_DATAGRAM_ERROR (error code 0x33)"
+- RFC 9297 Section 2.1: "If an HTTP/3 Datagram is received and its Quarter Stream ID field has a value greater than 2^60-1, the receiver MUST treat this as an HTTP/3 connection error of type H3_DATAGRAM_ERROR (0x33)."
 - `refs/webtrans/rfc9297.txt` L187 付近
 
 ## 修正方針
@@ -35,6 +35,6 @@ Model: Opus 4.6
 - `src/error.rs` に `ErrorCode::H3DatagramError = 0x33` を追加し、`from_code` / `Display` も対応させた。
 - `src/connection/mod.rs` `Connection::feed_datagram` で:
   - `Datagram::decode` 失敗時のエラーコードを `H3DatagramError` に変更した。
-  - `session_id & 0x03 != 0` のチェックも `H3DatagramError` に変更した (RFC 9297 Section 5 に従い、Quarter Stream ID から復元した stream id が client-initiated bidi でない場合も同じエラーコードで扱う)。
+  - `session_id & 0x03 != 0` のチェックも `H3DatagramError` に変更した (RFC 9297 Section 2.1 に従い、Quarter Stream ID から復元した stream id が client-initiated bidi でない場合も同じエラーコードで扱う)。
 - `src/webtransport/datagram.rs` `Datagram::decode` で Quarter Stream ID が `2^60 - 1` を超える場合に `None` を返すよう修正した (これまで `checked_mul(4)` のみで `2^60 ≤ qsi < 2^62` の範囲が素通りしていた)。
 - 単体テストとして `test_feed_datagram_truncated_returns_h3_datagram_error` と `test_feed_datagram_qsi_overflow_returns_h3_datagram_error` を追加した。

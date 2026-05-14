@@ -24,7 +24,7 @@ draft-ietf-webtrans-http3-15 Section 7.1 では、サーバーはクライアン
 
 ## 根拠
 
-- draft-ietf-webtrans-http3-15 Section 4.2 (L433 付近)
+- draft-ietf-webtrans-http3-15 Section 4 (L653-662)
 - draft-ietf-webtrans-http3-15 Section 7.1 (L1560 付近)
 - nghttp3 `lib/nghttp3_conn.c` L54
 - `src/connection/mod.rs` L661 (`feed_datagram`)
@@ -48,6 +48,6 @@ draft-ietf-webtrans-http3-15 Section 7.1 では、サーバーはクライアン
 
 ## 参照
 
-- draft-ietf-webtrans-http3-15 Section 4.2, 7.1
+- draft-ietf-webtrans-http3-15 Section 4, 7.1
 - nghttp3 `lib/nghttp3_conn.c` L54
 - `src/connection/mod.rs` L661, L959, L1180, L1617

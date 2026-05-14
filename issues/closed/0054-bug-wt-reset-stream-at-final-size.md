@@ -26,7 +26,7 @@ draft-ietf-webtrans-http3-15 Section 3.1 / 5.4 は、WebTransport ストリー�
 ## 根拠
 
 - draft-ietf-webtrans-http3-15 Section 3.1: `reset_stream_at` transport parameter を双方が送る MUST
-- draft-ietf-webtrans-http3-15 Section 5.4: stream header byte は確実に配送されなければならず、reset 時の reliable size は stream header 長以上である必要がある
+- draft-ietf-webtrans-http3-15 Section 4.4: stream header byte は確実に配送されなければならず、reset 時の reliable size は stream header 長以上である必要がある
 - draft-ietf-webtrans-http3-15 Section 6: セッション終了時の関連ストリームのリセットも同じ前提
 - `refs/webtrans/draft-ietf-webtrans-http3-15.txt`
 

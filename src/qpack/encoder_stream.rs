@@ -114,7 +114,7 @@ impl EncoderStream {
 
     /// リテラル名で挿入する命令をエンコード (RFC 9204 Section 4.3.3)
     ///
-    /// Format: 01 (5-bit prefix string for name) + (7-bit prefix string for value)
+    /// Format: 01 (6-bit prefix string for name) + (8-bit prefix string for value)
     ///
     /// # エラー
     ///

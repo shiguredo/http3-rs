@@ -9,7 +9,7 @@ use crate::varint;
 /// 将来のドラフトで変更される可能性がある
 pub const MAX_STREAMS_LIMIT: u64 = 1u64 << 60;
 
-/// H3_DATAGRAM_ERROR エラーコード (RFC 9297 Section 6.1)
+/// H3_DATAGRAM_ERROR エラーコード (RFC 9297 Section 5.2)
 ///
 /// HTTP/3 datagram / capsule プロトコルのパースエラーを示す接続レベルエラー。
 /// WT_MAX_STREAMS の値が 2^60 を超えた場合に使用する。

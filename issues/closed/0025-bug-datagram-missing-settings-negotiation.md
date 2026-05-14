@@ -44,6 +44,6 @@ draft-ietf-webtrans-http3-15 Section 4.5 は以下を要求している:
 
 ## 参照
 
-- RFC 9297 Section 3
+- RFC 9297 Section 2.1.1
 - draft-ietf-webtrans-http3-15 Section 4.5
 - `src/connection/mod.rs` L478-497

@@ -12,11 +12,11 @@ P1
 
 `Connection::resolve_wt_uni_stream_session_id()` で、varint デコードした `session_id` が client-initiated bidirectional stream ID であるかを検証せずに、そのまま `Event::WebTransportUniStreamOpen` を発火している。
 
-draft-ietf-webtrans-http3-15 Section 4.2 は、`session_id` が client-initiated bidirectional stream ID に対応しない場合、`H3_ID_ERROR` で接続を閉じることを MUST としている。
+draft-ietf-webtrans-http3-15 Section 4 は、`session_id` が client-initiated bidirectional stream ID に対応しない場合、`H3_ID_ERROR` で接続を閉じることを MUST としている。
 
 ## 根拠
 
-- draft-ietf-webtrans-http3-15 Section 4.2 (L653-662)
+- draft-ietf-webtrans-http3-15 Section 4 (L653-662)
   - Session ID は CONNECT ストリームの stream ID から派生し、常に client-initiated bidirectional stream に対応する MUST 要件
   - 単方向ストリーム、双方向ストリーム、データグラムで受信した `session_id` が client-initiated bidirectional stream ID に対応しない場合、`H3_ID_ERROR` で接続を閉じる MUST 要件
   - 閉じられたセッションに対応する `session_id` はこのチェックでは無効とみなさない

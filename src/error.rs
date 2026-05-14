@@ -53,8 +53,8 @@ pub enum ErrorCode {
     QpackDecoderStreamError = 0x202,
     /// HTTP Datagram エラー (0x33)
     ///
-    /// RFC 9297 Section 5: Quarter Stream ID が不正な HTTP Datagram を
-    /// 受信した場合に接続を閉じるためのエラーコード。
+    /// RFC 9297 Section 5.2: Quarter Stream ID が不正な HTTP Datagram を
+    /// 受信した場合に接続を閉じるためのエラーコード (Section 2.1)。
     H3DatagramError = 0x33,
 }
 

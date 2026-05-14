@@ -287,7 +287,7 @@ fn is_valid_authority(value: &[u8]) -> bool {
 }
 
 /// plain CONNECT の :authority が authority-form (host:port) かを検証する
-/// (RFC 9114 Section 4.4, RFC 7230 Section 5.3.3)
+/// (RFC 9114 Section 4.4, RFC 9110 Section 7.1)
 ///
 /// authority-form = uri-host ":" port
 /// IPv6 の場合は [host]:port の形式
@@ -482,7 +482,7 @@ pub fn validate_request_headers<H: HeaderField>(headers: &[H]) -> Result<(), Err
         // (ここには到達しない: protocol.is_some() は上の分岐で処理済み)
 
         // :authority は必須かつ authority-form (host:port) でなければならない
-        // (RFC 9114 Section 4.4, RFC 7230 Section 5.3.3)
+        // (RFC 9114 Section 4.4, RFC 9110 Section 7.1)
         match authority {
             None => return Err(Error::StreamError(ErrorCode::MessageError)),
             Some([]) => return Err(Error::StreamError(ErrorCode::MessageError)),

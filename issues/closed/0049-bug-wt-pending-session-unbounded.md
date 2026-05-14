@@ -17,8 +17,8 @@ Model: Opus 4.6
 
 ## 根拠
 
-- draft-ietf-webtrans-http3-15 Section 4.6: 先着ストリーム/データグラムのバッファリングは MAY であり、上限超過時の挙動は実装依存
-- RFC 9297 Section 2.1: 作成不能な Quarter Stream ID は `H3_ID_ERROR` で接続を閉じてよい
+- draft-ietf-webtrans-http3-15 Section 4.6: 先着ストリーム/データグラムのバッファリングは SHOULD であり、上限超過時は WT_BUFFERED_STREAM_REJECTED で close / datagram は drop する SHALL と規定
+- RFC 9297 Section 2.1: 作成不能な Quarter Stream ID は `H3_ID_ERROR` で接続を閉じなければならない (SHALL)
 - nghttp3 `lib/nghttp3_conn.c` L3649 付近: クライアント開始 bidi 上限を見て拒否
 
 ## 修正方針

@@ -90,7 +90,7 @@ impl Datagram {
     /// `session_id = quarter_stream_id * 4` として復元する。
     pub fn decode(buf: &[u8]) -> Option<(Self, usize)> {
         let (qsi, varint_len) = varint::decode(buf).ok()?;
-        // RFC 9297 Section 5: Quarter Stream ID は QUIC ストリーム ID 空間
+        // RFC 9297 Section 2.1: Quarter Stream ID は QUIC ストリーム ID 空間
         // (2^62 - 1) を 4 で割った値、すなわち 2^60 - 1 が上限。
         // これを超える値は不正であり、呼び出し側は H3_DATAGRAM_ERROR で
         // 接続を閉じる。

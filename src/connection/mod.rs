@@ -800,7 +800,7 @@ impl Connection {
         }
 
         // HTTP Datagram フォーマットをデコード
-        // RFC 9297 Section 5: Quarter Stream ID が不正な (短すぎる、もしくは
+        // RFC 9297 Section 2.1: Quarter Stream ID が不正な (短すぎる、もしくは
         // 2^60-1 を超える) Datagram を受信した場合は H3_DATAGRAM_ERROR で接続を
         // 閉じなければならない。
         let datagram = match crate::webtransport::Datagram::decode(data) {
@@ -873,7 +873,7 @@ impl Connection {
     ///
     /// セッションが存在しないか Established でない場合はエラーを返す。
     pub fn send_datagram(&self, session_id: u64, payload: &[u8]) -> Result<Vec<u8>, Error> {
-        // SETTINGS_H3_DATAGRAM のネゴシエーション確認 (RFC 9297 Section 3)
+        // SETTINGS_H3_DATAGRAM のネゴシエーション確認 (RFC 9297 Section 2.1.1)
         // ローカルとピアの両方が SETTINGS_H3_DATAGRAM=1 を送受信済みでなければならない
         let local_datagram = self.local_settings.h3_datagram == Some(true);
         let peer_datagram = self
@@ -1751,7 +1751,7 @@ impl Connection {
                     break;
                 }
                 Err(_) => {
-                    // RFC 9297 Section 3.2: malformed Capsule は
+                    // RFC 9297 Section 3.3: malformed Capsule は
                     // HTTP message エラーとして扱う → H3_MESSAGE_ERROR
                     return Err(Error::StreamError(ErrorCode::MessageError));
                 }
@@ -5537,7 +5537,7 @@ mod tests {
 
     #[test]
     fn test_feed_datagram_truncated_returns_h3_datagram_error() {
-        // RFC 9297 Section 5: Quarter Stream ID varint が短すぎる場合は
+        // RFC 9297 Section 2.1: Quarter Stream ID varint が短すぎる場合は
         // H3_DATAGRAM_ERROR で接続を閉じる
         let mut conn = make_server_with_established_wt_session(4);
 
@@ -5551,7 +5551,7 @@ mod tests {
 
     #[test]
     fn test_feed_datagram_qsi_overflow_returns_h3_datagram_error() {
-        // RFC 9297 Section 5: Quarter Stream ID が 2^60-1 を超える場合
+        // RFC 9297 Section 2.1: Quarter Stream ID が 2^60-1 を超える場合
         // (qsi * 4 が u64 をオーバーフロー) は H3_DATAGRAM_ERROR
         let mut conn = make_server_with_established_wt_session(4);
 

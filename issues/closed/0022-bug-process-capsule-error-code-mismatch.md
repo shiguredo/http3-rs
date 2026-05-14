@@ -30,7 +30,7 @@ P2 — エラーコードの不整合は相互運用性テストで検出され�
 
 Completed: 2026-04-05
 
-1. `H3_DATAGRAM_ERROR` 定数 (`0x33`) を `capsule.rs` に追加 — RFC 9297 Section 6.1 で定義
+1. `H3_DATAGRAM_ERROR` 定数 (`0x33`) を `capsule.rs` に追加 — RFC 9297 Section 5.2 で定義
 2. `session.rs` の `process_capsule()` で `WT_MAX_STREAMS > 2^60` 時のエラーコードを `ErrorCode::FlowControlError` から `H3_DATAGRAM_ERROR (0x33)` に修正 — draft-15 Section 5.6.2 準拠
 3. `WT_MAX_DATA` の上限チェック追加は不要と判断 — draft-15 Section 5.6.4 には `WT_MAX_STREAMS` のような明示的な `2^60` 上限要件がない (varint の最大値 `2^62-1` はデコード段階で自動的に保証される)
 

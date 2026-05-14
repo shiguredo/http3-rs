@@ -411,7 +411,7 @@ proptest! {
 }
 
 // =============================================================================
-// Stream ID Properties (RFC Section 4)
+// Stream ID Properties (draft-ietf-webtrans-http3-15 Section 4)
 // =============================================================================
 
 proptest! {
@@ -461,7 +461,7 @@ proptest! {
 }
 
 // =============================================================================
-// Session State Transition Properties (RFC Section 3, 6)
+// Session State Transition Properties (draft-ietf-webtrans-http3-15 Section 3, 6)
 // =============================================================================
 
 proptest! {
@@ -519,7 +519,7 @@ proptest! {
 }
 
 // =============================================================================
-// Flow Control Non-Monotonic Detection (RFC Section 5.6.2, 5.6.4)
+// Flow Control Non-Monotonic Detection (draft-ietf-webtrans-http3-15 Section 5.6.2, 5.6.4)
 // =============================================================================
 
 proptest! {
@@ -614,7 +614,7 @@ proptest! {
 }
 
 // =============================================================================
-// CloseSession Message Length Limit (RFC Section 6)
+// CloseSession Message Length Limit (draft-ietf-webtrans-http3-15 Section 6)
 // =============================================================================
 
 prop_compose! {
@@ -809,7 +809,7 @@ proptest! {
 }
 
 // =============================================================================
-// Settings Flow Control Enabled (RFC Section 5.1)
+// Settings Flow Control Enabled (draft-ietf-webtrans-http3-15 Section 5.1)
 // =============================================================================
 
 proptest! {
@@ -966,7 +966,7 @@ proptest! {
 }
 
 // =============================================================================
-// Datagram Properties (RFC Section 4.5)
+// Datagram Properties (draft-ietf-webtrans-http3-15 Section 4.5)
 // =============================================================================
 
 prop_compose! {
@@ -1041,7 +1041,7 @@ proptest! {
 }
 
 // =============================================================================
-// ConnectRequest Validation Properties (RFC Section 3.2)
+// ConnectRequest Validation Properties (draft-ietf-webtrans-http3-15 Section 3.2)
 // =============================================================================
 
 prop_compose! {
@@ -1138,7 +1138,7 @@ proptest! {
 }
 
 // =============================================================================
-// Session Buffering Properties (RFC Section 4.6)
+// Session Buffering Properties (draft-ietf-webtrans-http3-15 Section 4.6)
 // =============================================================================
 
 proptest! {
@@ -1209,7 +1209,7 @@ proptest! {
 }
 
 // =============================================================================
-// GOAWAY Properties (RFC Section 4.7)
+// GOAWAY Properties (draft-ietf-webtrans-http3-15 Section 4.7)
 // =============================================================================
 
 proptest! {
@@ -1228,7 +1228,7 @@ proptest! {
         prop_assert_eq!(session.state(), SessionState::Draining);
     }
 
-    /// Property: handle_goaway 後も既存ストリームは保持され can_send() == true (RFC Section 4.7)
+    /// Property: handle_goaway 後も既存ストリームは保持され can_send() == true (draft-ietf-webtrans-http3-15 Section 4.7)
     #[test]
     fn prop_session_handle_goaway_preserves_streams(
         stream_count in 1usize..10,
@@ -1255,12 +1255,12 @@ proptest! {
 }
 
 // =============================================================================
-// Session Termination Properties (RFC Section 6)
+// Session Termination Properties (draft-ietf-webtrans-http3-15 Section 6)
 // =============================================================================
 
 proptest! {
     /// Property: 任意の初期状態 (Established/Draining) で on_connect_stream_closed() →
-    /// is_close_session_received() == true かつ is_closed() == true (RFC Section 6)
+    /// is_close_session_received() == true かつ is_closed() == true (draft-ietf-webtrans-http3-15 Section 6)
     #[test]
     fn prop_session_on_connect_stream_closed_sets_flags(
         start_draining in any::<bool>(),
@@ -1279,7 +1279,7 @@ proptest! {
     }
 
     /// Property: CloseSession Capsule 受信後に on_connect_stream_closed() →
-    /// 最初のエラー情報が保持される (RFC Section 6)
+    /// 最初のエラー情報が保持される (draft-ietf-webtrans-http3-15 Section 6)
     #[test]
     fn prop_session_on_connect_stream_closed_preserves_first_error(
         error_code in valid_error_code(),
@@ -1305,7 +1305,7 @@ proptest! {
     }
 
     /// Property: 任意のストリーム追加/削除後、stream_ids_to_reset() が
-    /// 残存ストリーム ID と一致 (RFC Section 6)
+    /// 残存ストリーム ID と一致 (draft-ietf-webtrans-http3-15 Section 6)
     #[test]
     fn prop_session_stream_ids_to_reset_matches_streams(
         add_count in 1usize..20,
@@ -1341,12 +1341,12 @@ proptest! {
 }
 
 // =============================================================================
-// Capsule Interleave Properties (RFC Section 5.6, 6)
+// Capsule Interleave Properties (draft-ietf-webtrans-http3-15 Section 5.6, 6)
 // =============================================================================
 
 proptest! {
     /// Property: MaxData/MaxStreams/DataBlocked/StreamsBlocked をランダム順で処理しても
-    /// 最終リミットが整合的 (RFC Section 5.6)
+    /// 最終リミットが整合的 (draft-ietf-webtrans-http3-15 Section 5.6)
     #[test]
     fn prop_session_interleaved_capsule_processing(
         max_data_values in prop::collection::vec(0u64..10000, 1..5),
@@ -1405,7 +1405,7 @@ proptest! {
         }
     }
 
-    /// Property: 単調増加列の後に減少値を送ると FlowControlError (RFC Section 5.6)
+    /// Property: 単調増加列の後に減少値を送ると FlowControlError (draft-ietf-webtrans-http3-15 Section 5.6)
     #[test]
     fn prop_session_flow_control_violation_after_increase(
         first in 100u64..10000,
@@ -1429,12 +1429,12 @@ proptest! {
 }
 
 // =============================================================================
-// Connect Protocol Negotiation Properties (RFC Section 3.3)
+// Connect Protocol Negotiation Properties (draft-ietf-webtrans-http3-15 Section 3.3)
 // =============================================================================
 
 proptest! {
     /// Property: selected_protocol が available_protocols に含まれる場合は valid、
-    /// 含まれない場合は invalid (RFC Section 3.3)
+    /// 含まれない場合は invalid (draft-ietf-webtrans-http3-15 Section 3.3)
     #[test]
     fn prop_connect_response_protocol_selection(
         protocols in prop::collection::vec(safe_protocol_name(), 1..5),
@@ -1461,11 +1461,11 @@ proptest! {
 }
 
 // =============================================================================
-// Settings iter Properties (RFC Section 9.2)
+// Settings iter Properties (draft-ietf-webtrans-http3-15 Section 9.2)
 // =============================================================================
 
 proptest! {
-    /// Property: builder で設定した値と iter() 出力が一致。0 の値は含まれない (RFC Section 9.2)
+    /// Property: builder で設定した値と iter() 出力が一致。0 の値は含まれない (draft-ietf-webtrans-http3-15 Section 9.2)
     #[test]
     fn prop_settings_iter_matches_builder(
         max_sessions in 0u64..100,
@@ -1510,12 +1510,12 @@ proptest! {
 }
 
 // =============================================================================
-// ApplicationErrorCode Reserved Collision Properties (RFC Section 9.5)
+// ApplicationErrorCode Reserved Collision Properties (draft-ietf-webtrans-http3-15 Section 9.5)
 // =============================================================================
 
 proptest! {
     /// Property: to_http3_code() の結果が予約コードポイント (x - 0x21) % 0x1f == 0 でない
-    /// (RFC Section 9.5)
+    /// (draft-ietf-webtrans-http3-15 Section 9.5)
     #[test]
     fn prop_application_error_code_no_reserved_collision(app_code in any::<u32>()) {
         let http3_code = ApplicationErrorCode::to_http3_code(app_code);

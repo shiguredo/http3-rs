@@ -26,7 +26,7 @@ Issue #0045 の SETTINGS 互換対応後、Safari 26.4 から WebTransport セ�
 ## 根拠資料
 
 - draft-ietf-webtrans-http3-07 Section 4 (Datagrams)
-- draft-ietf-webtrans-http3-14 Section 6 (Datagrams)
+- draft-ietf-webtrans-http3-14 Section 4.5 (Datagrams)
 - RFC 9297 (HTTP Datagrams)
 
 ## 解決方法

@@ -8,13 +8,13 @@ use super::capsule::{Capsule, MAX_STREAMS_LIMIT};
 use super::error::{Error, ErrorCode};
 use super::stream::Stream;
 
-/// セッション確立前にバッファリングするストリームの上限 (RFC Section 4.6)
+/// セッション確立前にバッファリングするストリームの上限 (draft-ietf-webtrans-http3-15 Section 4.6)
 const MAX_BUFFERED_STREAMS: usize = 100;
 
-/// セッション確立前にバッファリングするデータグラムの上限 (RFC Section 4.6)
+/// セッション確立前にバッファリングするデータグラムの上限 (draft-ietf-webtrans-http3-15 Section 4.6)
 const MAX_BUFFERED_DATAGRAMS: usize = 100;
 
-/// バッファリングされたストリームの情報 (RFC Section 4.6)
+/// バッファリングされたストリームの情報 (draft-ietf-webtrans-http3-15 Section 4.6)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BufferedStream {
     /// ストリーム ID
@@ -311,15 +311,15 @@ pub struct Session {
     pending_stream_resets: Vec<u64>,
     /// クローズ理由
     close_error: Option<Error>,
-    /// セッション確立前のバッファリングされたストリーム (RFC Section 4.6)
+    /// セッション確立前のバッファリングされたストリーム (draft-ietf-webtrans-http3-15 Section 4.6)
     buffered_streams: Vec<BufferedStream>,
-    /// セッション確立前のバッファリングされたデータグラム (RFC Section 4.6)
+    /// セッション確立前のバッファリングされたデータグラム (draft-ietf-webtrans-http3-15 Section 4.6)
     buffered_datagrams: Vec<Vec<u8>>,
-    /// HTTP/3 GOAWAY を受信したかどうか (RFC Section 4.7)
+    /// HTTP/3 GOAWAY を受信したかどうか (draft-ietf-webtrans-http3-15 Section 4.7)
     goaway_received: bool,
-    /// WT_CLOSE_SESSION を受信したかどうか (RFC Section 6)
+    /// WT_CLOSE_SESSION を受信したかどうか (draft-ietf-webtrans-http3-15 Section 6)
     close_session_received: bool,
-    /// WT_CLOSE_SESSION を送信したかどうか (RFC Section 6)
+    /// WT_CLOSE_SESSION を送信したかどうか (draft-ietf-webtrans-http3-15 Section 6)
     close_session_sent: bool,
     /// 受信側ストリームフロー制御 (単方向)
     recv_stream_fc_uni: DirectionalStreamFlowControl,
@@ -757,9 +757,9 @@ impl Session {
         std::mem::take(&mut self.pending_capsules)
     }
 
-    /// WT_CLOSE_SESSION Capsule を送信キューに追加してセッションをクローズ (RFC Section 6)
+    /// WT_CLOSE_SESSION Capsule を送信キューに追加してセッションをクローズ (draft-ietf-webtrans-http3-15 Section 6)
     ///
-    /// WT_CLOSE_SESSION 送信後すぐに CONNECT ストリームへ FIN を送信すること (RFC Section 6)。
+    /// WT_CLOSE_SESSION 送信後すぐに CONNECT ストリームへ FIN を送信すること (draft-ietf-webtrans-http3-15 Section 6)。
     pub fn close_with_error(&mut self, code: u32, message: impl Into<String>) {
         let mut message = message.into();
         // エラーメッセージは 1024 バイトを超えてはならない
@@ -794,7 +794,7 @@ impl Session {
     // Section 4.6: Buffering Incoming Streams and Datagrams
     // =========================================================================
 
-    /// 未確立セッション向けの受信ストリームをバッファリング (RFC Section 4.6)
+    /// 未確立セッション向けの受信ストリームをバッファリング (draft-ietf-webtrans-http3-15 Section 4.6)
     ///
     /// `true` を返した場合はバッファ済み。
     /// `false` を返した場合は上限超過のため呼び出し元が
@@ -815,7 +815,7 @@ impl Session {
         std::mem::take(&mut self.buffered_streams)
     }
 
-    /// 未確立セッション向けの受信データグラムをバッファリング (RFC Section 4.6)
+    /// 未確立セッション向けの受信データグラムをバッファリング (draft-ietf-webtrans-http3-15 Section 4.6)
     ///
     /// `true` を返した場合はバッファ済み。
     /// `false` を返した場合は上限超過のためデータグラムを破棄すること。
@@ -836,7 +836,7 @@ impl Session {
     // Section 4.7: Interaction with the HTTP/3 GOAWAY frame
     // =========================================================================
 
-    /// HTTP/3 GOAWAY 受信時の処理 (RFC Section 4.7)
+    /// HTTP/3 GOAWAY 受信時の処理 (draft-ietf-webtrans-http3-15 Section 4.7)
     ///
     /// 新規セッションの確立不可を記録し、セッションをドレイン中に遷移させる。
     pub fn handle_goaway(&mut self) {
@@ -844,7 +844,7 @@ impl Session {
         self.set_draining();
     }
 
-    /// HTTP/3 GOAWAY を受信したかどうか (RFC Section 4.7)
+    /// HTTP/3 GOAWAY を受信したかどうか (draft-ietf-webtrans-http3-15 Section 4.7)
     pub fn is_goaway_received(&self) -> bool {
         self.goaway_received
     }
@@ -853,17 +853,17 @@ impl Session {
     // Section 6: Session Termination
     // =========================================================================
 
-    /// WT_CLOSE_SESSION を受信したかどうか (RFC Section 6)
+    /// WT_CLOSE_SESSION を受信したかどうか (draft-ietf-webtrans-http3-15 Section 6)
     pub fn is_close_session_received(&self) -> bool {
         self.close_session_received
     }
 
-    /// WT_CLOSE_SESSION を送信したかどうか (RFC Section 6)
+    /// WT_CLOSE_SESSION を送信したかどうか (draft-ietf-webtrans-http3-15 Section 6)
     pub fn is_close_session_sent(&self) -> bool {
         self.close_session_sent
     }
 
-    /// セッション終了時にリセットすべきストリーム ID の一覧を返す (RFC Section 6)
+    /// セッション終了時にリセットすべきストリーム ID の一覧を返す (draft-ietf-webtrans-http3-15 Section 6)
     ///
     /// セッション終了後、呼び出し元はこれらのストリームを
     /// `WT_SESSION_GONE` エラーコードでリセットすること。
@@ -876,7 +876,7 @@ impl Session {
         std::mem::take(&mut self.pending_stream_resets)
     }
 
-    /// CONNECT ストリームがクリーズクローズされた場合の処理 (RFC Section 6)
+    /// CONNECT ストリームがクリーズクローズされた場合の処理 (draft-ietf-webtrans-http3-15 Section 6)
     ///
     /// WT_CLOSE_SESSION なしで CONNECT ストリームが FIN 受信した場合、
     /// error_code=0, message="" の WT_CLOSE_SESSION と等価。

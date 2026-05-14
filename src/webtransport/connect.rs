@@ -19,7 +19,7 @@ use crate::qpack::Header;
 /// draft-15 で定義された native QUIC モードのプロトコル識別子。
 pub const PROTOCOL_WEBTRANSPORT_H3: &str = "webtransport-h3";
 
-/// `:protocol` 疑似ヘッダーの値 (draft-ietf-webtrans-http3-02 Section 3.2)
+/// `:protocol` 疑似ヘッダーの値 (draft-ietf-webtrans-http3-02 Section 3.3)
 ///
 /// draft-02 で定義されたプロトコル識別子。Chrome 等の実装が draft-02 互換で
 /// この値を送信する場合がある。将来のドラフトで廃止される可能性がある。
@@ -222,7 +222,7 @@ impl DraftVersion {
     }
 }
 
-/// CONNECT リクエスト検証エラー (RFC Section 3.2)
+/// CONNECT リクエスト検証エラー (draft-ietf-webtrans-http3-15 Section 3.2)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectError {
     /// `:scheme` が `https` でない
@@ -349,7 +349,7 @@ impl TransportCapabilities {
     }
 }
 
-/// WebTransport CONNECT リクエスト (RFC Section 3.2)
+/// WebTransport CONNECT リクエスト (draft-ietf-webtrans-http3-15 Section 3.2)
 ///
 /// クライアントが新しい WebTransport セッションを確立するための拡張 CONNECT リクエスト。
 /// `:protocol` ヘッダーの値はドラフトバージョンに依存する。
@@ -370,15 +370,15 @@ impl TransportCapabilities {
 pub struct ConnectRequest {
     /// ドラフトバージョン (デフォルト: Draft15)
     pub draft_version: DraftVersion,
-    /// `:scheme` (MUST be `https` - RFC Section 3.2)
+    /// `:scheme` (MUST be `https` - draft-ietf-webtrans-http3-15 Section 3.2)
     pub scheme: String,
-    /// `:authority` (MUST be present - RFC Section 3.2)
+    /// `:authority` (MUST be present - draft-ietf-webtrans-http3-15 Section 3.2)
     pub authority: String,
-    /// `:path` (MUST be present - RFC Section 3.2)
+    /// `:path` (MUST be present - draft-ietf-webtrans-http3-15 Section 3.2)
     pub path: String,
-    /// `Origin` ヘッダー (ブラウザクライアントの場合は MUST - RFC Section 3.2)
+    /// `Origin` ヘッダー (ブラウザクライアントの場合は MUST - draft-ietf-webtrans-http3-15 Section 3.2)
     pub origin: Option<String>,
-    /// `WT-Available-Protocols` ヘッダーから解析したプロトコルリスト (RFC Section 3.3)
+    /// `WT-Available-Protocols` ヘッダーから解析したプロトコルリスト (draft-ietf-webtrans-http3-15 Section 3.3)
     ///
     /// 優先度順で列挙する。空の場合はプロトコルネゴシエーションなし。
     pub available_protocols: Vec<String>,
@@ -550,7 +550,7 @@ impl ConnectRequest {
         headers
     }
 
-    /// RFC Section 3.2 に従いリクエストを検証
+    /// draft-ietf-webtrans-http3-15 Section 3.2 に従いリクエストを検証
     ///
     /// 以下を検証する:
     /// - `:scheme` が `https` であること
@@ -571,17 +571,17 @@ impl ConnectRequest {
         Ok(())
     }
 
-    /// `WT-Available-Protocols` ヘッダー値を解析 (RFC Section 3.3)
+    /// `WT-Available-Protocols` ヘッダー値を解析 (draft-ietf-webtrans-http3-15 Section 3.3)
     ///
     /// Structured Fields List 形式 (RFC 9651) から文字列型のアイテムのみを抽出する。
-    /// 文字列型以外のアイテムはエラーとして無視する (RFC Section 3.3)。
-    /// パラメータ (`;` 以降) は無視する (RFC Section 3.3)。
+    /// 文字列型以外のアイテムはエラーとして無視する (draft-ietf-webtrans-http3-15 Section 3.3)。
+    /// パラメータ (`;` 以降) は無視する (draft-ietf-webtrans-http3-15 Section 3.3)。
     pub fn parse_available_protocols(header_value: &str) -> Vec<String> {
         parse_sf_list_strings(header_value)
     }
 }
 
-/// WebTransport CONNECT レスポンス (RFC Section 3.2)
+/// WebTransport CONNECT レスポンス (draft-ietf-webtrans-http3-15 Section 3.2)
 ///
 /// サーバーが CONNECT リクエストに対して返すレスポンス。
 /// 2xx ステータスコードでセッション確立成功。
@@ -590,7 +590,7 @@ impl ConnectRequest {
 pub struct ConnectResponse {
     /// HTTP ステータスコード
     pub status: u16,
-    /// `WT-Protocol` ヘッダーで選択されたプロトコル (RFC Section 3.3)
+    /// `WT-Protocol` ヘッダーで選択されたプロトコル (draft-ietf-webtrans-http3-15 Section 3.3)
     pub selected_protocol: Option<String>,
 }
 
@@ -659,11 +659,11 @@ impl ConnectResponse {
         }
     }
 
-    /// `WT-Protocol` ヘッダー値を解析 (RFC Section 3.3)
+    /// `WT-Protocol` ヘッダー値を解析 (draft-ietf-webtrans-http3-15 Section 3.3)
     ///
     /// Structured Fields Item 形式 (RFC 9651) から文字列型のみを抽出する。
-    /// 文字列型でない場合は `None` を返す (RFC Section 3.3)。
-    /// パラメータ (`;` 以降) は無視する (RFC Section 3.3)。
+    /// 文字列型でない場合は `None` を返す (draft-ietf-webtrans-http3-15 Section 3.3)。
+    /// パラメータ (`;` 以降) は無視する (draft-ietf-webtrans-http3-15 Section 3.3)。
     pub fn parse_protocol(header_value: &str) -> Option<String> {
         parse_sf_item_string(header_value)
     }

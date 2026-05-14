@@ -143,7 +143,7 @@ impl Encoder {
 
     /// Literal Field Line with Literal Name をエンコード
     ///
-    /// Format (RFC 9204 Section 4.5.4):
+    /// Format (RFC 9204 Section 4.5.6):
     /// ```text
     ///      0   1   2   3   4   5   6   7
     ///    +---+---+---+---+---+---+---+---+
@@ -709,7 +709,7 @@ impl DynamicEncoder {
 
     /// Literal with Literal Name をエンコード
     ///
-    /// Format (RFC 9204 Section 4.5.4):
+    /// Format (RFC 9204 Section 4.5.6):
     /// ```text
     ///      0   1   2   3   4   5   6   7
     ///    +---+---+---+---+---+---+---+---+
