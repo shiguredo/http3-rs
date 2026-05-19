@@ -19,9 +19,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       # neqo-crypto のビルドに NSS >= 3.121 が必要
-      - uses: mozilla/actions/nss@main
+      - uses: mozilla/actions/nss@312d300af3fb2b6551389bf1cb40b10e86294ec2 # v1.1.4
         if: runner.os != 'Windows'
         with:
           minimum-version: "3.121"
