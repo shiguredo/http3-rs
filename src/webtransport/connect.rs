@@ -708,7 +708,7 @@ fn parse_sf_item_string(value: &str) -> Option<String> {
     let value = strip_sf_parameters(value);
     let value = value.trim();
 
-    // クォート文字列の解析 (RFC 9651 Section 4.1.2)
+    // クォート文字列の解析 (RFC 9651 Section 3.3.3, Section 4.2.5)
     if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
         let inner = &value[1..value.len() - 1];
         // RFC 9651: バックスラッシュエスケープ (\\ → \, \" → ")

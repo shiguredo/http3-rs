@@ -6,7 +6,7 @@ Model: Opus 4.6
 
 ## 概要
 
-draft-ietf-webtrans-http3-15 Section 3.1 / 5.4 は、WebTransport ストリームのリセットに `RESET_STREAM_AT` (draft-ietf-quic-reliable-stream-reset) を用い、stream header (Quarter Stream ID prefix) を含む reliable size までは確実に配送することを要求する。これにより受信側は stream header を必ず読み切り、対応する WebTransport セッションを特定できる。
+draft-ietf-webtrans-http3-15 Section 6 / Section 4.4 / Section 5.4 は、WebTransport ストリームのリセットに `RESET_STREAM_AT` (draft-ietf-quic-reliable-stream-reset) を用い、stream header (Quarter Stream ID prefix) を含む reliable size までは確実に配送することを要求する (stream header 長要件は Section 4.4)。これにより受信側は stream header を必ず読み切り、対応する WebTransport セッションを特定できる。
 
 現状の `Connection` API はこの要件を Sans I/O 層で表現できていない。
 

@@ -144,10 +144,10 @@ pub enum Error {
     Qpack(QpackError),
     /// WebTransport セッションが draining 状態
     ///
-    /// (draft-ietf-webtrans-http3-15 Section 6)
+    /// (draft-ietf-webtrans-http3-15 Section 4.7)
     /// `WT_DRAIN_SESSION` 受信後、または GOAWAY 受信によりセッションが
     /// グレースフルシャットダウン中の場合に、新規ストリーム/データグラムの
-    /// 送信を試みると返される。
+    /// 送信を試みると返される (Section 4.7 の MAY に対し本実装は送信を拒否する)。
     WtSessionDraining(u64),
 }
 

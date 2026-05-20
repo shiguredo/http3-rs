@@ -4,7 +4,7 @@
 
 /// WebTransport セッション終了時にリセットすべきストリームの情報
 ///
-/// (draft-ietf-webtrans-http3-15 Section 3.1 / 5.4)
+/// (draft-ietf-webtrans-http3-15 Section 6 / Section 4.4 / Section 5.4)
 ///
 /// `reliable_size` は draft-ietf-quic-reliable-stream-reset の `RESET_STREAM_AT`
 /// に渡す reliable size。WebTransport データストリームの場合は stream header
@@ -160,10 +160,11 @@ pub enum Event {
         flow_control_enabled: bool,
     },
     /// WebTransport セッション draining
-    /// (draft-ietf-webtrans-http3-15 Section 6)
+    /// (draft-ietf-webtrans-http3-15 Section 4.7)
     ///
     /// WT_DRAIN_SESSION カプセルを受信した。
-    /// 新規ストリームやデータグラムの送信を停止すること。
+    /// Section 4.7 では MAY continue だが、本実装はアプリ層の早期終了を促すため
+    /// 新規ストリームやデータグラムの送信を拒否する。
     /// セッションは即座に終了しないが、グレースフルシャットダウンを開始する。
     WebTransportSessionDraining {
         /// セッション ID (CONNECT ストリーム ID)
@@ -208,7 +209,7 @@ pub enum Event {
         /// `reset_stream_at` transport parameter がネゴシエートされている場合、
         /// この値は stream header (stream type / signal value + session_id varint)
         /// のバイト数以上であることが期待される (draft-ietf-webtrans-http3-15
-        /// Section 5.4)。
+        /// Section 4.4)。
         final_size: u64,
     },
     /// WebTransport データストリームへの STOP_SENDING 受信

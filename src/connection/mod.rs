@@ -177,11 +177,12 @@ enum WtSessionState {
     /// 確立済み (200 OK 受信)
     Established,
     /// グレースフルシャットダウン中
-    /// (draft-ietf-webtrans-http3-15 Section 6)
+    /// (draft-ietf-webtrans-http3-15 Section 4.7)
     ///
     /// `WT_DRAIN_SESSION` を受信した、または GOAWAY を受けたクライアント側の
-    /// セッションがこの状態に遷移する。新規ストリーム/データグラムの送信は
-    /// 拒否されるが、既存ストリームの送受信および全てのカプセル受信は継続できる。
+    /// セッションがこの状態に遷移する。Section 4.7 では MAY continue だが、
+    /// 本実装は新規ストリーム/データグラムの送信を拒否する。
+    /// 既存ストリームの送受信および全てのカプセル受信は継続できる。
     Draining,
     /// 終了済み
     Closed,
@@ -1791,7 +1792,7 @@ impl Connection {
             }
             Capsule::DrainSession => {
                 // WT_DRAIN_SESSION: 内部状態を Draining へ遷移し、イベントで通知する
-                // (draft-ietf-webtrans-http3-15 Section 6)
+                // (draft-ietf-webtrans-http3-15 Section 4.7)
                 // セッションは即座に終了しないが、Connection 層は以後の新規
                 // ストリーム/データグラム送信を拒否する。
                 if let Some(session) = self.wt_sessions.get_mut(&session_id)
@@ -2001,7 +2002,7 @@ impl Connection {
 
             // wt_uni_streams / wt_bidi_streams から除去する前に reliable size を計算する。
             // 計算後にマップから除去する。
-            // (draft-ietf-webtrans-http3-15 Section 3.1 / 5.4)
+            // (draft-ietf-webtrans-http3-15 Section 6 / Section 4.4 / Section 5.4)
             let mut reset_streams: Vec<WtStreamReset> =
                 Vec::with_capacity(associated_stream_ids.len() + buffered_stream_ids.len());
             for &sid in &associated_stream_ids {
@@ -2714,7 +2715,7 @@ impl Connection {
                     if let Some(session) = self.wt_sessions.get(&stream_id) {
                         match session.state {
                             WtSessionState::Established | WtSessionState::Draining => {
-                                // Draining 中もカプセル受信は継続する (Section 6)
+                                // Draining 中もカプセル受信は継続する (Section 4.7)
                                 self.process_wt_capsule_data(stream_id, &data)?;
                             }
                             WtSessionState::Pending => {
@@ -5578,7 +5579,7 @@ mod tests {
     fn test_wt_session_closed_event_carries_reliable_sizes() {
         // CONNECT stream RESET によるセッション終了時、関連 WT データストリームの
         // reliable_size が stream header 長と一致していることを検証する
-        // (draft-ietf-webtrans-http3-15 Section 3.1 / 5.4)
+        // (draft-ietf-webtrans-http3-15 Section 6 / Section 4.4 / Section 5.4)
         let mut conn = make_server_with_established_wt_session(0);
 
         // session_id = 0 に紐づく WT bidi stream 4 と uni stream 2 を作成
@@ -5657,7 +5658,7 @@ mod tests {
     fn test_wt_drain_session_transitions_to_draining_and_blocks_send_datagram() {
         // WT_DRAIN_SESSION を受信したセッションは Draining へ遷移し、
         // send_datagram は Error::WtSessionDraining を返す
-        // (draft-ietf-webtrans-http3-15 Section 6)
+        // (draft-ietf-webtrans-http3-15 Section 4.7)
         let mut conn = make_server_with_established_wt_session(0);
 
         feed_drain_session_capsule(&mut conn, 0);

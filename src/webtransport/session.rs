@@ -108,7 +108,7 @@ pub struct FlowControlState {
     pub data_received: u64,
     /// 受信したデータグラム数 (DoS 監視用)
     ///
-    /// draft-ietf-webtrans-http3-15 Section 8
+    /// draft-ietf-webtrans-http3-15 Section 4.5
     /// 将来のドラフトで変更される可能性がある
     pub datagrams_received: u64,
 }

@@ -14,7 +14,7 @@ P1
 
 ## 根拠
 
-draft-ietf-webtrans-http3-15 Section 2.1.1:
+RFC 9297 Section 2.1.1:
 
 > QUIC DATAGRAM frames MUST NOT be sent until the SETTINGS_H3_DATAGRAM setting has been both sent and received with a value of 1.
 
@@ -43,7 +43,7 @@ SETTINGS のネゴシエーション完了は確認していない。Sans I/O �
 
 ## 参照
 
-- draft-ietf-webtrans-http3-15 Section 2.1.1
+- RFC 9297 Section 2.1.1
 - `src/connection/mod.rs:498-507` (feed_datagram のネゴシエーション確認)
 - `src/connection/mod.rs:562-581` (send_datagram)
 - `issues/closed/0025-bug-datagram-missing-settings-negotiation.md`

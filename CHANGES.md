@@ -13,6 +13,10 @@
 
 ### misc
 
+- [UPDATE] 仕様引用の節番号を一次資料 (`refs/`) に合わせてコメントを修正する
+  - @voluntas
+- [ADD] `refs/` に RFC 7541, RFC 9110, RFC 9651 の一次資料を追加する
+  - @voluntas
 - [UPDATE] 相互運用テスト用クレートの配置を `interop_h3` / `interop_wt` から `interop/h3` / `interop/wt` に移す
   - @voluntas
 - [UPDATE] `aws-lc-sys` を `0.40` 系へ更新する
