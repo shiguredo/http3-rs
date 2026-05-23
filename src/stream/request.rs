@@ -294,7 +294,12 @@ impl RequestStream {
             };
 
             // フレーム全体を受信できているか
-            if data.len() < header.total_len() {
+            // total_len が None なら 32bit プラットフォームで usize に収まらない
+            // → H3_FRAME_ERROR (RFC 9114 Section 7.1)
+            let Some(total_len) = header.total_len() else {
+                return Err(Error::ConnectionError(ErrorCode::FrameError));
+            };
+            if data.len() < total_len {
                 // FIN 受信済みならフレームが切断されている (RFC 9114 Section 7.1)
                 if self.recv_buf.is_fin() {
                     return Err(Error::ConnectionError(ErrorCode::FrameError));
@@ -304,7 +309,7 @@ impl RequestStream {
 
             // SETTINGS はリクエストストリームでは内容に関わらず接続エラー
             // (RFC 9114 Section 7.2.4: ペイロードデコード前に判定する)
-            if header.frame_type == 0x04 {
+            if header.frame_type().get() == 0x04 {
                 return Err(Error::ConnectionError(ErrorCode::FrameUnexpected));
             }
 
@@ -335,14 +340,14 @@ impl RequestStream {
                         // 2 回目の HEADERS はトレーラー (RFC 9114 Section 4.1)
                         self.recv_state = RequestRecvState::TrailersReceived;
                         return Ok(Some(RawReceivedData::Trailers(
-                            payload.encoded_field_section,
+                            payload.into_encoded_field_section(),
                         )));
                     } else {
                         // 最初の HEADERS
                         self.recv_state = RequestRecvState::ReceivingBody;
                     }
                     return Ok(Some(RawReceivedData::Headers(
-                        payload.encoded_field_section,
+                        payload.into_encoded_field_section(),
                     )));
                 }
                 Frame::Data(payload) => {
@@ -353,11 +358,13 @@ impl RequestStream {
                     {
                         return Err(Error::ConnectionError(ErrorCode::FrameUnexpected));
                     }
-                    self.recv_body.extend_from_slice(&payload.data);
-                    return Ok(Some(RawReceivedData::Data(payload.data)));
+                    let data = payload.into_data();
+                    self.recv_body.extend_from_slice(&data);
+                    return Ok(Some(RawReceivedData::Data(data)));
                 }
-                Frame::Unknown { .. } => {
-                    // RFC 9114: 不明なフレームは無視する (GREASE 対応)
+                Frame::Unknown(_) => {
+                    // RFC 9114 Section 9 / Section 7.2.8: 不明なフレームは無視する
+                    // (Reserved Frame Types: 0x1f * N + 0x21)
                     // ループを継続して次のフレームを処理
                 }
                 // SETTINGS/GOAWAY/MAX_PUSH_ID はリクエストストリームで受信した場合は接続エラー

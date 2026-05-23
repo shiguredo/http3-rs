@@ -61,6 +61,7 @@ pub use error::{Error, ErrorCode, FrameDecodeError, QpackError};
 pub use event::Event;
 pub use frame::{
     DataPayload, Frame, FrameHeader, FrameType, GoawayPayload, HeadersPayload, SettingsPayload,
+    UnknownFrame, UnknownFrameError,
 };
 pub use limits::Limits;
 pub use qpack::{

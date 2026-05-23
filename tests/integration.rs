@@ -169,7 +169,7 @@ fn test_goaway_exchange() -> Result<(), Box<dyn std::error::Error>> {
     let _ = server.poll_event()?;
 
     // サーバーが GOAWAY を送信
-    server.send_goaway(0)?;
+    server.send_goaway(vi(0))?;
 
     // GOAWAY データを取得して送信
     let (goaway_data, _) = server.take_stream_data(3).unwrap();
@@ -178,7 +178,32 @@ fn test_goaway_exchange() -> Result<(), Box<dyn std::error::Error>> {
 
     // クライアントが GOAWAY を受信
     let event = client.poll_event()?.unwrap();
-    assert!(matches!(event, Event::GoawayReceived { id: 0 }));
+    let Event::GoawayReceived { id } = event else {
+        panic!("expected Event::GoawayReceived, got {event:?}");
+    };
+    assert_eq!(id, vi(0));
+
+    Ok(())
+}
+
+/// GOAWAY の単調減少制約 (RFC 9114 Section 5.2: "MUST NOT increase the value")
+#[test]
+fn test_goaway_monotonic_decrease() -> Result<(), Box<dyn std::error::Error>> {
+    let mut server = ServerConnection::with_default_settings();
+    server.set_control_stream_id(3)?;
+
+    // 初回 GOAWAY (stream id 8 = client-initiated bidi 3 番目)
+    server.send_goaway(vi(8))?;
+
+    // 同一 ID の再送は許可される
+    server.send_goaway(vi(8))?;
+
+    // より小さな ID への減少も許可される
+    server.send_goaway(vi(4))?;
+
+    // より大きな ID への増加は IdError で拒否される
+    let result = server.send_goaway(vi(8));
+    assert!(result.is_err(), "GOAWAY id increase must be rejected");
 
     Ok(())
 }

@@ -2,25 +2,75 @@
 
 use crate::error::FrameDecodeError;
 use crate::settings::Setting;
-use crate::varint;
+use crate::varint::{self, VarInt};
 
-use super::{DataPayload, Frame, FrameType, GoawayPayload, HeadersPayload, SettingsPayload};
+use super::{
+    DataPayload, Frame, FrameType, GoawayPayload, HeadersPayload, SettingsPayload, UnknownFrame,
+};
 
-/// フレームヘッダー
+/// フレームヘッダー (RFC 9114 Section 7.1)
+///
+/// `frame_type` / `payload_len` は wire 上 VarInt のため
+/// [`VarInt`] 型で保持し RFC 9000 Section 16 の値域を型レベルで担保する。
+/// `header_len` は decoder が受信した wire 上の実バイト長を保持する。
+/// RFC 9000 Section 16 は最小エンコード必須ではない (frame type 例外は §12.4 の
+/// QUIC frame type のみで HTTP/3 frame type には適用されない) ため、
+/// `frame_type.encoded_len() + payload_len.encoded_len()` (値からの最小長)
+/// と一致するとは限らない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameHeader {
     /// フレームタイプ
-    pub frame_type: u64,
+    frame_type: VarInt,
     /// ペイロード長
-    pub payload_len: u64,
-    /// ヘッダーのバイト長
-    pub header_len: usize,
+    payload_len: VarInt,
+    /// ヘッダーのバイト長 (wire 上の実バイト長: type と length の VarInt 消費長の和)
+    header_len: usize,
 }
 
 impl FrameHeader {
+    /// 検証済みの値から構築する (crate 内部専用、decoder が使用)
+    ///
+    /// `frame_type` / `payload_len` は型レベルで VarInt 範囲が保証されており、
+    /// `header_len` は呼び出し側が wire 上の実バイト消費長を渡す責務を負う
+    /// (`varint::decode` の返す `consumed` の和)。本検証では下限 (= 最小エンコード長)
+    /// と上限 (= 16 バイト、VarInt 2 つ分の最大エンコード長) のみを debug_assert する。
+    pub(crate) const fn from_validated_parts(
+        frame_type: VarInt,
+        payload_len: VarInt,
+        header_len: usize,
+    ) -> Self {
+        debug_assert!(header_len >= frame_type.encoded_len() + payload_len.encoded_len());
+        debug_assert!(header_len <= 16);
+        Self {
+            frame_type,
+            payload_len,
+            header_len,
+        }
+    }
+
+    /// フレームタイプを取得
+    pub const fn frame_type(&self) -> VarInt {
+        self.frame_type
+    }
+
+    /// ペイロード長を取得
+    pub const fn payload_len(&self) -> VarInt {
+        self.payload_len
+    }
+
+    /// ヘッダーのバイト長を取得
+    pub const fn header_len(&self) -> usize {
+        self.header_len
+    }
+
     /// フレーム全体のバイト長
-    pub fn total_len(&self) -> usize {
-        self.header_len + self.payload_len as usize
+    ///
+    /// `payload_len` は最大 `2^62 - 1` (RFC 9000 Section 16) のため、
+    /// 32bit プラットフォームでは `usize` に収まらない可能性がある。
+    /// その場合は [`None`] を返し、呼び出し側でエラー扱いする。
+    pub fn total_len(&self) -> Option<usize> {
+        let payload = usize::try_from(self.payload_len.get()).ok()?;
+        self.header_len.checked_add(payload)
     }
 }
 
@@ -47,11 +97,13 @@ pub fn decode_frame_header(buf: &[u8]) -> Result<FrameHeader, FrameDecodeError> 
         return Err(FrameDecodeError::Http2Frame(frame_type.get()));
     }
 
-    Ok(FrameHeader {
-        frame_type: frame_type.get(),
-        payload_len: payload_len.get(),
-        header_len: type_len + len_len,
-    })
+    // wire 上の実バイト長を保持する (RFC 9000 Section 16 は最小エンコード必須でない
+    // ため、type_len + len_len は VarInt 値から計算した最小長と一致するとは限らない)
+    Ok(FrameHeader::from_validated_parts(
+        frame_type,
+        payload_len,
+        type_len + len_len,
+    ))
 }
 
 /// フレームをデコードする
@@ -60,16 +112,18 @@ pub fn decode_frame_header(buf: &[u8]) -> Result<FrameHeader, FrameDecodeError> 
 pub fn decode_frame(buf: &[u8]) -> Result<(Frame, usize), FrameDecodeError> {
     let header = decode_frame_header(buf)?;
 
-    let total_len = header.total_len();
+    // 32bit プラットフォームで payload_len が usize を超える場合は InvalidLength
+    let total_len = header.total_len().ok_or(FrameDecodeError::InvalidLength)?;
     if buf.len() < total_len {
         return Err(FrameDecodeError::BufferTooShort);
     }
 
-    let payload = &buf[header.header_len..total_len];
+    let payload = &buf[header.header_len()..total_len];
+    let frame_type_u64 = header.frame_type().get();
 
-    let frame = match FrameType::from_type(header.frame_type) {
-        Some(FrameType::Data) => decode_data_frame(payload)?,
-        Some(FrameType::Headers) => decode_headers_frame(payload)?,
+    let frame = match FrameType::from_type(frame_type_u64) {
+        Some(FrameType::Data) => Frame::Data(DataPayload::new(payload.to_vec())),
+        Some(FrameType::Headers) => Frame::Headers(HeadersPayload::new(payload.to_vec())),
         Some(FrameType::Settings) => decode_settings_frame(payload)?,
         Some(FrameType::Goaway) => decode_goaway_frame(payload)?,
         Some(FrameType::MaxPushId) => decode_max_push_id_frame(payload)?,
@@ -84,23 +138,15 @@ pub fn decode_frame(buf: &[u8]) -> Result<(Frame, usize), FrameDecodeError> {
             // 問わず H3_FRAME_UNEXPECTED で拒否する。
             // MAX_PUSH_ID は control stream 上で正当に受信されうるため別経路で扱う
             // (Section 7.2.7)。
-            return Err(FrameDecodeError::ServerPushNotSupported(header.frame_type));
+            return Err(FrameDecodeError::ServerPushNotSupported(frame_type_u64));
         }
-        None => Frame::Unknown {
-            frame_type: header.frame_type,
-            payload: payload.to_vec(),
-        },
+        None => Frame::Unknown(
+            UnknownFrame::new(header.frame_type(), payload.to_vec())
+                .expect("None arm receives only unknown non-HTTP/2 frame types"),
+        ),
     };
 
     Ok((frame, total_len))
-}
-
-fn decode_data_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
-    Ok(Frame::Data(DataPayload::new(payload.to_vec())))
-}
-
-fn decode_headers_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
-    Ok(Frame::Headers(HeadersPayload::new(payload.to_vec())))
 }
 
 fn decode_settings_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
@@ -131,7 +177,7 @@ fn decode_goaway_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
     if consumed != payload.len() {
         return Err(FrameDecodeError::InvalidLength);
     }
-    Ok(Frame::Goaway(GoawayPayload::new(id.get())))
+    Ok(Frame::Goaway(GoawayPayload::new(id)))
 }
 
 fn decode_max_push_id_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
@@ -140,7 +186,7 @@ fn decode_max_push_id_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
     if consumed != payload.len() {
         return Err(FrameDecodeError::InvalidLength);
     }
-    Ok(Frame::MaxPushId(id.get()))
+    Ok(Frame::MaxPushId(id))
 }
 
 #[cfg(test)]
@@ -152,15 +198,15 @@ mod tests {
         // Type=0 (DATA), Length=5
         let buf = [0x00, 0x05];
         let header = decode_frame_header(&buf).unwrap();
-        assert_eq!(header.frame_type, 0);
-        assert_eq!(header.payload_len, 5);
-        assert_eq!(header.header_len, 2);
+        assert_eq!(header.frame_type().get(), 0);
+        assert_eq!(header.payload_len().get(), 5);
+        assert_eq!(header.header_len(), 2);
 
         // Type=4 (SETTINGS), Length=10
         let buf = [0x04, 0x0a];
         let header = decode_frame_header(&buf).unwrap();
-        assert_eq!(header.frame_type, 4);
-        assert_eq!(header.payload_len, 10);
+        assert_eq!(header.frame_type().get(), 4);
+        assert_eq!(header.payload_len().get(), 10);
     }
 
     #[test]
@@ -205,12 +251,31 @@ mod tests {
 
     #[test]
     fn test_frame_header_total_len() {
-        let header = FrameHeader {
-            frame_type: 0,
-            payload_len: 100,
-            header_len: 2,
-        };
-        assert_eq!(header.total_len(), 102);
+        // frame_type 0 (1 バイト VarInt) + payload_len 50 (1 バイト VarInt) + payload 50
+        let header =
+            FrameHeader::from_validated_parts(VarInt::from_static(0), VarInt::from_static(50), 2);
+        assert_eq!(header.header_len(), 2);
+        assert_eq!(header.total_len(), Some(52));
+    }
+
+    #[test]
+    fn test_decode_frame_handles_non_minimal_varint_encoding() {
+        // RFC 9000 Section 16: 最小エンコード必須ではない (frame type 例外は QUIC layer のみ)。
+        // wire 上で type=0 を 2 バイト (0x40 0x00)、payload_len=3 を 1 バイト (0x03) で
+        // エンコードしたフレーム + payload 3 バイトを decode できることを確認する。
+        let buf = [0x40, 0x00, 0x03, 0xaa, 0xbb, 0xcc];
+        let header = decode_frame_header(&buf).unwrap();
+        assert_eq!(header.frame_type().get(), 0); // DATA
+        assert_eq!(header.payload_len().get(), 3);
+        assert_eq!(header.header_len(), 3); // 2 バイト + 1 バイト
+        assert_eq!(header.total_len(), Some(6));
+
+        let (frame, consumed) = decode_frame(&buf).unwrap();
+        assert_eq!(consumed, 6);
+        match frame {
+            Frame::Data(p) => assert_eq!(p.data(), &[0xaa, 0xbb, 0xcc][..]),
+            other => panic!("expected DATA, got {other:?}"),
+        }
     }
 
     #[test]
@@ -304,6 +369,6 @@ mod tests {
         // 受信できなければならない (RFC 9114 Section 7.2.7)。デコード自体は成功する。
         let buf = [0x0d, 0x01, 0x05];
         let result = decode_frame(&buf).unwrap();
-        assert_eq!(result, (Frame::MaxPushId(5), 3));
+        assert_eq!(result, (Frame::MaxPushId(VarInt::from_static(5)), 3));
     }
 }

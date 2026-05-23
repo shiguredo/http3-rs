@@ -40,6 +40,19 @@
 - [ADD] `SettingError` を新設し、`Setting::from_wire` / `SettingsPayload::add` の検査エラー
   (HTTP/2 専用 ID / 予約 ID / bool 値域外 / 重複 ID) を構造化エラーで通知する (`#[non_exhaustive]`)
   - @voluntas
+- [ADD] `GoawayPayload::from_static` を `const fn` で追加し、不正リテラルの GOAWAY ID
+  (RFC 9000 Section 16 の VarInt 範囲外) をコンパイル時 panic として検出可能にする
+  - @voluntas
+- [ADD] `frame::DataPayload` / `frame::HeadersPayload` にアクセサ
+  (`data` / `into_data` / `encoded_field_section` / `into_encoded_field_section` /
+  `len` / `is_empty`) を追加し、フィールド private 化後も所有権付きで取り出せるようにする
+  - @voluntas
+- [ADD] `frame::UnknownFrame` / `frame::UnknownFrameError` を新設し、`Frame::Unknown` のフィールドを
+  private 化することで既知の HTTP/3 フレームタイプ (DATA / HEADERS / CANCEL_PUSH / SETTINGS /
+  PUSH_PROMISE / GOAWAY / MAX_PUSH_ID) や HTTP/2 専用 ID (RFC 9114 Section 11.2.1 Table 2 で
+  Reserved 登録、Section 7.2.8 で受信時 H3_FRAME_UNEXPECTED: 0x02 / 0x06 / 0x08 / 0x09) を
+  `Unknown` で偽装できない不変条件を保証する
+  - @voluntas
 - [CHANGE] `varint::encode` / `varint::encode_into_vec` / `varint::decode` のシグネチャを `VarInt` を扱う形に変更する
   - @voluntas
 - [CHANGE] `varint::MAX_VALUE` / `varint::encoded_len(u64)` / `varint::try_encoded_len` / `varint::try_encode_into_vec` / `varint::EncodeError::ValueTooLarge` を削除する (`VarInt` 型が値域を保証するため)
@@ -101,6 +114,31 @@
 - [CHANGE] `webtransport::Settings::flow_control_enabled` と
   `webtransport::Settings::allows_multiple_sessions_with_peer` を削除する
   (それぞれ `declares_flow_control` / `flow_control_enabled_with_peer` への単純委譲だった)
+  - @voluntas
+- [CHANGE] `frame::DataPayload` / `frame::HeadersPayload` / `frame::GoawayPayload` の
+  全フィールドを private 化する。アクセサ経由でのみ参照可能にすることで構築後の改ざんを防ぐ
+  - @voluntas
+- [CHANGE] `frame::Frame::Unknown` を struct variant から tuple variant
+  (`Unknown(UnknownFrame)`) に変更し、フィールドを private 化する
+  - @voluntas
+- [CHANGE] `frame::GoawayPayload.id` / `frame::Frame::MaxPushId` /
+  `frame::UnknownFrame::frame_type` / `frame::Frame::frame_type()` の型を `u64` から
+  `VarInt` に変更し、RFC 9000 Section 16 の値域を型レベルで担保する。
+  `frame::GoawayPayload::new(id: VarInt)` のシグネチャも変更する
+  - @voluntas
+- [CHANGE] `frame::FrameHeader.frame_type` / `payload_len` の型を `u64` から `VarInt` に
+  変更してフィールドを private 化し、`frame_type()` / `payload_len()` / `header_len()` の
+  アクセサを提供する。`total_len()` の戻り値型を `usize` から `Option<usize>` に変更し、
+  32bit プラットフォームで `payload_len` が `usize` を超える場合に `None` を返す
+  - @voluntas
+- [CHANGE] `frame::encode_frame_header` のシグネチャを `(buf, frame_type: VarInt, payload_len: VarInt)`
+  に変更し、`u64` 受けに伴う値域検査経路を削除する
+  - @voluntas
+- [CHANGE] `event::Event::GoawayReceived.id` の型を `u64` から `VarInt` に変更する
+  - @voluntas
+- [CHANGE] `Connection::send_goaway` / `ClientConnection::send_goaway` /
+  `ServerConnection::send_goaway` の引数型を `u64` から `VarInt` に変更し、
+  ローカル API 利用時の値域違反を型レベルで排除する
   - @voluntas
 
 ### misc

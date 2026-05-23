@@ -513,14 +513,14 @@ pub struct Connection {
     /// サーバー受信なら push ID。WT / request stream の新規拒否判定に
     /// 使えるのはクライアント受信時のみ。
     /// (RFC 9114 Section 5.2)
-    peer_goaway_last_id: Option<u64>,
+    peer_goaway_last_id: Option<VarInt>,
     /// 最後に送信した GOAWAY の ID (段階的送信のために単調減少を検証する)
-    last_sent_goaway_id: Option<u64>,
+    last_sent_goaway_id: Option<VarInt>,
     /// クライアントから受信した MAX_PUSH_ID の最新値
     ///
     /// サーバープッシュ自体はサポートしないが、RFC 9114 Section 7.2.7 で定義された
     /// 単調増加制約だけは検証する (後退は H3_ID_ERROR)。
-    max_push_id: Option<u64>,
+    max_push_id: Option<VarInt>,
     /// 送信待ちストリーム ID
     writable_streams: VecDeque<u64>,
     /// QPACK ブロック中のストリームを ricnt (Required Insert Count) 順でソートする
@@ -736,7 +736,7 @@ impl Connection {
     /// (RFC 9114 Section 5.2 / 7.2.6, draft-ietf-webtrans-http3-15 Section 4.7)
     fn peer_goaway_request_boundary(&self) -> Option<u64> {
         if self.role == Role::Client {
-            self.peer_goaway_last_id
+            self.peer_goaway_last_id.map(|v| v.get())
         } else {
             None
         }
@@ -851,7 +851,7 @@ impl Connection {
             if self.role == Role::Client {
                 // 破棄 (ストリームと異なりデータグラムは RESET 不要)
             } else if let Some(last_id) = self.last_sent_goaway_id
-                && session_id >= last_id
+                && session_id >= last_id.get()
             {
                 // サーバーが GOAWAY を送信済みの場合、その境界以降の session_id に
                 // 対する新規 WebTransport セッションは受け入れない
@@ -2058,7 +2058,6 @@ impl Connection {
     /// 0 を返す (CONNECT stream や非 WT ストリーム)。将来のドラフトで stream
     /// header フォーマットが変更される可能性がある。
     pub fn wt_stream_header_len(&self, stream_id: u64) -> u64 {
-        use crate::varint::VarInt;
         use crate::webtransport::stream::{BIDIRECTIONAL_SIGNAL_VALUE, UNIDIRECTIONAL_STREAM_TYPE};
         // signal value / stream type は WebTransport プロトコルの定数なので const 文脈で
         // VarInt 構築できる (`from_static` でコンパイル時検査)。
@@ -2141,7 +2140,7 @@ impl Connection {
             // (draft-ietf-webtrans-http3-15 Section 4.7)。
             // nghttp3 lib/nghttp3_conn.c L3654 と整合。
             if let Some(last_id) = self.last_sent_goaway_id
-                && session_id >= last_id
+                && session_id >= last_id.get()
             {
                 return Err(());
             }
@@ -2520,12 +2519,13 @@ impl Connection {
                     });
                 }
                 crate::frame::Frame::Goaway(payload) => {
+                    let goaway_id = payload.id();
                     // クライアントが受信する GOAWAY の stream ID は
                     // client-initiated bidirectional stream ID でなければならない
                     // (RFC 9114 Section 7.2.6)
                     if self.role == Role::Client {
                         // client-initiated bidi stream ID は 4 の倍数 (0, 4, 8, ...)
-                        if payload.id % 4 != 0 {
+                        if goaway_id.get() % 4 != 0 {
                             return Err(Error::ConnectionError(ErrorCode::IdError));
                         }
                     }
@@ -2533,15 +2533,15 @@ impl Connection {
                     // 複数 GOAWAY の単調減少チェック (RFC 9114 Section 5.2)
                     // 値の意味はロール依存だが、単調減少制約はどちらの方向でも成立する
                     if let Some(prev_id) = self.peer_goaway_last_id
-                        && payload.id > prev_id
+                        && goaway_id > prev_id
                     {
                         return Err(Error::ConnectionError(ErrorCode::IdError));
                     }
 
                     self.peer_goaway_received = true;
-                    self.peer_goaway_last_id = Some(payload.id);
+                    self.peer_goaway_last_id = Some(goaway_id);
                     self.events
-                        .push_back(Event::GoawayReceived { id: payload.id });
+                        .push_back(Event::GoawayReceived { id: goaway_id });
 
                     // WT draining 伝播はクライアント受信時のみ行う
                     //
@@ -2556,7 +2556,7 @@ impl Connection {
                             .wt_sessions
                             .iter()
                             .filter(|(sid, session)| {
-                                **sid >= payload.id
+                                **sid >= goaway_id.get()
                                     && (session.state == WtSessionState::Established
                                         || session.state == WtSessionState::Pending)
                             })
@@ -3727,20 +3727,24 @@ impl Connection {
     ///
     /// クライアントの場合: id は push ID でなければならない。
     /// サーバープッシュ未対応のため、現在は 0 のみ許可する。
-    pub fn send_goaway(&mut self, id: u64) -> Result<(), Error> {
+    ///
+    /// 同一 ID の再送は許可される (RFC 9114 Section 5.2: "MUST NOT increase the value")。
+    /// 既に送信済みの値より大きい ID を渡すと `IdError` を返す。
+    pub fn send_goaway(&mut self, id: VarInt) -> Result<(), Error> {
         // GOAWAY ID の型検証 (RFC 9114 Section 5.2)
+        let id_u64 = id.get();
         match self.role {
             Role::Server => {
                 // サーバー → クライアント: client-initiated bidirectional stream ID
                 // client-initiated bidi stream ID は 4 の倍数 (0, 4, 8, ...)
-                if !id.is_multiple_of(4) {
+                if !id_u64.is_multiple_of(4) {
                     return Err(Error::ConnectionError(ErrorCode::IdError));
                 }
             }
             Role::Client => {
                 // クライアント → サーバー: push ID
                 // サーバープッシュ未対応のため 0 のみ許可
-                if id != 0 {
+                if id_u64 != 0 {
                     return Err(Error::ConnectionError(ErrorCode::IdError));
                 }
             }
@@ -5749,7 +5753,7 @@ mod tests {
         // セッション確立まで進めず Pending のままで GOAWAY を受信させる
 
         // サーバーが GOAWAY を送信
-        server.send_goaway(stream_id).unwrap();
+        server.send_goaway(VarInt::new(stream_id).unwrap()).unwrap();
         let (ctrl_data, _) = server.take_stream_data(3).unwrap();
         client.feed_stream(3, &ctrl_data, false).unwrap();
 

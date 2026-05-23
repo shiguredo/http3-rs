@@ -4,6 +4,7 @@ use crate::error::Error;
 use crate::event::Event;
 use crate::qpack::Header;
 use crate::settings::Settings;
+use crate::varint::VarInt;
 
 use super::{Connection, H3InitData, Role};
 
@@ -110,7 +111,7 @@ impl ClientConnection {
     }
 
     /// GOAWAY を送信
-    pub fn send_goaway(&mut self, id: u64) -> Result<(), crate::error::Error> {
+    pub fn send_goaway(&mut self, id: VarInt) -> Result<(), Error> {
         self.inner.send_goaway(id)
     }
 

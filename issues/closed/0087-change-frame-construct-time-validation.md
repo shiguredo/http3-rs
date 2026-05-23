@@ -1,7 +1,9 @@
 # 0087: 各 Frame ペイロードを構築時検査型に変更する
 
 Created: 2026-05-23
+Completed: 2026-05-24
 Model: Opus 4.7
+Branch: feature/change-frame-construct-time-validation
 
 ## 概要
 
@@ -291,3 +293,84 @@ const BAD: GoawayPayload = GoawayPayload::from_static(1u64 << 62);
 
 - [[0067-bug-fix-goaway-monotonic-decrease]] (GOAWAY 単調減少 — 接続状態依存のためランタイム検査)
 - [[0088-add-trybuild-and-pbt-construct-time-validation]] (`from_static` の compile_fail テスト)
+
+## 解決方法
+
+### Frame ペイロードの private 化とアクセサ追加
+
+- `DataPayload` / `HeadersPayload` / `GoawayPayload` の全フィールドを private 化
+  し、`data()` / `into_data()` / `encoded_field_section()` /
+  `into_encoded_field_section()` / `id()` / `len()` / `is_empty()` のアクセサを
+  提供する
+- 構築後の改ざんを防止し、利用者は所有権付き取り出しを `into_*` 経由で行う
+
+### VarInt 型化 (RFC 9000 Section 16 の値域を型レベルで担保)
+
+- `GoawayPayload.id` / `Frame::MaxPushId` / `Frame::frame_type()` の型を
+  `u64` から `VarInt` に変更
+- `FrameHeader.frame_type` / `payload_len` の型を `VarInt` に変更し、
+  フィールドを private 化、`frame_type()` / `payload_len()` / `header_len()`
+  アクセサを提供
+- `FrameHeader::total_len()` を `Option<usize>` 化し、32bit プラットフォームで
+  `payload_len` が `usize` を超える silent truncation を防止
+- `Event::GoawayReceived.id` / `Connection::send_goaway` /
+  `ClientConnection::send_goaway` / `ServerConnection::send_goaway` の
+  引数型を `VarInt` に変更
+- `frame::encode_frame_header` の引数を `(buf, frame_type: VarInt, payload_len: VarInt)`
+  に変更
+
+### Frame::Unknown を newtype 化し既知タイプ偽装を防止
+
+- `Frame::Unknown { frame_type, payload }` を `Frame::Unknown(UnknownFrame)`
+  tuple variant に変更
+- `UnknownFrame::new(frame_type, payload) -> Result<Self, UnknownFrameError>`
+  で構築時に以下を弾く:
+  - 既知の HTTP/3 フレームタイプ (RFC 9114 Section 7.2: DATA / HEADERS /
+    CANCEL_PUSH / SETTINGS / PUSH_PROMISE / GOAWAY / MAX_PUSH_ID)
+  - HTTP/2 専用 ID (RFC 9114 Section 11.2.1 Table 2 で Reserved 登録、
+    Section 7.2.8 で受信時 H3_FRAME_UNEXPECTED: 0x02 / 0x06 / 0x08 / 0x09)
+- `UnknownFrameError` を `#[non_exhaustive]` で公開、各 variant にも
+  `#[non_exhaustive]` 付与
+- decoder は `UnknownFrame::new(...).expect(...)` 経由で構築 (match の
+  `None` arm に達するのは既知/HTTP2 専用を除外した後のため `Ok` 確実)
+
+### GoawayPayload::from_static (const fn)
+
+- 不正リテラルの GOAWAY ID をコンパイル時 panic として検出可能にする
+- ロール依存の制約 (`4 の倍数` / push ID `0` のみ) は `Connection::send_goaway`
+  のランタイム検査で別途行う
+
+### FrameHeader::from_validated_parts と非最小 VarInt エンコード対応
+
+- decoder で `varint::decode` の消費長 (`type_len + len_len`) を保持し
+  `FrameHeader::from_validated_parts(frame_type, payload_len, header_len)` で
+  wire 上の実バイト長を渡す
+- RFC 9000 Section 16 は非最小 VarInt エンコードを許容する (frame type 例外は
+  QUIC layer のみで HTTP/3 frame type には適用されない) ため、値からの最小長
+  (`encoded_len()` の合計) と一致しない場合がある
+- `debug_assert!` で下限 (最小エンコード長) と上限 (16 バイト) のみ検査
+
+### CHANGES.md 更新
+
+- `[ADD]` 3 件 (GoawayPayload::from_static / DataPayload・HeadersPayload
+  アクセサ / UnknownFrame・UnknownFrameError)
+- `[CHANGE]` 8 件 (private 化、Unknown tuple variant 化、VarInt 化、
+  FrameHeader 型変更、encode_frame_header シグネチャ、GoawayReceived 型変更、
+  send_goaway 引数型変更)
+
+### 受け入れ条件との対応
+
+- `DataPayload::from_validated_parts` は実装時に削除 (`new` と完全同一で意味なし)
+- `GoawayPayload::from_validated_parts` も同様に削除 (`new(VarInt)` で型レベル保証)
+- `UnknownFrame::from_validated_parts` も削除し decoder は `UnknownFrame::new(...).expect(...)`
+- `encode_max_push_id_frame` は `encode_frame` の match arm から呼ばれるため残置
+  (送信 API は提供しないが decode → re-encode のループバックで使用)
+
+### テスト
+
+- 単体テスト: `UnknownFrame::new` の既知タイプ拒否 (全 7 種類) / HTTP/2 専用拒否
+  (全 4 種類) / Reserved Frame Type 受理 (0x21)
+- 単体テスト: 非最小 VarInt エンコードの decoder ラウンドトリップ
+- 統合テスト: GOAWAY 単調減少 (同値再送 OK / 減少 OK / 増加 NG)
+- PBT: `prop_unknown_frame_preserved` を `prop_filter` で全 VarInt 範囲から
+  既知 / HTTP/2 専用を除外する形に拡張

@@ -2,6 +2,8 @@
 //!
 //! Connection から返されるイベントを定義。
 
+use crate::varint::VarInt;
+
 /// WebTransport セッション終了時にリセットすべきストリームの情報
 ///
 /// (draft-ietf-webtrans-http3-15 Section 6 / Section 4.4 / Section 5.4)
@@ -77,8 +79,11 @@ pub enum Event {
     },
     /// GOAWAY 受信
     GoawayReceived {
-        /// GOAWAY で指定された ID
-        id: u64,
+        /// GOAWAY で指定された ID (RFC 9000 Section 16 の VarInt)
+        ///
+        /// ロール依存: クライアント受信なら request stream ID、
+        /// サーバー受信なら push ID。
+        id: VarInt,
     },
     /// WebTransport 双方向ストリーム開始
     /// (draft-ietf-webtrans-http3-15 Section 4.3)
