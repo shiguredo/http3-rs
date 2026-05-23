@@ -524,17 +524,21 @@ impl ConnectRequest {
     /// CONNECT リクエストのヘッダー配列を生成する
     ///
     /// `:protocol` の値はドラフトバージョンに依存する。
-    pub fn to_headers(&self) -> Vec<Header> {
+    ///
+    /// 各フィールドの値は `Header::new` で構築時検査される。`:authority` や `:path`
+    /// などのフィールドに RFC 9110 / RFC 9114 に違反する値が入っていた場合は
+    /// `Err(HeaderError)` を返す。
+    pub fn to_headers(&self) -> Result<Vec<Header>, crate::qpack::HeaderError> {
         let mut headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", self.draft_version.protocol_value().as_bytes()),
-            Header::new(b":scheme", self.scheme.as_bytes()),
-            Header::new(b":authority", self.authority.as_bytes()),
-            Header::new(b":path", self.path.as_bytes()),
+            Header::new(b":method", b"CONNECT")?,
+            Header::new(b":protocol", self.draft_version.protocol_value().as_bytes())?,
+            Header::new(b":scheme", self.scheme.as_bytes())?,
+            Header::new(b":authority", self.authority.as_bytes())?,
+            Header::new(b":path", self.path.as_bytes())?,
         ];
 
         if let Some(ref origin) = self.origin {
-            headers.push(Header::new(b"origin", origin.as_bytes()));
+            headers.push(Header::new(b"origin", origin.as_bytes())?);
         }
 
         if !self.available_protocols.is_empty() {
@@ -544,10 +548,10 @@ impl ConnectRequest {
                 .map(|p| format!("\"{}\"", p.replace('\\', "\\\\").replace('"', "\\\"")))
                 .collect::<Vec<_>>()
                 .join(", ");
-            headers.push(Header::new(b"wt-available-protocols", value.as_bytes()));
+            headers.push(Header::new(b"wt-available-protocols", value.as_bytes())?);
         }
 
-        headers
+        Ok(headers)
     }
 
     /// draft-ietf-webtrans-http3-15 Section 3.2 に従いリクエストを検証
@@ -610,17 +614,20 @@ impl ConnectResponse {
     }
 
     /// CONNECT レスポンスのヘッダー配列を生成する
-    pub fn to_headers(&self) -> Vec<Header> {
-        let mut headers = vec![Header::new(b":status", self.status.to_string().as_bytes())];
+    ///
+    /// `:status` や `wt-protocol` の値は `Header::new` で構築時検査される。
+    /// 不正値があれば `Err(HeaderError)` を返す。
+    pub fn to_headers(&self) -> Result<Vec<Header>, crate::qpack::HeaderError> {
+        let mut headers = vec![Header::new(b":status", self.status.to_string().as_bytes())?];
 
         if let Some(ref proto) = self.selected_protocol {
             headers.push(Header::new(
                 b"wt-protocol",
                 format!("\"{}\"", proto.replace('\\', "\\\\").replace('"', "\\\"")).as_bytes(),
-            ));
+            )?);
         }
 
-        headers
+        Ok(headers)
     }
 
     /// セッション確立成功かどうか (2xx ステータスコード)
@@ -906,56 +913,56 @@ mod tests {
     #[test]
     fn test_connect_request_to_headers_basic() {
         let req = ConnectRequest::new("https", "example.com", "/wt");
-        let headers = req.to_headers();
+        let headers = req.to_headers().unwrap();
         assert_eq!(headers.len(), 5);
-        assert_eq!(headers[0].name, b":method");
-        assert_eq!(headers[0].value, b"CONNECT");
-        assert_eq!(headers[1].name, b":protocol");
-        assert_eq!(headers[1].value, PROTOCOL_WEBTRANSPORT_H3.as_bytes());
-        assert_eq!(headers[2].name, b":scheme");
-        assert_eq!(headers[2].value, b"https");
-        assert_eq!(headers[3].name, b":authority");
-        assert_eq!(headers[3].value, b"example.com");
-        assert_eq!(headers[4].name, b":path");
-        assert_eq!(headers[4].value, b"/wt");
+        assert_eq!(headers[0].name(), b":method");
+        assert_eq!(headers[0].value(), b"CONNECT");
+        assert_eq!(headers[1].name(), b":protocol");
+        assert_eq!(headers[1].value(), PROTOCOL_WEBTRANSPORT_H3.as_bytes());
+        assert_eq!(headers[2].name(), b":scheme");
+        assert_eq!(headers[2].value(), b"https");
+        assert_eq!(headers[3].name(), b":authority");
+        assert_eq!(headers[3].value(), b"example.com");
+        assert_eq!(headers[4].name(), b":path");
+        assert_eq!(headers[4].value(), b"/wt");
     }
 
     #[test]
     fn test_connect_request_to_headers_draft02() {
         let req =
             ConnectRequest::new("https", "example.com", "/wt").draft_version(DraftVersion::Draft02);
-        let headers = req.to_headers();
-        assert_eq!(headers[1].name, b":protocol");
-        assert_eq!(headers[1].value, PROTOCOL_WEBTRANSPORT_DRAFT02.as_bytes());
+        let headers = req.to_headers().unwrap();
+        assert_eq!(headers[1].name(), b":protocol");
+        assert_eq!(headers[1].value(), PROTOCOL_WEBTRANSPORT_DRAFT02.as_bytes());
     }
 
     #[test]
     fn test_connect_request_to_headers_draft07() {
         let req =
             ConnectRequest::new("https", "example.com", "/wt").draft_version(DraftVersion::Draft07);
-        let headers = req.to_headers();
-        assert_eq!(headers[1].name, b":protocol");
-        assert_eq!(headers[1].value, PROTOCOL_WEBTRANSPORT_DRAFT02.as_bytes());
+        let headers = req.to_headers().unwrap();
+        assert_eq!(headers[1].name(), b":protocol");
+        assert_eq!(headers[1].value(), PROTOCOL_WEBTRANSPORT_DRAFT02.as_bytes());
     }
 
     #[test]
     fn test_connect_request_to_headers_with_origin() {
         let req =
             ConnectRequest::new("https", "example.com", "/wt").origin("https://client.example");
-        let headers = req.to_headers();
+        let headers = req.to_headers().unwrap();
         assert_eq!(headers.len(), 6);
-        assert_eq!(headers[5].name, b"origin");
-        assert_eq!(headers[5].value, b"https://client.example");
+        assert_eq!(headers[5].name(), b"origin");
+        assert_eq!(headers[5].value(), b"https://client.example");
     }
 
     #[test]
     fn test_connect_request_to_headers_with_available_protocols() {
         let req = ConnectRequest::new("https", "example.com", "/wt")
             .available_protocols(vec!["moq".to_string(), "chat".to_string()]);
-        let headers = req.to_headers();
+        let headers = req.to_headers().unwrap();
         assert_eq!(headers.len(), 6);
-        assert_eq!(headers[5].name, b"wt-available-protocols");
-        assert_eq!(headers[5].value, b"\"moq\", \"chat\"");
+        assert_eq!(headers[5].name(), b"wt-available-protocols");
+        assert_eq!(headers[5].value(), b"\"moq\", \"chat\"");
     }
 
     #[test]
@@ -1038,11 +1045,8 @@ mod tests {
         // to_headers で生成したヘッダーを from_headers でパースする
         let original =
             ConnectRequest::new("https", "example.com", "/wt").origin("https://client.example");
-        let headers = original.to_headers();
-        let pairs: Vec<(&[u8], &[u8])> = headers
-            .iter()
-            .map(|h| (h.name.as_slice(), h.value.as_slice()))
-            .collect();
+        let headers = original.to_headers().unwrap();
+        let pairs: Vec<(&[u8], &[u8])> = headers.iter().map(|h| (h.name(), h.value())).collect();
         let parsed = ConnectRequest::from_headers(&pairs).unwrap();
         assert_eq!(parsed.scheme, original.scheme);
         assert_eq!(parsed.authority, original.authority);
@@ -1053,19 +1057,19 @@ mod tests {
     #[test]
     fn test_connect_response_to_headers_basic() {
         let resp = ConnectResponse::new(200);
-        let headers = resp.to_headers();
+        let headers = resp.to_headers().unwrap();
         assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].name, b":status");
-        assert_eq!(headers[0].value, b"200");
+        assert_eq!(headers[0].name(), b":status");
+        assert_eq!(headers[0].value(), b"200");
     }
 
     #[test]
     fn test_connect_response_to_headers_with_protocol() {
         let resp = ConnectResponse::new(200).with_protocol("moq");
-        let headers = resp.to_headers();
+        let headers = resp.to_headers().unwrap();
         assert_eq!(headers.len(), 2);
-        assert_eq!(headers[1].name, b"wt-protocol");
-        assert_eq!(headers[1].value, b"\"moq\"");
+        assert_eq!(headers[1].name(), b"wt-protocol");
+        assert_eq!(headers[1].value(), b"\"moq\"");
     }
 
     #[test]

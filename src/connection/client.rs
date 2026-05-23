@@ -154,10 +154,10 @@ mod tests {
         client.set_control_stream_id(2).unwrap();
 
         let headers = vec![
-            Header::new(b":method", b"GET"),
-            Header::new(b":path", b"/"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
+            Header::new(b":method", b"GET").unwrap(),
+            Header::new(b":path", b"/").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
         ];
 
         let stream_id = client.send_request(&headers, true).unwrap();

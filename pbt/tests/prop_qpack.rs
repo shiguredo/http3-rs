@@ -1,11 +1,22 @@
 //! Property-Based Testing for QPACK (RFC 9204)
 
+use std::borrow::Cow;
+
 use proptest::prelude::*;
 use shiguredo_http3::qpack::{
     DecodeOutput, Decoder, DecoderInstruction, DecoderStream, DecoderStreamReceiver,
     DynamicDecoder, DynamicEncoder, DynamicEntry, DynamicTable, Encoder, EncoderInstruction,
     EncoderStream, EncoderStreamReceiver, Header, STATIC_TABLE_LEN, find_static_entry, huffman,
 };
+
+/// PBT 用のテストヘルパー: 検査をスキップして `Header` を構築する
+///
+/// strategy が生成するバイト列は `Header::new` の構築時検査を必ずしも通らないため、
+/// QPACK encoder の入力構築には検査バイパス経路を使う。
+/// (`Header::from_validated_parts` は `internal-test` フィーチャー経由で利用)
+fn unchecked_header(name: &[u8], value: &[u8]) -> Header {
+    Header::from_validated_parts(Cow::Owned(name.to_vec()), Cow::Owned(value.to_vec()))
+}
 
 /// 動的テーブル容量 (RFC 9204 Section 3.2)
 const DYNAMIC_TABLE_CAPACITY: u64 = 4096;
@@ -26,12 +37,28 @@ prop_compose! {
 
 prop_compose! {
     /// 有効なヘッダー値を生成
+    ///
+    /// RFC 9110 Section 5.5 の field-content に従い、両端は field-vchar
+    /// (0x21-0x7E)、間には SP (0x20) も許す。空文字列も valid。
+    /// (obs-text 0x80-0xFF は QPACK Huffman デコードとの整合性を保つため除外)
     fn valid_header_value()(
         len in 0usize..256,
     )(
-        value in prop::collection::vec(0x20u8..0x7f, len)
+        middle in prop::collection::vec(0x20u8..=0x7e, len),
     ) -> Vec<u8> {
-        value
+        if middle.is_empty() {
+            return Vec::new();
+        }
+        let mut v = middle;
+        // 両端は field-vchar (0x21..=0x7e) でなければならない
+        if v[0] == 0x20 {
+            v[0] = 0x21;
+        }
+        let last = v.len() - 1;
+        if v[last] == 0x20 {
+            v[last] = 0x21;
+        }
+        v
     }
 }
 
@@ -484,7 +511,7 @@ prop_compose! {
         idx in 0usize..STATIC_TABLE_LEN
     ) -> Vec<u8> {
         use shiguredo_http3::qpack::STATIC_TABLE;
-        STATIC_TABLE[idx].name.to_vec()
+        STATIC_TABLE[idx].name().to_vec()
     }
 }
 
@@ -498,8 +525,8 @@ proptest! {
         let decoder = Decoder::new();
 
         let headers = vec![
-            Header::new(b":method", b"GET"),
-            Header::new(b":path", value.clone()),
+            unchecked_header(b":method", b"GET"),
+            unchecked_header(b":path", &value),
         ];
 
         let mut buf = vec![0u8; 1024];
@@ -508,10 +535,10 @@ proptest! {
         let decoded = decoder.decode(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded.len(), 2);
-        prop_assert_eq!(&decoded[0].name, b":method");
-        prop_assert_eq!(&decoded[0].value, b"GET");
-        prop_assert_eq!(&decoded[1].name, b":path");
-        prop_assert_eq!(&decoded[1].value, &value);
+        prop_assert_eq!(&decoded[0].name(), b":method");
+        prop_assert_eq!(&decoded[0].value(), b"GET");
+        prop_assert_eq!(&decoded[1].name(), b":path");
+        prop_assert_eq!(&decoded[1].value(), &value);
     }
 
     /// Property: Encoder/Decoder ラウンドトリップ (カスタムヘッダー)
@@ -523,7 +550,7 @@ proptest! {
         let encoder = Encoder::new();
         let decoder = Decoder::new();
 
-        let headers = vec![Header::new(name.clone(), value.clone())];
+        let headers = vec![unchecked_header(&name, &value)];
 
         let mut buf = vec![0u8; 1024];
         let encoded_len = encoder.encode(&mut buf, &headers).unwrap();
@@ -531,8 +558,8 @@ proptest! {
         let decoded = decoder.decode(&buf[..encoded_len]).unwrap();
 
         prop_assert_eq!(decoded.len(), 1);
-        prop_assert_eq!(&decoded[0].name, &name);
-        prop_assert_eq!(&decoded[0].value, &value);
+        prop_assert_eq!(&decoded[0].name(), &name);
+        prop_assert_eq!(&decoded[0].value(), &value);
     }
 
     /// Property: 複数ヘッダーのラウンドトリップ
@@ -548,7 +575,7 @@ proptest! {
 
         let headers: Vec<Header> = headers_data
             .iter()
-            .map(|(n, v)| Header::new(n.clone(), v.clone()))
+            .map(|(n, v)| unchecked_header(n, v))
             .collect();
 
         let mut buf = vec![0u8; 4096];
@@ -558,8 +585,8 @@ proptest! {
 
         prop_assert_eq!(decoded.len(), headers.len());
         for (orig, dec) in headers_data.iter().zip(decoded.iter()) {
-            prop_assert_eq!(&dec.name, &orig.0);
-            prop_assert_eq!(&dec.value, &orig.1);
+            prop_assert_eq!(&dec.name(), &orig.0);
+            prop_assert_eq!(&dec.value(), &orig.1);
         }
     }
 }
@@ -575,7 +602,7 @@ proptest! {
         use shiguredo_http3::qpack::STATIC_TABLE;
         let entry = &STATIC_TABLE[idx];
 
-        let (exact, name_only) = find_static_entry(entry.name, entry.value);
+        let (exact, name_only) = find_static_entry(entry.name(), entry.value());
 
         // 完全一致が見つかる場合、name_only も Some
         if exact.is_some() {
@@ -870,7 +897,7 @@ prop_compose! {
         name in valid_header_name(),
         value in valid_header_value(),
     ) -> Header {
-        Header::new(name, value)
+        unchecked_header(&name, &value)
     }
 }
 
@@ -909,8 +936,8 @@ proptest! {
             Ok(DecodeOutput::Decoded(decoded)) => {
                 prop_assert_eq!(headers.len(), decoded.len());
                 for (orig, dec) in headers.iter().zip(decoded.iter()) {
-                    prop_assert_eq!(orig.name.clone(), dec.name.clone());
-                    prop_assert_eq!(orig.value.clone(), dec.value.clone());
+                    prop_assert_eq!(orig.name().to_vec(), dec.name().to_vec());
+                    prop_assert_eq!(orig.value().to_vec(), dec.value().to_vec());
                 }
             }
             // テーブル状態の不一致によるブロックやエラーは許容
@@ -931,7 +958,7 @@ proptest! {
         encoder.set_table_capacity(DYNAMIC_TABLE_CAPACITY);
         encoder.insert(entry_name.clone(), entry_value.clone());
 
-        let headers = vec![Header::new(entry_name.clone(), entry_value.clone())];
+        let headers = vec![unchecked_header(&entry_name, &entry_value)];
         let mut buf = vec![0u8; 64 * 1024];
         let Some(encoded_len) = encoder.encode(&mut buf, &headers, 0) else {
             return Ok(());
@@ -967,8 +994,8 @@ proptest! {
             (first_result, second_result)
         {
             prop_assert_eq!(decoded.len(), 1);
-            prop_assert_eq!(decoded[0].name.clone(), entry_name);
-            prop_assert_eq!(decoded[0].value.clone(), entry_value);
+            prop_assert_eq!(decoded[0].name().to_vec(), entry_name);
+            prop_assert_eq!(decoded[0].value().to_vec(), entry_value);
         }
     }
 }

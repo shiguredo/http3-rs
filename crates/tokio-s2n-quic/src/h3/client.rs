@@ -171,14 +171,14 @@ impl H3Client {
             let mut s = self.state.lock().unwrap();
 
             let mut headers = Vec::new();
-            headers.push(Header::new(b":method", request.method.as_slice()));
-            headers.push(Header::new(b":path", request.path.as_slice()));
-            headers.push(Header::new(b":scheme", b"https"));
+            headers.push(Header::new(b":method", request.method.as_slice())?);
+            headers.push(Header::new(b":path", request.path.as_slice())?);
+            headers.push(Header::new(b":scheme", b"https")?);
             if let Some(ref authority) = request.authority {
-                headers.push(Header::new(b":authority", authority.as_slice()));
+                headers.push(Header::new(b":authority", authority.as_slice())?);
             }
             for (name, value) in &request.headers {
-                headers.push(Header::new(name.as_slice(), value.as_slice()));
+                headers.push(Header::new(name.as_slice(), value.as_slice())?);
             }
 
             let fin = request.body.is_empty();

@@ -38,11 +38,11 @@ fn test_client_server_exchange() -> Result<(), Box<dyn std::error::Error>> {
 
     // クライアントがリクエストを送信
     let request_headers = vec![
-        Header::new(b":method", b"GET"),
-        Header::new(b":path", b"/index.html"),
-        Header::new(b":scheme", b"https"),
-        Header::new(b":authority", b"example.com"),
-        Header::new(b"user-agent", b"shiguredo-http3/1.0"),
+        Header::new(b":method", b"GET").unwrap(),
+        Header::new(b":path", b"/index.html").unwrap(),
+        Header::new(b":scheme", b"https").unwrap(),
+        Header::new(b":authority", b"example.com").unwrap(),
+        Header::new(b"user-agent", b"shiguredo-http3/1.0").unwrap(),
     ];
 
     let stream_id = client.send_request(&request_headers, true)?;
@@ -99,9 +99,9 @@ fn test_client_server_exchange() -> Result<(), Box<dyn std::error::Error>> {
 
     // サーバーがレスポンスを送信
     let response_headers = vec![
-        Header::new(b":status", b"200"),
-        Header::new(b"content-type", b"text/html"),
-        Header::new(b"content-length", b"13"),
+        Header::new(b":status", b"200").unwrap(),
+        Header::new(b"content-type", b"text/html").unwrap(),
+        Header::new(b"content-length", b"13").unwrap(),
     ];
 
     server.send_response(stream_id, &response_headers, false)?;
@@ -201,17 +201,17 @@ fn test_multiple_requests() -> Result<(), Box<dyn std::error::Error>> {
 
     // 複数のリクエストを送信
     let headers1 = vec![
-        Header::new(b":method", b"GET"),
-        Header::new(b":path", b"/page1"),
-        Header::new(b":scheme", b"https"),
-        Header::new(b":authority", b"example.com"),
+        Header::new(b":method", b"GET").unwrap(),
+        Header::new(b":path", b"/page1").unwrap(),
+        Header::new(b":scheme", b"https").unwrap(),
+        Header::new(b":authority", b"example.com").unwrap(),
     ];
 
     let headers2 = vec![
-        Header::new(b":method", b"GET"),
-        Header::new(b":path", b"/page2"),
-        Header::new(b":scheme", b"https"),
-        Header::new(b":authority", b"example.com"),
+        Header::new(b":method", b"GET").unwrap(),
+        Header::new(b":path", b"/page2").unwrap(),
+        Header::new(b":scheme", b"https").unwrap(),
+        Header::new(b":authority", b"example.com").unwrap(),
     ];
 
     let stream_id1 = client.send_request(&headers1, true)?;

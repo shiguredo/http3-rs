@@ -41,10 +41,10 @@ proptest! {
         client.set_control_stream_id(2).unwrap();
 
         let request_headers = vec![
-            Header::new(b":method", b"POST"),
-            Header::new(b":path", b"/"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
+            Header::new(b":method", b"POST").unwrap(),
+            Header::new(b":path", b"/").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
         ];
 
         // ボディ付きリクエストを送信 (fin=false でヘッダーのみ先に送信)
@@ -69,10 +69,10 @@ proptest! {
         client.set_control_stream_id(2).unwrap();
 
         let request_headers = vec![
-            Header::new(b":method", b"POST"),
-            Header::new(b":path", b"/"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
+            Header::new(b":method", b"POST").unwrap(),
+            Header::new(b":path", b"/").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
         ];
 
         let stream_id = client.send_request(&request_headers, false).unwrap();
@@ -98,10 +98,10 @@ proptest! {
         client.set_control_stream_id(2).unwrap();
 
         let request_headers = vec![
-            Header::new(b":method", b"POST"),
-            Header::new(b":path", b"/"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
+            Header::new(b":method", b"POST").unwrap(),
+            Header::new(b":path", b"/").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
         ];
 
         let stream_id = client.send_request(&request_headers, false).unwrap();

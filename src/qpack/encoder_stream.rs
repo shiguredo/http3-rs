@@ -280,7 +280,7 @@ impl EncoderStreamReceiver {
             STATIC_TABLE
                 .get(name_index as usize)
                 .ok_or(QpackError::InvalidIndex(name_index))?
-                .name
+                .name()
                 .to_vec()
         } else {
             table

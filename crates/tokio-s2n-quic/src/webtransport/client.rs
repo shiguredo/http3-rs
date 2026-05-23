@@ -147,7 +147,7 @@ impl WtClient {
 
             let connect_req = ConnectRequest::new("https", &config.server_name, path)
                 .draft_version(config.draft_version);
-            let headers = connect_req.to_headers();
+            let headers = connect_req.to_headers()?;
 
             let h3_stream_id = s.send_request(&headers, false)?;
             if h3_stream_id != connect_stream_id {

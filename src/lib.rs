@@ -23,10 +23,10 @@
 //!
 //! // リクエストを送信
 //! let stream_id = conn.send_request(&[
-//!     Header::new(b":method", b"GET"),
-//!     Header::new(b":path", b"/"),
-//!     Header::new(b":scheme", b"https"),
-//!     Header::new(b":authority", b"example.com"),
+//!     Header::new(b":method", b"GET").unwrap(),
+//!     Header::new(b":path", b"/").unwrap(),
+//!     Header::new(b":scheme", b"https").unwrap(),
+//!     Header::new(b":authority", b"example.com").unwrap(),
 //! ], true).unwrap();
 //!
 //! // QUIC からデータを受信
@@ -64,11 +64,10 @@ pub use frame::{
 };
 pub use limits::Limits;
 pub use qpack::{
-    DecodedHeader, Decoder as QpackDecoder, DecoderInstruction, DecoderStream,
-    DecoderStreamReceiver, DynamicDecoder, DynamicEncoder, DynamicEntry, DynamicTable,
-    Encoder as QpackEncoder, EncoderInstruction, EncoderStream, EncoderStreamReceiver, Header,
+    Decoder as QpackDecoder, DecoderInstruction, DecoderStream, DecoderStreamReceiver,
+    DynamicDecoder, DynamicEncoder, DynamicEntry, DynamicTable, Encoder as QpackEncoder,
+    EncoderInstruction, EncoderStream, EncoderStreamReceiver, Header, HeaderError,
 };
 pub use settings::{Settings, SettingsId};
 pub use stream::{RequestStream, StreamKind, StreamState, UniStreamType};
-pub use validation::HeaderField;
 pub use varint::{VarInt, VarIntError};

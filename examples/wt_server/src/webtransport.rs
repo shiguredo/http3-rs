@@ -69,6 +69,12 @@ impl From<shiguredo_http3::Error> for Error {
     }
 }
 
+impl From<shiguredo_http3::HeaderError> for Error {
+    fn from(e: shiguredo_http3::HeaderError) -> Self {
+        Self::InvalidState(format!("invalid header: {e}"))
+    }
+}
+
 impl From<s2n_quic::connection::Error> for Error {
     fn from(e: s2n_quic::connection::Error) -> Self {
         Self::transport(e)
@@ -563,7 +569,7 @@ impl WtSessionRequest {
     /// セッションリクエストを受け入れる
     pub async fn accept(self) -> Result<WtSession> {
         tracing::info!("WebTransport: sending 200 response for CONNECT...");
-        let response_headers = ConnectResponse::new(200).to_headers();
+        let response_headers = ConnectResponse::new(200).to_headers()?;
 
         let data = {
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -603,7 +609,7 @@ impl WtSessionRequest {
                 "reject status must be 4xx or 5xx, got {status}"
             )));
         }
-        let response_headers = ConnectResponse::new(status).to_headers();
+        let response_headers = ConnectResponse::new(status).to_headers()?;
         let data = {
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
             s.h3_conn

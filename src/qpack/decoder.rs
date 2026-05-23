@@ -7,28 +7,30 @@
 //! - `Decoder`: 静的テーブルのみを使用するシンプルなデコーダー
 //! - `DynamicDecoder`: 動的テーブルも使用する拡張デコーダー
 
+use std::borrow::Cow;
+
 use crate::error::QpackError;
 
 use super::dynamic_table::DynamicTable;
+use super::header::Header;
 use super::huffman;
 use super::table::{STATIC_TABLE_LEN, get_static_entry};
-
-/// デコードされたヘッダー
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DecodedHeader {
-    /// ヘッダー名
-    pub name: Vec<u8>,
-    /// ヘッダー値
-    pub value: Vec<u8>,
-}
 
 /// QPACK 動的デコードの結果 (RFC 9204 Section 2.1.2)
 #[derive(Debug)]
 pub enum DecodeOutput {
     /// デコード成功
-    Decoded(Vec<DecodedHeader>),
+    Decoded(Vec<Header>),
     /// ブロッキング (Required Insert Count > Insert Count)
     Blocked,
+}
+
+/// QPACK デコード由来のバイト列から検査をスキップして `Header` を構築する
+///
+/// デコード経路は wire 上のバイト列から構築する。受信側の検証は
+/// `validation` モジュールで別途実施するため、ここでは構築時検査をスキップする。
+fn header_from_decoded(name: Vec<u8>, value: Vec<u8>) -> Header {
+    Header::from_validated_parts_internal(Cow::Owned(name), Cow::Owned(value))
 }
 
 /// QPACK デコーダー
@@ -53,7 +55,7 @@ impl Decoder {
     }
 
     /// エンコードされたフィールドセクションをデコード
-    pub fn decode(&self, data: &[u8]) -> Result<Vec<DecodedHeader>, QpackError> {
+    pub fn decode(&self, data: &[u8]) -> Result<Vec<Header>, QpackError> {
         if data.len() < 2 {
             return Err(QpackError::BufferTooShort);
         }
@@ -83,7 +85,7 @@ impl Decoder {
         while offset < data.len() {
             let (header, consumed) = self.decode_header(&data[offset..])?;
 
-            total_size += (header.name.len() + header.value.len() + 32) as u64;
+            total_size += (header.name().len() + header.value().len() + 32) as u64;
             if total_size > self.max_field_section_size {
                 return Err(QpackError::DecodeFailed);
             }
@@ -96,7 +98,7 @@ impl Decoder {
     }
 
     /// 単一のヘッダーをデコード
-    fn decode_header(&self, data: &[u8]) -> Result<(DecodedHeader, usize), QpackError> {
+    fn decode_header(&self, data: &[u8]) -> Result<(Header, usize), QpackError> {
         if data.is_empty() {
             return Err(QpackError::BufferTooShort);
         }
@@ -126,7 +128,7 @@ impl Decoder {
     /// Indexed Field Line をデコード
     ///
     /// Format: 1TNNNNNN
-    fn decode_indexed_field(&self, data: &[u8]) -> Result<(DecodedHeader, usize), QpackError> {
+    fn decode_indexed_field(&self, data: &[u8]) -> Result<(Header, usize), QpackError> {
         let is_static = (data[0] & 0x40) != 0;
 
         if !is_static {
@@ -142,22 +144,13 @@ impl Decoder {
 
         let entry = get_static_entry(index as usize).ok_or(QpackError::InvalidIndex(index))?;
 
-        Ok((
-            DecodedHeader {
-                name: entry.name.to_vec(),
-                value: entry.value.to_vec(),
-            },
-            consumed,
-        ))
+        Ok((entry.clone(), consumed))
     }
 
     /// Literal Field Line with Name Reference をデコード
     ///
     /// Format: 01NTNNNN
-    fn decode_literal_with_name_ref(
-        &self,
-        data: &[u8],
-    ) -> Result<(DecodedHeader, usize), QpackError> {
+    fn decode_literal_with_name_ref(&self, data: &[u8]) -> Result<(Header, usize), QpackError> {
         let is_static = (data[0] & 0x10) != 0;
 
         if !is_static {
@@ -176,22 +169,19 @@ impl Decoder {
         }
 
         let entry = get_static_entry(index as usize).ok_or(QpackError::InvalidIndex(index))?;
-        let name = entry.name.to_vec();
+        let name = entry.name().to_vec();
 
         // Value
         let (value, value_len) = self.decode_string(&data[offset..])?;
         offset += value_len;
 
-        Ok((DecodedHeader { name, value }, offset))
+        Ok((header_from_decoded(name, value), offset))
     }
 
     /// Literal Field Line with Literal Name をデコード
     ///
     /// Format: 001NNNNN
-    fn decode_literal_with_literal_name(
-        &self,
-        data: &[u8],
-    ) -> Result<(DecodedHeader, usize), QpackError> {
+    fn decode_literal_with_literal_name(&self, data: &[u8]) -> Result<(Header, usize), QpackError> {
         let mut offset = 0;
 
         // Skip prefix byte (already validated)
@@ -209,7 +199,7 @@ impl Decoder {
         let (value, value_len) = self.decode_string(&data[offset..])?;
         offset += value_len;
 
-        Ok((DecodedHeader { name, value }, offset))
+        Ok((header_from_decoded(name, value), offset))
     }
 
     /// 文字列をデコード
@@ -414,7 +404,7 @@ impl DynamicDecoder {
             let (header, consumed) =
                 self.decode_header(&data[offset..], base, required_insert_count)?;
 
-            total_size += (header.name.len() + header.value.len() + 32) as u64;
+            total_size += (header.name().len() + header.value().len() + 32) as u64;
             if total_size > self.max_field_section_size {
                 return Err(QpackError::DecodeFailed);
             }
@@ -468,7 +458,7 @@ impl DynamicDecoder {
         data: &[u8],
         base: u64,
         required_insert_count: u64,
-    ) -> Result<(DecodedHeader, usize), QpackError> {
+    ) -> Result<(Header, usize), QpackError> {
         if data.is_empty() {
             return Err(QpackError::BufferTooShort);
         }
@@ -501,7 +491,7 @@ impl DynamicDecoder {
         data: &[u8],
         base: u64,
         required_insert_count: u64,
-    ) -> Result<(DecodedHeader, usize), QpackError> {
+    ) -> Result<(Header, usize), QpackError> {
         let is_static = (data[0] & 0x40) != 0;
 
         let (index, consumed) = decode_integer(data, 6)?;
@@ -512,13 +502,7 @@ impl DynamicDecoder {
                 return Err(QpackError::InvalidIndex(index));
             }
             let entry = get_static_entry(index as usize).ok_or(QpackError::InvalidIndex(index))?;
-            Ok((
-                DecodedHeader {
-                    name: entry.name.to_vec(),
-                    value: entry.value.to_vec(),
-                },
-                consumed,
-            ))
+            Ok((entry.clone(), consumed))
         } else {
             // 動的テーブル (相対インデックス)
             // absolute_index = base - index - 1
@@ -535,10 +519,7 @@ impl DynamicDecoder {
                 .get_by_relative_index_repr(index, base)
                 .ok_or(QpackError::InvalidIndex(index))?;
             Ok((
-                DecodedHeader {
-                    name: entry.name.clone(),
-                    value: entry.value.clone(),
-                },
+                header_from_decoded(entry.name.clone(), entry.value.clone()),
                 consumed,
             ))
         }
@@ -552,7 +533,7 @@ impl DynamicDecoder {
         data: &[u8],
         base: u64,
         required_insert_count: u64,
-    ) -> Result<(DecodedHeader, usize), QpackError> {
+    ) -> Result<(Header, usize), QpackError> {
         let (post_base_index, consumed) = decode_integer(data, 4)?;
 
         // absolute_index = base + post_base_index
@@ -569,10 +550,7 @@ impl DynamicDecoder {
             .ok_or(QpackError::InvalidIndex(post_base_index))?;
 
         Ok((
-            DecodedHeader {
-                name: entry.name.clone(),
-                value: entry.value.clone(),
-            },
+            header_from_decoded(entry.name.clone(), entry.value.clone()),
             consumed,
         ))
     }
@@ -585,7 +563,7 @@ impl DynamicDecoder {
         data: &[u8],
         base: u64,
         required_insert_count: u64,
-    ) -> Result<(DecodedHeader, usize), QpackError> {
+    ) -> Result<(Header, usize), QpackError> {
         let is_static = (data[0] & 0x10) != 0;
 
         let mut offset = 0;
@@ -599,7 +577,7 @@ impl DynamicDecoder {
                 return Err(QpackError::InvalidIndex(index));
             }
             let entry = get_static_entry(index as usize).ok_or(QpackError::InvalidIndex(index))?;
-            entry.name.to_vec()
+            entry.name().to_vec()
         } else {
             // absolute_index = base - index - 1
             // RFC 9204 Section 2.2.3: absolute index >= Required Insert Count は
@@ -621,7 +599,7 @@ impl DynamicDecoder {
         let (value, value_len) = decode_string(&data[offset..])?;
         offset += value_len;
 
-        Ok((DecodedHeader { name, value }, offset))
+        Ok((header_from_decoded(name, value), offset))
     }
 
     /// Literal Field Line with Post-Base Name Reference をデコード
@@ -632,7 +610,7 @@ impl DynamicDecoder {
         data: &[u8],
         base: u64,
         required_insert_count: u64,
-    ) -> Result<(DecodedHeader, usize), QpackError> {
+    ) -> Result<(Header, usize), QpackError> {
         let mut offset = 0;
 
         // Name index (post-base)
@@ -657,16 +635,13 @@ impl DynamicDecoder {
         let (value, value_len) = decode_string(&data[offset..])?;
         offset += value_len;
 
-        Ok((DecodedHeader { name, value }, offset))
+        Ok((header_from_decoded(name, value), offset))
     }
 
     /// Literal Field Line with Literal Name をデコード
     ///
     /// Format: 001NNNNN
-    fn decode_literal_with_literal_name(
-        &self,
-        data: &[u8],
-    ) -> Result<(DecodedHeader, usize), QpackError> {
+    fn decode_literal_with_literal_name(&self, data: &[u8]) -> Result<(Header, usize), QpackError> {
         let mut offset = 0;
 
         // Skip prefix byte (already validated)
@@ -683,7 +658,7 @@ impl DynamicDecoder {
         let (value, value_len) = decode_string(&data[offset..])?;
         offset += value_len;
 
-        Ok((DecodedHeader { name, value }, offset))
+        Ok((header_from_decoded(name, value), offset))
     }
 
     /// エントリを動的テーブルに挿入
@@ -788,7 +763,8 @@ fn decode_string_with_len(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::qpack::encoder::{Encoder, Header};
+    use crate::qpack::encoder::Encoder;
+    use crate::qpack::header::Header;
 
     #[test]
     fn test_decode_indexed_field() {
@@ -799,8 +775,8 @@ mod tests {
         let headers = decoder.decode(&data).unwrap();
 
         assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].name, b":method");
-        assert_eq!(headers[0].value, b"GET");
+        assert_eq!(headers[0].name(), b":method");
+        assert_eq!(headers[0].value(), b"GET");
     }
 
     #[test]
@@ -820,8 +796,8 @@ mod tests {
         let headers = decoder.decode(&data).unwrap();
 
         assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].name, b":status");
-        assert_eq!(headers[0].value, b"201");
+        assert_eq!(headers[0].name(), b":status");
+        assert_eq!(headers[0].value(), b"201");
     }
 
     #[test]
@@ -830,9 +806,9 @@ mod tests {
         let decoder = Decoder::new();
 
         let original = vec![
-            Header::new(b":method", b"GET"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":path", b"/"),
+            Header::new(b":method", b"GET").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":path", b"/").unwrap(),
         ];
 
         let mut buf = vec![0u8; 128];
@@ -842,8 +818,8 @@ mod tests {
 
         assert_eq!(decoded.len(), original.len());
         for (dec, orig) in decoded.iter().zip(original.iter()) {
-            assert_eq!(dec.name, orig.name);
-            assert_eq!(dec.value, orig.value);
+            assert_eq!(dec.name(), orig.name());
+            assert_eq!(dec.value(), orig.value());
         }
     }
 
@@ -853,8 +829,8 @@ mod tests {
         let decoder = Decoder::new();
 
         let original = vec![
-            Header::new(b":method", b"GET"),
-            Header::new(b":authority", b"www.example.com"),
+            Header::new(b":method", b"GET").unwrap(),
+            Header::new(b":authority", b"www.example.com").unwrap(),
         ];
 
         let mut buf = vec![0u8; 128];
@@ -863,10 +839,10 @@ mod tests {
         let decoded = decoder.decode(&buf[..len]).unwrap();
 
         assert_eq!(decoded.len(), original.len());
-        assert_eq!(decoded[0].name, b":method");
-        assert_eq!(decoded[0].value, b"GET");
-        assert_eq!(decoded[1].name, b":authority");
-        assert_eq!(decoded[1].value, b"www.example.com");
+        assert_eq!(decoded[0].name(), b":method");
+        assert_eq!(decoded[0].value(), b"GET");
+        assert_eq!(decoded[1].name(), b":authority");
+        assert_eq!(decoded[1].value(), b"www.example.com");
     }
 
     #[test]
@@ -895,8 +871,8 @@ mod tests {
         };
 
         assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].name, b":method");
-        assert_eq!(headers[0].value, b"GET");
+        assert_eq!(headers[0].name(), b":method");
+        assert_eq!(headers[0].value(), b"GET");
         assert_eq!(decoder.last_required_insert_count(), 0);
     }
 
@@ -917,7 +893,7 @@ mod tests {
         decoder.insert(b":authority".to_vec(), b"www.example.com".to_vec());
 
         // エンコード
-        let headers = vec![Header::new(b":authority", b"www.example.com")];
+        let headers = vec![Header::new(b":authority", b"www.example.com").unwrap()];
         let mut buf = vec![0u8; 64];
         let len = encoder.encode(&mut buf, &headers, 0).unwrap();
 
@@ -927,8 +903,8 @@ mod tests {
         };
 
         assert_eq!(decoded.len(), 1);
-        assert_eq!(decoded[0].name, b":authority");
-        assert_eq!(decoded[0].value, b"www.example.com");
+        assert_eq!(decoded[0].name(), b":authority");
+        assert_eq!(decoded[0].value(), b"www.example.com");
     }
 
     #[test]
@@ -954,8 +930,8 @@ mod tests {
         };
 
         assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].name, b"custom-header");
-        assert_eq!(headers[0].value, b"custom-value");
+        assert_eq!(headers[0].name(), b"custom-header");
+        assert_eq!(headers[0].value(), b"custom-value");
         // 動的テーブルを参照したので Required Insert Count > 0
         assert_eq!(decoder.last_required_insert_count(), 1);
     }
