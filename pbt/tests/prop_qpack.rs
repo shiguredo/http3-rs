@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 
+use pbt::strategies::{valid_header_name, valid_header_value};
 use proptest::prelude::*;
 use shiguredo_http3::qpack::{
     DecodeOutput, Decoder, DecoderInstruction, DecoderStream, DecoderStreamReceiver,
@@ -23,44 +24,6 @@ const DYNAMIC_TABLE_CAPACITY: u64 = 4096;
 
 /// エントリオーバーヘッド (RFC 9204 Section 3.2.1)
 const ENTRY_OVERHEAD: u64 = 32;
-
-prop_compose! {
-    /// 有効なヘッダー名を生成 (ASCII 小文字のみ)
-    fn valid_header_name()(
-        len in 1usize..64,
-    )(
-        name in prop::collection::vec(prop::char::range('a', 'z'), len)
-    ) -> Vec<u8> {
-        name.into_iter().map(|c| c as u8).collect()
-    }
-}
-
-prop_compose! {
-    /// 有効なヘッダー値を生成
-    ///
-    /// RFC 9110 Section 5.5 の field-content に従い、両端は field-vchar
-    /// (0x21-0x7E)、間には SP (0x20) も許す。空文字列も valid。
-    /// (obs-text 0x80-0xFF は QPACK Huffman デコードとの整合性を保つため除外)
-    fn valid_header_value()(
-        len in 0usize..256,
-    )(
-        middle in prop::collection::vec(0x20u8..=0x7e, len),
-    ) -> Vec<u8> {
-        if middle.is_empty() {
-            return Vec::new();
-        }
-        let mut v = middle;
-        // 両端は field-vchar (0x21..=0x7e) でなければならない
-        if v[0] == 0x20 {
-            v[0] = 0x21;
-        }
-        let last = v.len() - 1;
-        if v[last] == 0x20 {
-            v[last] = 0x21;
-        }
-        v
-    }
-}
 
 prop_compose! {
     /// 有効なテーブル容量を生成
@@ -997,5 +960,68 @@ proptest! {
             prop_assert_eq!(decoded[0].name().to_vec(), entry_name);
             prop_assert_eq!(decoded[0].value().to_vec(), entry_value);
         }
+    }
+}
+
+// =============================================================================
+// Construct-Time Validation Consistency (Header)
+// =============================================================================
+
+proptest! {
+    // `Header::from_static` は `&'static [u8]` を要求するため `Box::leak` で
+    // 擬似的に静的化する。proptest の shrink でケースが追加発火するたびに
+    // リークが累積するためケース数を絞る (cases: 16)。
+    #![proptest_config(ProptestConfig { cases: 16, ..ProptestConfig::default() })]
+
+    /// Property: `Header::from_static` と `Header::new` が同じ値を返す
+    /// (`const fn` 検査とランタイム検査のロジック一致)
+    #[test]
+    fn prop_header_from_static_matches_new(
+        name in valid_header_name(),
+        value in valid_header_value(),
+    ) {
+        let via_new = Header::new(&name, &value).unwrap();
+        let static_name: &'static [u8] = Box::leak(name.clone().into_boxed_slice());
+        let static_value: &'static [u8] = Box::leak(value.clone().into_boxed_slice());
+        let via_static = Header::from_static(static_name, static_value);
+        prop_assert_eq!(via_new, via_static);
+    }
+}
+
+proptest! {
+    /// Property: `Header::from_validated_parts` と `Header::new` が同じ値を返す
+    /// (内部バックドアと公開 API のロジック一致。Box::leak を使わないので
+    /// デフォルトのケース数で網羅する)
+    #[test]
+    fn prop_header_from_validated_parts_matches_new(
+        name in valid_header_name(),
+        value in valid_header_value(),
+    ) {
+        let via_new = Header::new(&name, &value).unwrap();
+        let via_validated = Header::from_validated_parts(
+            Cow::Owned(name.clone()),
+            Cow::Owned(value.clone()),
+        );
+        prop_assert_eq!(via_new, via_validated);
+    }
+
+    /// Property (完全性): `Header::new` が受理する任意 (name, value) は、
+    /// QPACK encode → decode の往復で同じ Header が再構築される。
+    /// (構築時検査と decoder の受理集合一致の片方向確認)
+    #[test]
+    fn prop_header_new_accepts_imply_qpack_roundtrip(
+        name in valid_header_name(),
+        value in valid_header_value(),
+    ) {
+        let original = Header::new(&name, &value).unwrap();
+        let encoder = Encoder::new();
+        let decoder = Decoder::new();
+        let headers = vec![original.clone()];
+        let mut buf = vec![0u8; 8192];
+        let encoded_len = encoder.encode(&mut buf, &headers).unwrap();
+        let decoded = decoder.decode(&buf[..encoded_len]).unwrap();
+        prop_assert_eq!(decoded.len(), 1);
+        prop_assert_eq!(decoded[0].name(), original.name());
+        prop_assert_eq!(decoded[0].value(), original.value());
     }
 }

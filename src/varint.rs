@@ -71,6 +71,13 @@ impl VarInt {
     ///
     /// `#[track_caller]` はランタイム panic 時の呼び出し位置を保持するために
     /// 付けている (const 評価時の panic 表示には影響しない)。
+    ///
+    /// VarInt 値域外 (`>= 2^62`) のリテラルはコンパイル時に弾かれる:
+    ///
+    /// ```compile_fail
+    /// use shiguredo_http3::VarInt;
+    /// const _BAD: VarInt = VarInt::from_static(1u64 << 62);
+    /// ```
     #[track_caller]
     pub const fn from_static(value: u64) -> Self {
         assert!(value <= Self::MAX.get(), "VarInt value must be <= 2^62 - 1");
@@ -111,12 +118,24 @@ impl VarInt {
     /// 現状の利用は [`decode`] のみで、wire の最上位 2 ビットがエンコード長を示す
     /// 構造により mask 後の値が必ず `2^62 - 1` 以下となることを利用している
     /// (RFC 9000 Section 16 Table 4)。
-    pub(crate) const fn from_validated_parts(value: u64) -> Self {
+    pub(crate) const fn from_validated_parts_internal(value: u64) -> Self {
         debug_assert!(
             value <= Self::MAX.get(),
             "VarInt invariant violated: value exceeds 2^62 - 1"
         );
         Self(value)
+    }
+
+    /// 検証済みの `u64` から検査をスキップして構築する (`internal-test` 限定公開)
+    ///
+    /// 外部クレートからは `internal-test` フィーチャーを有効化したときだけ呼べる。
+    /// PBT / fuzz / 統合テストから wire 由来の不正値ではなく構築済み値を
+    /// `VarInt` 型に注入するためのバックドア。通常のアプリケーションコードは
+    /// 絶対に使ってはいけない。
+    #[cfg(any(test, feature = "internal-test"))]
+    #[doc(hidden)]
+    pub const fn from_validated_parts(value: u64) -> Self {
+        Self::from_validated_parts_internal(value)
     }
 }
 
@@ -261,7 +280,7 @@ pub fn decode(buf: &[u8]) -> Result<(VarInt, usize), DecodeError> {
 
     // wire 表現の最上位 2 ビットがエンコード長を示すため、組み立て後の値は
     // 必ず 2^62 - 1 以下になる (RFC 9000 Section 16 Table 4)。
-    Ok((VarInt::from_validated_parts(value), len))
+    Ok((VarInt::from_validated_parts_internal(value), len))
 }
 
 /// バッファの先頭バイトから可変長整数のバイト長を取得する

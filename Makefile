@@ -1,8 +1,16 @@
-.PHONY: test cover pbt pbt-cover fuzz fuzzing fuzzing-list interop-test-h3 interop-test-wt interop-test check clippy fmt clean
+.PHONY: test doc-test cover pbt pbt-cover fuzz fuzzing fuzzing-list interop-test-h3 interop-test-wt interop-test check clippy fmt clean
 
 # 全テストを実行する
 test:
 	cargo test --workspace --tests
+
+# doctest を実行する (compile_fail ブロックを含む)
+# bindgen 生成 doc (`nghttp3-sys` / `ngtcp2-sys`) には C 言語サンプルが含まれ
+# rustc ではパースできないため `--exclude` で除外する
+# `internal-test` は本クレート (`shiguredo_http3`) の compile_fail doctest を
+# 有効化するため明示する
+doc-test:
+	cargo test --doc --workspace --exclude nghttp3-sys --exclude ngtcp2-sys --features shiguredo_http3/internal-test
 
 # 全テストカバレッジ付きで実行する
 cover:

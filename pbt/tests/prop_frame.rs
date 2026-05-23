@@ -354,3 +354,18 @@ proptest! {
         );
     }
 }
+
+// =============================================================================
+// Construct-Time Validation Consistency
+// =============================================================================
+
+proptest! {
+    /// Property: GoawayPayload::from_static と new(VarInt::new(id)) が同じ値を返す
+    /// (`const fn` 検査とランタイム検査のロジック一致)
+    #[test]
+    fn prop_goaway_from_static_matches_new(value in 0u64..=VarInt::MAX.get()) {
+        let via_new = GoawayPayload::new(VarInt::new(value).unwrap());
+        let via_static = GoawayPayload::from_static(value);
+        prop_assert_eq!(via_new, via_static);
+    }
+}

@@ -383,6 +383,13 @@ impl GoawayPayload {
     ///
     /// `id` が VarInt 範囲外の場合はコンパイル時にエラーとなる。
     /// ランタイム値からは [`Self::new`] と [`VarInt::new`] を組み合わせて使う。
+    ///
+    /// VarInt 値域外 (`>= 2^62`) のリテラルはコンパイル時に弾かれる:
+    ///
+    /// ```compile_fail
+    /// use shiguredo_http3::GoawayPayload;
+    /// const _BAD: GoawayPayload = GoawayPayload::from_static(1u64 << 62);
+    /// ```
     pub const fn from_static(id: u64) -> Self {
         Self {
             id: VarInt::from_static(id),

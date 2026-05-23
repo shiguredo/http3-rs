@@ -11,6 +11,16 @@
 
 ## develop
 
+- [ADD] `VarInt::from_static` / `qpack::Header::from_static` / `frame::GoawayPayload::from_static` の doc に `compile_fail` ブロックを追加し、`const fn` 検査のリグレッションを CI (`cargo test --doc`) で防止する
+  - @voluntas
+- [ADD] 構築時検査の `from_static` ↔ `new` 一貫性、`from_validated_parts` ↔ `new` 整合性、`Header::new` ↔ QPACK ラウンドトリップ完全性を検証する PBT を追加する
+  - @voluntas
+- [ADD] `Makefile` に `doc-test` ターゲットを追加し `cargo test --doc --workspace --exclude nghttp3-sys --exclude ngtcp2-sys --features shiguredo_http3/internal-test` を実行する (sys クレートは bindgen 生成 doc が rustc でパースできないため除外)
+  - @voluntas
+- [ADD] `VarInt::from_validated_parts` を `internal-test` フィーチャー限定で公開し、PBT から `from_validated_parts` と `new` の整合性検証を可能にする (内部用は `from_validated_parts_internal` に改名)
+  - @voluntas
+- [ADD] `pbt` クレートに `strategies` モジュールを追加し、構築時検査型の `valid_*` / `invalid_*` 戦略を集約する (`pbt/Cargo.toml` の `proptest` / `shiguredo_http3` を `[dev-dependencies]` から `[dependencies]` に格上げ)
+  - @voluntas
 - [ADD] `VarInt` / `VarIntError` を新設し、RFC 9000 Section 16 の値域 (`0..=2^62 - 1`) を型で表現する
   - @voluntas
 - [ADD] `VarInt::from_static` を `const fn` で提供し、`2^62` 以上のリテラル定数を `const` / `static` 宣言時にコンパイル時 panic として検出可能にする
