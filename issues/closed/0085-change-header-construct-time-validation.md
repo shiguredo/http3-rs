@@ -1,7 +1,9 @@
 # 0085: qpack::Header を構築時検査型に変更する
 
 Created: 2026-05-23
+Completed: 2026-05-23
 Model: Opus 4.7
+Branch: feature/change-qpack-header-construct-time-validation
 
 ## 概要
 
@@ -352,3 +354,129 @@ impl std::error::Error for HeaderError {}
 - [[0086-change-settings-construct-time-validation]] (Settings の構築時検査)
 - [[0087-change-frame-construct-time-validation]] (Frame ペイロードの構築時検査)
 - [[0088-add-trybuild-and-pbt-construct-time-validation]] (`from_static` の compile_fail テスト)
+
+## 解決方法
+
+### 新規モジュール `src/qpack/header.rs`
+
+- `Header` 構造体を再設計し、フィールドを `name: Cow<'static, [u8]>` /
+  `value: Cow<'static, [u8]>` の private に変更
+- `Header::new(impl AsRef<[u8]>, impl AsRef<[u8]>) -> Result<Self, HeaderError>`
+  でランタイム値の構築時検査を実施
+- `Header::from_static(&'static [u8], &'static [u8]) -> Self` を `const fn` で
+  追加。`const` / `static` 宣言内で不正リテラルを渡すとコンパイル時 panic
+  となる。`#[track_caller]` も付与 (実行時 panic 経路でのデバッグ用)
+- `Header::from_validated_parts_internal` を `pub(crate)` で追加し、decoder /
+  内部テストから常に呼べるようにする
+- `Header::from_validated_parts` を `#[cfg(any(test, feature = "internal-test"))]
+  #[doc(hidden)] pub` で外部 (PBT / fuzz / 統合テスト) に公開
+- `name()` / `value()` / `size()` アクセサを提供 (RFC 9114 §4.2.2 のフィールド
+  サイズ計算は `size()` に統合)
+- `HeaderError` を新設し、`EmptyFieldName` / `UppercaseFieldName` /
+  `InvalidFieldNameByte` / `InvalidFieldValueByte` /
+  `FieldValueLeadingOrTrailingWhitespace` / `UnknownPseudoHeader` /
+  `InvalidPseudoHeaderValue` の 7 variant (`#[non_exhaustive]`)。`Display`
+  実装では `std::ascii::escape_default` で制御文字を escape し、64 バイト超は
+  truncate (log injection 対策とメモリ消費抑制)
+- `check_header` / `check_pseudo_value` / `check_upgrade_token` 等の検査
+  ロジックを `const fn` で実装し、`from_static` でも利用
+- 疑似ヘッダー検査:
+  - `:method`: token (RFC 9110 §9.1)
+  - `:scheme`: scheme (RFC 3986 §3.1)
+  - `:status`: 3DIGIT (RFC 9110 §15) — 101 拒否は `validation` 側
+  - `:protocol`: HTTP Upgrade Token (RFC 8441 §4 / RFC 9220 §3 / RFC 9110 §7.8)
+
+### `src/qpack/table.rs` (STATIC_TABLE)
+
+- `StaticEntry` 型を削除し、`STATIC_TABLE: &[Header]` を 99 エントリすべて
+  `Header::from_static` で組み立てる。RFC 9204 Appendix A への違反は
+  コンパイル時に検出可能
+- `get_static_entry` の戻り値型を `Option<&'static Header>` に変更
+- `find_static_entry` は `&[u8]` 引数のまま維持し `Header` のアクセサ経由で検索
+
+### `src/qpack/decoder.rs`
+
+- `DecodedHeader` 型を削除し、`Decoder::decode` / `DynamicDecoder::decode` の
+  戻り値型を `Vec<Header>` / `DecodeOutput::Decoded(Vec<Header>)` に統一
+- `header_from_decoded` ヘルパーで `Header::from_validated_parts_internal`
+  経由に統一 (decoder 経路は構築時検査をスキップ、後段 validation で検査)
+- `decode_indexed_field` (静的テーブル経路) は `entry.clone()` でゼロコピー
+  (Cow::Borrowed を維持)
+
+### `src/qpack/encoder.rs` / `src/qpack/dynamic_table.rs`
+
+- `Header` の利用箇所を `header.name()` / `header.value()` アクセサ経由に変更
+- `DynamicTable::insert_with_name_ref` の `static_table` 引数の型を
+  `&[StaticEntry]` から `&[Header]` に変更
+
+### `src/qpack/mod.rs` / `src/lib.rs`
+
+- `mod header;` を private 追加し `pub use header::{Header, HeaderError};`
+- `DecodedHeader` / `StaticEntry` / `HeaderField` の re-export を削除
+- `HeaderError` を `pub use` に追加
+
+### `src/validation.rs`
+
+- `HeaderField` トレイトを削除
+- 検証関数群 (`validate_request_headers` / `validate_response_headers` /
+  `validate_headers` / `validate_content_length` / `validate_trailer_headers` /
+  `calculate_field_section_size` / `check_field_section_size`) を `&[Header]`
+  直受けに変更
+- `:protocol` 値検査 (`is_valid_protocol`) を新規追加し Extended CONNECT 経路で
+  適用 (RFC 8441 §4 / RFC 9220 §3 / RFC 9110 §7.8)
+- `calculate_field_section_size` を `Header::size()` 経由に統一
+- `qpack::header` との検査ロジック重複が意図的維持であることをモジュール
+  ドキュメントに明記 (decoder 経由の `from_validated_parts_internal` 用安全網)
+
+### `src/connection/mod.rs`
+
+- `DecodedHeader` を `Header` に置き換え、`is_webtransport_connect_decoded` /
+  `is_success_status_raw` を `is_webtransport_connect` / `is_success_status` に
+  統合 (型統一による重複解消)
+- 検証関数呼び出し箇所はすべてアクセサ経由 (`h.name()` / `h.value()`)
+
+### `src/webtransport/connect.rs`
+
+- `ConnectRequest::to_headers` / `ConnectResponse::to_headers` の戻り値型を
+  `Result<Vec<Header>, HeaderError>` に変更 (フィールド値 RFC 違反を構造化通知)
+
+### `src/stream/request.rs` / `src/event.rs`
+
+- `recv_headers`、`ReceivedData::Headers` の型を `Vec<Header>` に統一
+
+### 利用箇所追従
+
+- `crates/tokio-s2n-quic/src/h3/{client,server}.rs`: ユーザー入力由来の
+  `Header::new(...)` を `?` 伝播化 (panic 経路を排除)。`Error` に
+  `From<HeaderError>` を追加
+- `crates/tokio-s2n-quic/src/webtransport/{client,server}.rs`,
+  `examples/wt_server/src/webtransport.rs`: `to_headers()?` 伝播。`Error` に
+  `From<HeaderError>` を追加
+- `tests/`, `pbt/tests/`, `interop/wt/src/lib.rs`, `examples/wt_server/`:
+  `Header::new(...).unwrap()` パターンに統一
+
+### Workspace 設定
+
+- `Cargo.toml` に `internal-test` フィーチャーを新設
+- `pbt/Cargo.toml` / `fuzz/Cargo.toml` で `internal-test` を有効化
+- `fuzz/fuzz_targets/fuzz_validation.rs` を `Header::from_validated_parts`
+  経由に修正 (検査スキップで `validate_*` の panic 耐性を fuzz する目的に合致)
+
+### テスト追加
+
+- `src/qpack/header.rs`: `Header::new` の各 variant、`from_static` の正常系、
+  `from_validated_parts` の検査バイパス、`HeaderError::Display` の
+  escape + 64 バイト truncate の境界値テストを追加
+- `src/validation.rs`: `:protocol` の境界値テスト (空 / token only / `name/ver` /
+  leading slash / trailing slash / double slash / 空白入り) を 7 件追加
+- `pbt/tests/prop_validation.rs`: `Header::new` と `is_valid_protocol` の
+  同値性を検証する `prop_protocol_check_consistency` を追加
+- `pbt/tests/prop_qpack.rs`: `unchecked_header` ヘルパーを追加し、
+  `valid_header_value` strategy を `Header::new` を通る範囲 (両端 field-vchar)
+  に絞る
+
+### CHANGES.md
+
+- `## develop` セクションに `[ADD]` 4 件 / `[CHANGE]` 6 件を追記
+- 種別順序 (UPDATE → ADD → CHANGE → FIX) を遵守
+- `misc` セクションも同じ順序に整理
