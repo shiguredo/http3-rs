@@ -5,6 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
-[dev-dependencies]
+[dependencies]
 proptest = "1.11"
 shiguredo_http3 = { path = "../", features = ["internal-test"] }

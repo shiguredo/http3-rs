@@ -1,15 +1,9 @@
 //! Property-Based Testing for QUIC Variable-Length Integer (RFC 9000 Section 16)
 
+use pbt::strategies::{invalid_varint_u64, valid_varint};
 use proptest::prelude::*;
 use shiguredo_http3::VarInt;
 use shiguredo_http3::varint;
-
-prop_compose! {
-    /// 有効な VarInt を生成
-    fn valid_varint()(value in 0u64..=VarInt::MAX.get()) -> VarInt {
-        VarInt::new(value).unwrap()
-    }
-}
 
 prop_compose! {
     /// 1 バイトエンコード範囲の値を生成 (0-63)
@@ -194,5 +188,31 @@ proptest! {
     #[test]
     fn prop_display_matches_u64(value in valid_varint()) {
         prop_assert_eq!(format!("{value}"), format!("{}", value.get()));
+    }
+
+    /// Property: `from_static` と `new` が同じ値を返す (`const fn` 検査と
+    /// ランタイム検査のロジック一致)
+    #[test]
+    fn prop_from_static_matches_new(value in 0u64..=VarInt::MAX.get()) {
+        let via_new = VarInt::new(value).unwrap();
+        let via_static = VarInt::from_static(value);
+        prop_assert_eq!(via_new, via_static);
+    }
+
+    /// Property: `from_validated_parts` と `new` が同じ値を返す (内部バックドアと
+    /// 公開 API のロジック一致)
+    #[test]
+    fn prop_from_validated_parts_matches_new(value in 0u64..=VarInt::MAX.get()) {
+        let via_new = VarInt::new(value).unwrap();
+        let via_validated = VarInt::from_validated_parts(value);
+        prop_assert_eq!(via_new, via_validated);
+    }
+
+    /// Property: VarInt 範囲外の `u64` は `new` で必ず Err、`TryFrom<u64>` でも必ず Err
+    /// (構築 API の値域判定が一貫している)
+    #[test]
+    fn prop_invalid_varint_rejected(value in invalid_varint_u64()) {
+        prop_assert!(VarInt::new(value).is_err());
+        prop_assert!(VarInt::try_from(value).is_err());
     }
 }

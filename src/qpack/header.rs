@@ -464,6 +464,34 @@ impl Header {
     ///
     /// `name` / `value` が RFC 9114 / RFC 9110 の構文に違反する場合、
     /// const 評価時にコンパイルエラー、実行時には panic する。
+    ///
+    /// 大文字を含む field name はコンパイル時に弾かれる:
+    ///
+    /// ```compile_fail
+    /// use shiguredo_http3::Header;
+    /// const _BAD: Header = Header::from_static(b"Host", b"example.com");
+    /// ```
+    ///
+    /// CRLF を含む field value はコンパイル時に弾かれる:
+    ///
+    /// ```compile_fail
+    /// use shiguredo_http3::Header;
+    /// const _BAD: Header = Header::from_static(b":path", b"/foo\r\nX-Inject: 1");
+    /// ```
+    ///
+    /// 空 field name はコンパイル時に弾かれる:
+    ///
+    /// ```compile_fail
+    /// use shiguredo_http3::Header;
+    /// const _BAD: Header = Header::from_static(b"", b"value");
+    /// ```
+    ///
+    /// 不明な疑似ヘッダーはコンパイル時に弾かれる:
+    ///
+    /// ```compile_fail
+    /// use shiguredo_http3::Header;
+    /// const _BAD: Header = Header::from_static(b":bogus", b"value");
+    /// ```
     #[track_caller]
     pub const fn from_static(name: &'static [u8], value: &'static [u8]) -> Self {
         match check_header(name, value) {

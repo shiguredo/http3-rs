@@ -1,7 +1,9 @@
 # 0088: 構築時検査の compile_fail doctest と PBT 整合性検証を整備する
 
 Created: 2026-05-23
+Completed: 2026-05-24
 Model: Opus 4.7
+Branch: feature/add-compile-fail-doctest-and-pbt-consistency
 
 ## 概要
 
@@ -291,3 +293,67 @@ doc-test:
 - [[0085-change-header-construct-time-validation]] (Header の from_static)
 - [[0086-change-settings-construct-time-validation]] (Setting の from_static)
 - [[0087-change-frame-construct-time-validation]] (GoawayPayload の from_static)
+
+## 解決方法
+
+### compile_fail doctest
+
+`*::from_static` の不正リテラルがコンパイル時に弾かれることを `cargo test --doc` で
+担保する。追加した compile_fail ブロック:
+
+- `src/varint.rs`: `VarInt::from_static(1u64 << 62)` (値域外)
+- `src/frame/mod.rs`: `GoawayPayload::from_static(1u64 << 62)` (値域外)
+- `src/qpack/header.rs`: `Header::from_static` の大文字 / CRLF / 空 / 不明な疑似ヘッダー
+  4 件
+
+`Makefile` に `doc-test` ターゲットを追加し、`cargo test --doc --workspace --exclude
+nghttp3-sys --exclude ngtcp2-sys --features shiguredo_http3/internal-test` を実行する
+(bindgen 生成 doc の C 言語サンプルが rustc でパースできないため sys クレートは除外)。
+
+### PBT 戦略の集約
+
+`pbt/src/lib.rs` の `strategies` モジュールに以下を集約し、`pbt/tests/prop_varint.rs`
+と `pbt/tests/prop_qpack.rs` のローカル定義を削除して `use pbt::strategies::*` に統一:
+
+- `valid_varint()` / `invalid_varint_u64()`
+- `valid_header_name()` / `valid_header_value()`
+
+`pbt/Cargo.toml` の `proptest` / `shiguredo_http3` を `[dev-dependencies]` から
+`[dependencies]` に格上げし、`pbt/src/lib.rs` から参照できるようにした。
+
+### PBT 整合性検証
+
+- `prop_from_static_matches_new` (VarInt) / `prop_goaway_from_static_matches_new`
+  (GoawayPayload) / `prop_header_from_static_matches_new` (Header): `from_static` と
+  `new` の同値性
+- `prop_from_validated_parts_matches_new` (VarInt) /
+  `prop_header_from_validated_parts_matches_new` (Header): `from_validated_parts` と
+  `new` の同値性
+- `prop_invalid_varint_rejected`: VarInt 値域外で `new` / `try_from` が必ず Err
+- `prop_header_new_accepts_imply_qpack_roundtrip` (**完全性**): `Header::new` が受理する
+  任意 (name, value) は QPACK encode → decode の往復で同じ Header に復元される
+
+完全性 (`new` ⇔ decoder) の `VarInt` / `GoawayPayload` 分は既存
+`prop_roundtrip_preserves_value` / `prop_goaway_frame_roundtrip` でカバー済み。
+
+### VarInt 命名統一
+
+`VarInt::from_validated_parts` を `Header` 側と同じパターンに揃えた:
+
+- `pub(crate) const fn from_validated_parts_internal(value: u64) -> Self`: decoder 内部用
+- `#[cfg(any(test, feature = "internal-test"))] #[doc(hidden)] pub const fn
+  from_validated_parts(value: u64) -> Self`: PBT / fuzz / 統合テスト用バックドア
+
+以前の `from_validated_parts_pub` は削除。
+
+### review-diff-code 1 周
+
+致命的 6 件のすべてに対応 (C1+C2: strategies 実利用化、C3: Header 完全性 PBT 追加、
+C4: Box::leak cases を 16 に縮小、C5: VarInt 命名統一、C6: Makefile を CHANGES.md と
+整合)。重要のうち M3 (proptest! ブロック分割) も対応。
+
+未対応:
+
+- M1: Header compile_fail の検査経路追加 3 件 (token 外 / leading whitespace / pseudo
+  header value) — 受け入れ条件は満たすため別 issue 化が妥当
+- 既存 PBT の死にコード (`prop_qpack.rs::valid_capacity` 等) — 本 issue スコープ外
