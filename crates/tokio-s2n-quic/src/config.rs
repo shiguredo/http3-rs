@@ -42,7 +42,8 @@ impl ServerConfig {
             idle_timeout_ms: 30000,
             peer_bidi_stream_count: 100,
             peer_unidi_stream_count: 3,
-            h3_settings: H3Settings::from_limits(&Limits::default()),
+            h3_settings: H3Settings::from_limits(&Limits::default())
+                .expect("Limits::default() values must fit VarInt (RFC 9000 Section 16)"),
         }
     }
 
@@ -83,7 +84,8 @@ impl ClientConfig {
             idle_timeout_ms: 5000,
             ca_cert_pem: None,
             disable_cert_validation: false,
-            h3_settings: H3Settings::from_limits(&Limits::default()),
+            h3_settings: H3Settings::from_limits(&Limits::default())
+                .expect("Limits::default() values must fit VarInt (RFC 9000 Section 16)"),
             draft_version: DraftVersion::Draft15,
         }
     }

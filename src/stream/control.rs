@@ -245,8 +245,9 @@ impl ControlStreamRecv {
                         crate::error::FrameDecodeError::ServerPushNotSupported(_) => {
                             Error::ConnectionError(ErrorCode::FrameUnexpected)
                         }
-                        // HTTP/2 専用設定 ID は設定エラー (RFC 9114 Section 7.2.4)
-                        crate::error::FrameDecodeError::InvalidSettingsId(_) => {
+                        // SETTINGS パラメータの構築時検査エラー (重複 / HTTP/2 専用 / 予約 / bool 値域外)
+                        // は H3_SETTINGS_ERROR (RFC 9114 §7.2.4 / §7.2.4.1)
+                        crate::error::FrameDecodeError::InvalidSetting(_) => {
                             Error::ConnectionError(ErrorCode::SettingsError)
                         }
                         // payload 途中切れはフレームエラー (RFC 9114 Section 7.1)
@@ -260,7 +261,7 @@ impl ControlStreamRecv {
                     // SETTINGS が最初のフレームである必要がある (RFC 9114 Section 6.2.1)
                     if self.recv_state == ControlRecvState::WaitingSettings {
                         if let Frame::Settings(ref payload) = frame {
-                            self.peer_settings = Some(Settings::from_payload(payload)?);
+                            self.peer_settings = Some(Settings::from_payload(payload));
                             self.recv_state = ControlRecvState::Ready;
                         } else {
                             return Err(Error::ConnectionError(ErrorCode::MissingSettings));
@@ -305,8 +306,9 @@ mod tests {
 
     #[test]
     fn test_control_stream_send() {
+        use crate::varint::VarInt;
         let mut stream = ControlStreamSend::new();
-        let settings = Settings::new().max_field_section_size(16384);
+        let settings = Settings::new().max_field_section_size(VarInt::from_static(16384));
 
         stream.send_settings(&settings);
         assert!(stream.has_pending());

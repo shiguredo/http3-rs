@@ -56,15 +56,38 @@ prop_compose! {
 
 prop_compose! {
     /// 有効な SETTINGS エントリを生成
+    ///
+    /// 重複 ID を除外し、bool 値 ID (0x08 / 0x33 / 0x2b603742) は値域を 0/1 に制限する。
+    /// H3 コア (0x01 / 0x06 / 0x07 / 0x08 / 0x33) と WebTransport 拡張 ID を網羅する。
+    /// [`shiguredo_http3::Setting::from_wire`] で構築可能な値のみを返す。
     fn valid_settings_entries()(
         entries in prop::collection::vec(
-            (prop::sample::select(vec![0x01u64, 0x06, 0x07, 0x08, 0x33]), 0u64..65536),
-            0..5
+            (
+                prop::sample::select(vec![
+                    0x01u64, 0x06, 0x07, 0x08, 0x33,
+                    0x2b61, 0x2b64, 0x2b65, 0x14e9cd29, 0x2c7cf000,
+                    0x2b603742, 0xc671706a,
+                ]),
+                0u64..65536,
+            ),
+            0..8
         )
-    ) -> Vec<(u64, u64)> {
-        // 重複を除去
+    ) -> Vec<shiguredo_http3::Setting> {
+        use shiguredo_http3::{Setting, VarInt};
         let mut seen = std::collections::HashSet::new();
-        entries.into_iter().filter(|(k, _)| seen.insert(*k)).collect()
+        entries
+            .into_iter()
+            .filter(|(k, _)| seen.insert(*k))
+            .map(|(id, value)| {
+                let normalized = if matches!(id, 0x08 | 0x33 | 0x2b603742) {
+                    value & 1
+                } else {
+                    value
+                };
+                Setting::from_wire(VarInt::new(id).unwrap(), VarInt::new(normalized).unwrap())
+                    .unwrap()
+            })
+            .collect()
     }
 }
 
@@ -205,9 +228,10 @@ proptest! {
     /// Property: SETTINGS フレームのエンコード/デコードラウンドトリップ
     #[test]
     fn prop_settings_frame_roundtrip(entries in valid_settings_entries()) {
+        // valid_settings_entries() は重複 ID を除外済みのため `add` は必ず Ok
         let mut payload = SettingsPayload::new();
-        for (id, value) in &entries {
-            payload.add(*id, *value);
+        for setting in &entries {
+            payload.add(*setting).unwrap();
         }
         let frame = Frame::Settings(payload);
 
@@ -219,12 +243,9 @@ proptest! {
         prop_assert_eq!(encoded_len, decoded_len);
 
         if let Frame::Settings(settings) = decoded {
-            prop_assert_eq!(
-                settings.entries.len(), entries.len(),
-                "Settings count mismatch"
-            );
-            for (orig, decoded) in entries.iter().zip(settings.entries.iter()) {
-                prop_assert_eq!(orig, decoded, "Settings entry mismatch");
+            prop_assert_eq!(settings.settings().len(), entries.len());
+            for (orig, decoded) in entries.iter().zip(settings.settings().iter()) {
+                prop_assert_eq!(orig, decoded);
             }
         } else {
             prop_assert!(false, "Expected SETTINGS frame");
@@ -244,7 +265,7 @@ proptest! {
         prop_assert_eq!(encoded_len, decoded_len);
 
         if let Frame::Settings(settings) = decoded {
-            prop_assert!(settings.entries.is_empty());
+            prop_assert!(settings.is_empty());
         } else {
             prop_assert!(false, "Expected SETTINGS frame");
         }

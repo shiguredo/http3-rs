@@ -11,7 +11,13 @@
 
 use shiguredo_http3::qpack::Encoder;
 use shiguredo_http3::webtransport::DraftVersion;
-use shiguredo_http3::{Error, ErrorCode, Event, Header, ServerConnection, Settings, webtransport};
+use shiguredo_http3::{
+    Error, ErrorCode, Event, Header, ServerConnection, Settings, VarInt, webtransport,
+};
+
+fn vi(value: u64) -> VarInt {
+    VarInt::new(value).unwrap()
+}
 
 // =========================================================================
 // ヘルパー関数
@@ -60,7 +66,7 @@ fn build_draft02_client_ctrl() -> Vec<u8> {
 /// 制御ストリームデータを返す
 /// Safari と同じパターン: ENABLE_CONNECT_PROTOCOL なし
 fn build_draft07_client_ctrl() -> Vec<u8> {
-    let wt = webtransport::Settings::new().webtransport_max_sessions_draft07(1);
+    let wt = webtransport::Settings::new().webtransport_max_sessions_draft07(vi(1));
     let settings = Settings {
         enable_connect_protocol: None,
         ..Settings::new()
@@ -78,10 +84,10 @@ fn build_draft07_client_ctrl() -> Vec<u8> {
 /// ENABLE_CONNECT_PROTOCOL あり
 fn build_draft14_client_ctrl_with_ecp() -> Vec<u8> {
     let wt = webtransport::Settings::new()
-        .wt_max_sessions_draft14(1)
-        .wt_initial_max_streams_uni(100)
-        .wt_initial_max_streams_bidi(100)
-        .wt_initial_max_data(8 * 1024 * 1024);
+        .wt_max_sessions_draft14(vi(1))
+        .wt_initial_max_streams_uni(vi(100))
+        .wt_initial_max_streams_bidi(vi(100))
+        .wt_initial_max_data(vi(8 * 1024 * 1024));
     let settings = Settings::new()
         .h3_datagram(true)
         .enable_connect_protocol(true)
@@ -95,10 +101,10 @@ fn build_draft14_client_ctrl_with_ecp() -> Vec<u8> {
 /// draft-14 クライアントの SETTINGS (ENABLE_CONNECT_PROTOCOL なし)
 fn build_draft14_client_ctrl_without_ecp() -> Vec<u8> {
     let wt = webtransport::Settings::new()
-        .wt_max_sessions_draft14(1)
-        .wt_initial_max_streams_uni(100)
-        .wt_initial_max_streams_bidi(100)
-        .wt_initial_max_data(8 * 1024 * 1024);
+        .wt_max_sessions_draft14(vi(1))
+        .wt_initial_max_streams_uni(vi(100))
+        .wt_initial_max_streams_bidi(vi(100))
+        .wt_initial_max_data(vi(8 * 1024 * 1024));
     let settings = Settings {
         enable_connect_protocol: None,
         ..Settings::new()
@@ -113,7 +119,7 @@ fn build_draft14_client_ctrl_without_ecp() -> Vec<u8> {
 
 /// draft-15 クライアントの SETTINGS (ENABLE_CONNECT_PROTOCOL あり)
 fn build_draft15_client_ctrl_with_ecp() -> Vec<u8> {
-    let wt = webtransport::Settings::new().wt_enabled(1);
+    let wt = webtransport::Settings::new().wt_enabled(vi(1));
     let settings = Settings::new()
         .h3_datagram(true)
         .enable_webtransport_server(wt);
@@ -125,7 +131,7 @@ fn build_draft15_client_ctrl_with_ecp() -> Vec<u8> {
 
 /// draft-15 クライアントの SETTINGS (ENABLE_CONNECT_PROTOCOL なし)
 fn build_draft15_client_ctrl_without_ecp() -> Vec<u8> {
-    let wt = webtransport::Settings::new().wt_enabled(1);
+    let wt = webtransport::Settings::new().wt_enabled(vi(1));
     let settings = Settings {
         enable_connect_protocol: None,
         ..Settings::new()
@@ -141,10 +147,10 @@ fn build_draft15_client_ctrl_without_ecp() -> Vec<u8> {
 /// 全 draft 対応のサーバーを構築する
 fn setup_server(reset_stream_at: bool) -> ServerConnection {
     let wt = webtransport::Settings::new()
-        .wt_enabled(1)
+        .wt_enabled(vi(1))
         .enable_webtransport_draft02(true)
-        .webtransport_max_sessions_draft07(100)
-        .wt_max_sessions_draft14(100);
+        .webtransport_max_sessions_draft07(vi(100))
+        .wt_max_sessions_draft14(vi(100));
     let settings = Settings::new().enable_webtransport_server(wt);
     let mut server = ServerConnection::new(settings);
     server.set_control_stream_id(3).unwrap();
@@ -277,11 +283,11 @@ mod draft07 {
         // 応答 SETTINGS を拒否するため)。draft-14 固有のカプセルベースフロー制御は
         // セッション確立後に別途扱う。
         let wt = webtransport::Settings::new()
-            .webtransport_max_sessions_draft07(1)
-            .wt_max_sessions_draft14(1)
-            .wt_initial_max_data(8 * 1024 * 1024)
-            .wt_initial_max_streams_uni(100)
-            .wt_initial_max_streams_bidi(100);
+            .webtransport_max_sessions_draft07(vi(1))
+            .wt_max_sessions_draft14(vi(1))
+            .wt_initial_max_data(vi(8 * 1024 * 1024))
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(100));
         let settings = Settings {
             enable_connect_protocol: None,
             ..Settings::new()
@@ -479,7 +485,7 @@ mod common {
     #[test]
     fn connect_rejected_when_h3_datagram_disabled() {
         // H3_DATAGRAM が無効なクライアントからの CONNECT は全 draft で拒否
-        let wt = webtransport::Settings::new().webtransport_max_sessions_draft07(1);
+        let wt = webtransport::Settings::new().webtransport_max_sessions_draft07(vi(1));
         let settings = Settings {
             enable_connect_protocol: None,
             h3_datagram: Some(false),
@@ -551,7 +557,7 @@ mod common {
     #[test]
     fn connect_rejected_without_transport_verified() {
         // wt_transport_verified が false の場合は拒否
-        let wt = webtransport::Settings::new().webtransport_max_sessions_draft07(1);
+        let wt = webtransport::Settings::new().webtransport_max_sessions_draft07(vi(1));
         let settings = Settings::new().enable_webtransport_server(wt);
         let mut server = ServerConnection::new(settings);
         server.set_control_stream_id(3).unwrap();
@@ -610,7 +616,7 @@ mod no_flow_control_single_session {
 
     /// FC を宣言しない (= initial_max_* を持たない) draft-15 クライアントを作る
     fn build_draft15_client_no_fc() -> shiguredo_http3::ClientConnection {
-        let wt = webtransport::Settings::new().wt_enabled(1);
+        let wt = webtransport::Settings::new().wt_enabled(vi(1));
         let settings = Settings::new()
             .h3_datagram(true)
             .enable_webtransport_server(wt);
@@ -654,7 +660,7 @@ mod no_flow_control_single_session {
         let mut client = build_draft15_client_no_fc();
 
         // サーバー側 SETTINGS を構築 (FC 無効: wt_initial_max_* を持たない)
-        let server_wt = webtransport::Settings::new().wt_enabled(1);
+        let server_wt = webtransport::Settings::new().wt_enabled(vi(1));
         let server_settings = Settings::new()
             .h3_datagram(true)
             .enable_connect_protocol(true)
@@ -730,10 +736,10 @@ mod wt_protocol_without_available_protocols {
     fn client_rejects_wt_protocol_when_no_available_protocols() {
         // クライアントを構築
         let wt = webtransport::Settings::new()
-            .wt_enabled(1)
-            .wt_initial_max_streams_uni(100)
-            .wt_initial_max_streams_bidi(100)
-            .wt_initial_max_data(8 * 1024 * 1024);
+            .wt_enabled(vi(1))
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(100))
+            .wt_initial_max_data(vi(8 * 1024 * 1024));
         let settings = Settings::new()
             .h3_datagram(true)
             .enable_webtransport_server(wt);
@@ -746,10 +752,10 @@ mod wt_protocol_without_available_protocols {
 
         // サーバーの SETTINGS を構築して feed
         let server_wt = webtransport::Settings::new()
-            .wt_enabled(1)
-            .wt_initial_max_streams_uni(100)
-            .wt_initial_max_streams_bidi(100)
-            .wt_initial_max_data(8 * 1024 * 1024);
+            .wt_enabled(vi(1))
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(100))
+            .wt_initial_max_data(vi(8 * 1024 * 1024));
         let server_settings = Settings::new()
             .h3_datagram(true)
             .enable_connect_protocol(true)
@@ -875,10 +881,10 @@ mod protocol_draft_alignment {
         // クライアントが draft-15 の peer に旧値 "webtransport" を送ろうとした場合、
         // send_request は ConnectionError(InternalError) を返す
         let server_wt = webtransport::Settings::new()
-            .wt_enabled(1)
-            .wt_initial_max_streams_uni(100)
-            .wt_initial_max_streams_bidi(100)
-            .wt_initial_max_data(8 * 1024 * 1024);
+            .wt_enabled(vi(1))
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(100))
+            .wt_initial_max_data(vi(8 * 1024 * 1024));
         let server_settings = Settings::new()
             .h3_datagram(true)
             .enable_connect_protocol(true)
@@ -887,7 +893,7 @@ mod protocol_draft_alignment {
         server.set_control_stream_id(3).unwrap();
         let (server_ctrl, _) = server.take_stream_data(3).unwrap();
 
-        let client_wt = webtransport::Settings::new().wt_enabled(1);
+        let client_wt = webtransport::Settings::new().wt_enabled(vi(1));
         let client_settings = Settings::new()
             .h3_datagram(true)
             .enable_webtransport_server(client_wt);

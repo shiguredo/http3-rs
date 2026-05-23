@@ -46,7 +46,7 @@ pub use error::{ApplicationErrorCode, Error, ErrorCode};
 pub use session::{
     BufferedStream, CapsuleProcessError, FlowControlLimits, FlowControlState, Session, SessionState,
 };
-pub use settings::{Settings, SettingsId};
+pub use settings::Settings;
 pub use stream::{
     BIDIRECTIONAL_SIGNAL_VALUE, ClassifiedUniStream, Stream, StreamHeader, StreamHeaderDecodeError,
     UNIDIRECTIONAL_STREAM_TYPE, classify_uni_stream, classify_uni_stream_checked, stream_type,

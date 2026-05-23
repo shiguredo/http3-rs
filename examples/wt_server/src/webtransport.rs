@@ -17,7 +17,9 @@ use shiguredo_http3::webtransport::connect::{ConnectRequest, ConnectResponse};
 use shiguredo_http3::webtransport::stream::{
     ClassifiedUniStream, StreamHeader, StreamHeaderDecodeError, classify_uni_stream_checked,
 };
-use shiguredo_http3::{Connection, Event, Settings as H3Settings, SettingsPayload};
+use shiguredo_http3::{
+    Connection, Event, Setting, Settings as H3Settings, SettingsPayload, VarInt,
+};
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -993,14 +995,20 @@ fn parse_settings_from_control(buf: &[u8]) -> std::result::Result<H3Settings, Se
         let (value, value_len) = shiguredo_http3::varint::decode(&payload_buf[pos..])
             .map_err(|_| SettingsParseState::Error("settings value decode error".into()))?;
         pos += value_len;
-        let id = id.get();
-        let value = value.get();
-        tracing::info!("WebTransport: client SETTINGS entry: id=0x{id:x}, value={value}");
-        payload.add(id, value);
+        tracing::info!(
+            "WebTransport: client SETTINGS entry: id=0x{:x}, value={}",
+            id.get(),
+            value.get()
+        );
+        let setting = Setting::from_wire(id, value).map_err(|e| {
+            SettingsParseState::Error(format!("invalid client SETTINGS entry: {e}"))
+        })?;
+        payload
+            .add(setting)
+            .map_err(|e| SettingsParseState::Error(format!("settings payload add failed: {e}")))?;
     }
 
-    let settings = H3Settings::from_payload(&payload)
-        .map_err(|e| SettingsParseState::Error(format!("settings parse error: {e}")))?;
+    let settings = H3Settings::from_payload(&payload);
     tracing::info!("WebTransport: client SETTINGS parsed: {settings:?}");
     Ok(settings)
 }
@@ -1008,26 +1016,27 @@ fn parse_settings_from_control(buf: &[u8]) -> std::result::Result<H3Settings, Se
 /// draft バージョンに合わせたサーバー WT 設定を構築する
 fn build_server_wt_settings(draft: DraftVersion) -> shiguredo_http3::webtransport::Settings {
     tracing::info!("WebTransport: building server settings for {draft:?}");
+    let v = |value: u64| VarInt::new(value).expect("WT settings value must fit VarInt");
     match draft {
         DraftVersion::Draft15 => shiguredo_http3::webtransport::Settings::new()
-            .wt_enabled(1)
-            .wt_initial_max_streams_uni(1000)
-            .wt_initial_max_streams_bidi(1000),
+            .wt_enabled(VarInt::from_static(1))
+            .wt_initial_max_streams_uni(v(1000))
+            .wt_initial_max_streams_bidi(v(1000)),
         // Draft-14: Safari 26.4 は 0xc671706a (draft-07) と 0x14e9cd29 (draft-14) の両方を送る。
         // サーバーも両方返すことで、どちらの ID で判定しても WebTransport 対応と認識させる。
         DraftVersion::Draft14 => shiguredo_http3::webtransport::Settings::new()
-            .wt_max_sessions_draft14(100)
-            .webtransport_max_sessions_draft07(100)
-            .wt_initial_max_streams_uni(1000)
-            .wt_initial_max_streams_bidi(1000)
-            .wt_initial_max_data(8 * 1024 * 1024),
+            .wt_max_sessions_draft14(v(100))
+            .webtransport_max_sessions_draft07(v(100))
+            .wt_initial_max_streams_uni(v(1000))
+            .wt_initial_max_streams_bidi(v(1000))
+            .wt_initial_max_data(v(8 * 1024 * 1024)),
         // Draft-07: Safari 26.4 は応答 SETTINGS に draft-14 系の
         // WT_INITIAL_MAX_STREAMS_* / WT_INITIAL_MAX_DATA を含めると
         // H3_REQUEST_CANCELLED (0x10C) で CONNECT をリセットする。
         // (docs/SAFARI_WT.md 参照) 初期フロー制御値はセッション確立後の
         // WT_MAX_STREAMS / WT_MAX_DATA カプセルで通知する。
         DraftVersion::Draft07 => {
-            shiguredo_http3::webtransport::Settings::new().webtransport_max_sessions_draft07(100)
+            shiguredo_http3::webtransport::Settings::new().webtransport_max_sessions_draft07(v(100))
         }
         DraftVersion::Draft02 => {
             shiguredo_http3::webtransport::Settings::new().enable_webtransport_draft02(true)

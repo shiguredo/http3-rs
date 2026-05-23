@@ -2,20 +2,21 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use shiguredo_http3::webtransport;
+use shiguredo_http3::{VarInt, webtransport};
 use tokio_s2n_quic::{ClientConfig, WtClient};
 
 #[tokio::main]
 async fn main() -> tokio_s2n_quic::Result<()> {
     let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 4433);
 
+    let v = |value: u64| VarInt::new(value).expect("WT settings value must fit VarInt");
     let wt = webtransport::Settings::new()
-        .wt_enabled(1)
+        .wt_enabled(VarInt::from_static(1))
         .enable_webtransport_draft02(true)
-        .webtransport_max_sessions_draft07(1)
-        .wt_initial_max_streams_bidi(100)
-        .wt_initial_max_streams_uni(100)
-        .wt_initial_max_data(1048576);
+        .webtransport_max_sessions_draft07(VarInt::from_static(1))
+        .wt_initial_max_streams_bidi(v(100))
+        .wt_initial_max_streams_uni(v(100))
+        .wt_initial_max_data(v(1_048_576));
     let config = ClientConfig::new(remote_addr, "localhost")
         .insecure()
         .enable_webtransport(wt);

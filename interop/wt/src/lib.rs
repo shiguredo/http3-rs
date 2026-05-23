@@ -10,13 +10,15 @@ use rcgen::generate_simple_self_signed;
 
 /// テスト用の WebTransport Settings を作成
 pub fn test_wt_settings() -> shiguredo_http3::webtransport::Settings {
+    use shiguredo_http3::VarInt;
+    let v = |value: u64| VarInt::new(value).expect("WT settings value must fit VarInt");
     shiguredo_http3::webtransport::Settings::new()
-        .wt_enabled(1)
+        .wt_enabled(VarInt::from_static(1))
         .enable_webtransport_draft02(true)
-        .webtransport_max_sessions_draft07(1)
-        .wt_initial_max_streams_bidi(100)
-        .wt_initial_max_streams_uni(100)
-        .wt_initial_max_data(1048576)
+        .webtransport_max_sessions_draft07(VarInt::from_static(1))
+        .wt_initial_max_streams_bidi(v(100))
+        .wt_initial_max_streams_uni(v(100))
+        .wt_initial_max_data(v(1_048_576))
 }
 
 /// 共有証明書を生成 (すべての実装で使用)

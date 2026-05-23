@@ -17,6 +17,11 @@ mod encoder;
 pub use decoder::{FrameHeader, decode_frame, decode_frame_header};
 pub use encoder::{encode_frame, encode_frame_header, encoded_frame_len};
 
+use std::collections::HashSet;
+
+use crate::settings::{Setting, SettingError};
+use crate::varint::VarInt;
+
 /// フレームタイプ (RFC 9114 Section 7.2)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u64)]
@@ -123,10 +128,16 @@ impl HeadersPayload {
 }
 
 /// SETTINGS フレームペイロード
+///
+/// 内部の [`Setting`] は構築時に値検査済みかつ ID 重複が無いことを保証する。
+/// wire 表現の `(id, value)` から構築するには [`Setting::from_wire`] で先に
+/// [`Setting`] を作って [`SettingsPayload::add`] に渡す。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SettingsPayload {
-    /// 設定エントリのリスト (ID, 値)
-    pub entries: Vec<(u64, u64)>,
+    /// 設定エントリのリスト (構築順を維持し、ID 重複は許容しない)
+    settings: Vec<Setting>,
+    /// `add` 経由で投入された ID の集合 (重複検出用)
+    seen_ids: HashSet<VarInt>,
 }
 
 impl SettingsPayload {
@@ -135,20 +146,57 @@ impl SettingsPayload {
         Self::default()
     }
 
-    /// 設定エントリを追加
-    pub fn add(&mut self, id: u64, value: u64) {
-        self.entries.push((id, value));
+    /// 検査済みの [`Setting`] を追加する
+    ///
+    /// 同一 SETTINGS ID が既に存在する場合は
+    /// [`SettingError::DuplicateId`] を返す (RFC 9114 §7.2.4: MUST NOT
+    /// occur more than once)。
+    pub fn add(&mut self, setting: Setting) -> Result<(), SettingError> {
+        let id = setting.id();
+        if !self.seen_ids.insert(id) {
+            return Err(SettingError::DuplicateId { id });
+        }
+        self.settings.push(setting);
+        Ok(())
+    }
+
+    /// 保持する全 [`Setting`] のスライス
+    ///
+    /// 追加順を維持し、ID 重複は構築時に弾かれているため存在しない。
+    pub fn settings(&self) -> &[Setting] {
+        &self.settings
+    }
+
+    /// エントリ数
+    pub fn len(&self) -> usize {
+        self.settings.len()
+    }
+
+    /// エントリが空かどうか
+    pub fn is_empty(&self) -> bool {
+        self.settings.is_empty()
     }
 
     /// Settings から SettingsPayload を作成
     ///
-    /// H3 設定と WebTransport 設定の両方を含める。
+    /// H3 設定と WebTransport 設定の両方を含める。`Settings` のフィールドは
+    /// 各 ID と 1 対 1 に対応するため、追加時に [`SettingError::DuplicateId`] が
+    /// 発生する可能性は無い (`expect` で握り潰す)。
     pub fn from_settings(settings: &crate::settings::Settings) -> Self {
-        let mut entries: Vec<_> = settings.iter().collect();
-        if let Some(wt) = &settings.wt_settings {
-            entries.extend(wt.iter());
+        let mut payload = Self::new();
+        for setting in settings.iter() {
+            payload
+                .add(setting)
+                .expect("Settings::iter() yields unique IDs");
         }
-        Self { entries }
+        if let Some(wt) = &settings.wt_settings {
+            for setting in wt.iter() {
+                payload
+                    .add(setting)
+                    .expect("webtransport::Settings::iter() yields unique IDs");
+            }
+        }
+        payload
     }
 }
 

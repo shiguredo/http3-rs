@@ -68,12 +68,15 @@ async fn run_server(listen: &str, reject_connect: bool) -> Result<(), Error> {
     // WebTransport 用の HTTP/3 設定
     // draft-15: SETTINGS_WT_INITIAL_MAX_STREAMS で初期ストリーム上限を通知する
     // 動的な WT_MAX_STREAMS カプセルによる上限更新は未実装のため、初期値を大きく設定する
+    let v = |value: u64| {
+        shiguredo_http3::VarInt::new(value).expect("WT settings value must fit VarInt")
+    };
     let wt_settings = shiguredo_http3::webtransport::Settings::new()
-        .wt_enabled(1)
-        .wt_initial_max_streams_uni(1000)
-        .wt_initial_max_streams_bidi(1000)
+        .wt_enabled(shiguredo_http3::VarInt::from_static(1))
+        .wt_initial_max_streams_uni(v(1000))
+        .wt_initial_max_streams_bidi(v(1000))
         .enable_webtransport_draft02(true)
-        .webtransport_max_sessions_draft07(100);
+        .webtransport_max_sessions_draft07(v(100));
     let h3_settings = shiguredo_http3::Settings::default().enable_webtransport_server(wt_settings);
 
     loop {

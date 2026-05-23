@@ -4,6 +4,10 @@
 
 use core::fmt;
 
+use crate::settings::SettingError;
+// `Error::Settings(SettingError)` は dead code であったため削除した。
+// SETTINGS 検査エラーは `FrameDecodeError::InvalidSetting(SettingError)` 経由で伝播する。
+
 /// HTTP/3 エラーコード (RFC 9114 Section 8.1)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u64)]
@@ -122,6 +126,7 @@ impl fmt::Display for ErrorCode {
 }
 
 /// HTTP/3 エラー
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// 接続エラー (接続をクローズすべき)
@@ -179,6 +184,7 @@ impl core::error::Error for Error {
 }
 
 /// フレームデコードエラー
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameDecodeError {
     /// バッファ不足
@@ -187,8 +193,11 @@ pub enum FrameDecodeError {
     UnknownFrameType(u64),
     /// 無効なフレーム長
     InvalidLength,
-    /// 無効な設定 ID
-    InvalidSettingsId(u64),
+    /// SETTINGS パラメータの構築時検査でエラーが発生した
+    ///
+    /// 内部に [`SettingError`] を保持し、ID / 値 / 重複の詳細を伝える
+    /// (RFC 9114 §7.2.4 / §7.2.4.1)。
+    InvalidSetting(SettingError),
     /// HTTP/2 専用フレームの検出
     Http2Frame(u64),
     /// サーバープッシュはサポートしない (CANCEL_PUSH, PUSH_PROMISE, MAX_PUSH_ID)
@@ -201,7 +210,7 @@ impl fmt::Display for FrameDecodeError {
             Self::BufferTooShort => write!(f, "buffer too short"),
             Self::UnknownFrameType(t) => write!(f, "unknown frame type: {t:#x}"),
             Self::InvalidLength => write!(f, "invalid frame length"),
-            Self::InvalidSettingsId(id) => write!(f, "invalid settings id: {id:#x}"),
+            Self::InvalidSetting(e) => write!(f, "invalid settings parameter: {e}"),
             Self::Http2Frame(t) => write!(f, "http/2 frame not allowed: {t:#x}"),
             Self::ServerPushNotSupported(t) => {
                 write!(f, "server push not supported: {t:#x}")
@@ -210,7 +219,20 @@ impl fmt::Display for FrameDecodeError {
     }
 }
 
-impl core::error::Error for FrameDecodeError {}
+impl core::error::Error for FrameDecodeError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::InvalidSetting(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<SettingError> for FrameDecodeError {
+    fn from(e: SettingError) -> Self {
+        Self::InvalidSetting(e)
+    }
+}
 
 /// QPACK エラー
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

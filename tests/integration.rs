@@ -1,6 +1,10 @@
 //! 統合テスト: クライアント・サーバー間の通信シミュレーション
 
-use shiguredo_http3::{ClientConnection, Event, Header, ServerConnection, Settings};
+use shiguredo_http3::{ClientConnection, Event, Header, ServerConnection, Settings, VarInt};
+
+fn vi(value: u64) -> VarInt {
+    VarInt::new(value).unwrap()
+}
 
 /// クライアントからサーバーへのリクエスト・レスポンス交換をシミュレート
 #[test]
@@ -247,16 +251,16 @@ fn test_multiple_requests() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn test_custom_settings() {
     let settings = Settings::new()
-        .max_field_section_size(8192)
-        .qpack_max_table_capacity(4096)
-        .qpack_blocked_streams(100);
+        .max_field_section_size(vi(8192))
+        .qpack_max_table_capacity(vi(4096))
+        .qpack_blocked_streams(vi(100));
 
     let mut client = ClientConnection::new(settings);
     client.set_control_stream_id(2).unwrap();
 
     // ローカル設定を確認
     let local = client.local_settings();
-    assert_eq!(local.max_field_section_size, Some(8192));
-    assert_eq!(local.qpack_max_table_capacity, Some(4096));
-    assert_eq!(local.qpack_blocked_streams, Some(100));
+    assert_eq!(local.max_field_section_size, Some(vi(8192)));
+    assert_eq!(local.qpack_max_table_capacity, Some(vi(4096)));
+    assert_eq!(local.qpack_blocked_streams, Some(vi(100)));
 }

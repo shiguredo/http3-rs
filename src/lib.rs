@@ -68,6 +68,6 @@ pub use qpack::{
     DynamicDecoder, DynamicEncoder, DynamicEntry, DynamicTable, Encoder as QpackEncoder,
     EncoderInstruction, EncoderStream, EncoderStreamReceiver, Header, HeaderError,
 };
-pub use settings::{Settings, SettingsId};
+pub use settings::{Setting, SettingError, Settings, UnknownSetting};
 pub use stream::{RequestStream, StreamKind, StreamState, UniStreamType};
 pub use varint::{VarInt, VarIntError};
