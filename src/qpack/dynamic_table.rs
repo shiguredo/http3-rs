@@ -197,10 +197,10 @@ impl DynamicTable {
         name_index: u64,
         is_static: bool,
         value: Vec<u8>,
-        static_table: &[crate::qpack::table::StaticEntry],
+        static_table: &[crate::qpack::Header],
     ) -> Option<u64> {
         let name = if is_static {
-            static_table.get(name_index as usize)?.name.to_vec()
+            static_table.get(name_index as usize)?.name().to_vec()
         } else {
             self.get_by_absolute_index(name_index)?.name.clone()
         };

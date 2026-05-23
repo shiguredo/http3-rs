@@ -87,7 +87,7 @@ fn valid_path() -> impl Strategy<Value = Vec<u8>> {
 fn valid_regular_headers() -> impl Strategy<Value = Vec<Header>> {
     prop::collection::vec(
         (valid_field_name(), valid_field_value())
-            .prop_map(|(name, value)| Header::new(name, value)),
+            .prop_map(|(name, value)| Header::new(name, value).unwrap()),
         0..=5,
     )
 }
@@ -107,7 +107,7 @@ proptest! {
     ) {
         let header_list: Vec<Header> = headers
             .iter()
-            .map(|(n, v)| Header::new(n.as_slice(), v.as_slice()))
+            .map(|(n, v)| Header::new(n.as_slice(), v.as_slice()).unwrap())
             .collect();
 
         // RFC 9114 Section 4.2.2: 各フィールドの name_len + value_len + 32 の合計
@@ -138,10 +138,10 @@ proptest! {
         prop_assume!(method != b"CONNECT");
 
         let mut headers = vec![
-            Header::new(b":method", method.as_slice()),
-            Header::new(b":scheme", scheme.as_slice()),
-            Header::new(b":path", path.as_slice()),
-            Header::new(b":authority", b"example.com"),
+            Header::new(b":method", method.as_slice()).unwrap(),
+            Header::new(b":scheme", scheme.as_slice()).unwrap(),
+            Header::new(b":path", path.as_slice()).unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
         ];
         headers.extend(regular_headers);
 
@@ -165,11 +165,11 @@ proptest! {
         status in valid_status(),
         regular_headers in valid_regular_headers(),
     ) {
-        let mut headers = vec![Header::new(b":status", status.as_slice())];
+        let mut headers = vec![Header::new(b":status", status.as_slice()).unwrap()];
         // レスポンスでは "te" ヘッダーは禁止なのでフィルタする
         let filtered: Vec<_> = regular_headers
             .into_iter()
-            .filter(|h| h.name != b"te")
+            .filter(|h| h.name() != b"te")
             .collect();
         headers.extend(filtered);
 
@@ -198,11 +198,11 @@ proptest! {
 
         // 擬似ヘッダー → 通常ヘッダー → 擬似ヘッダー の順序にする
         let headers = vec![
-            Header::new(b":method", method.as_slice()),
-            Header::new(b":scheme", scheme.as_slice()),
-            Header::new(b"x-test", b"value"),
+            Header::new(b":method", method.as_slice()).unwrap(),
+            Header::new(b":scheme", scheme.as_slice()).unwrap(),
+            Header::new(b"x-test", b"value").unwrap(),
             // 通常ヘッダーの後に擬似ヘッダー (不正)
-            Header::new(b":path", path.as_slice()),
+            Header::new(b":path", path.as_slice()).unwrap(),
         ];
 
         let result = validate_request_headers(&headers);
@@ -230,11 +230,11 @@ proptest! {
         ]),
     ) {
         let headers = vec![
-            Header::new(b":method", b"GET"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":path", b"/"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(conn_header.as_slice(), b"some-value"),
+            Header::new(b":method", b"GET").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":path", b"/").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(conn_header.as_slice(), b"some-value").unwrap(),
         ];
 
         let result = validate_request_headers(&headers);
@@ -257,8 +257,8 @@ proptest! {
         ]),
     ) {
         let headers = vec![
-            Header::new(b":status", b"200"),
-            Header::new(conn_header.as_slice(), b"some-value"),
+            Header::new(b":status", b"200").unwrap(),
+            Header::new(conn_header.as_slice(), b"some-value").unwrap(),
         ];
 
         let result = validate_response_headers(&headers);
@@ -280,8 +280,8 @@ proptest! {
     fn prop_content_length_match_ok(body_size in 0u64..10000) {
         let cl_str = body_size.to_string();
         let headers = vec![
-            Header::new(b":method", b"GET"),
-            Header::new(b"content-length", cl_str.as_bytes()),
+            Header::new(b":method", b"GET").unwrap(),
+            Header::new(b"content-length", cl_str.as_bytes()).unwrap(),
         ];
 
         let result = validate_content_length(&headers, body_size, false);
@@ -298,8 +298,8 @@ proptest! {
 
         let cl_str = expected.to_string();
         let headers = vec![
-            Header::new(b":method", b"GET"),
-            Header::new(b"content-length", cl_str.as_bytes()),
+            Header::new(b":method", b"GET").unwrap(),
+            Header::new(b"content-length", cl_str.as_bytes()).unwrap(),
         ];
 
         let result = validate_content_length(&headers, actual, false);
@@ -323,7 +323,7 @@ proptest! {
     ) {
         let header_list: Vec<Header> = headers
             .iter()
-            .map(|(n, v)| Header::new(n.as_slice(), v.as_slice()))
+            .map(|(n, v)| Header::new(n.as_slice(), v.as_slice()).unwrap())
             .collect();
 
         let size = calculate_field_section_size(&header_list);
@@ -346,7 +346,7 @@ proptest! {
     ) {
         let header_list: Vec<Header> = headers
             .iter()
-            .map(|(n, v)| Header::new(n.as_slice(), v.as_slice()))
+            .map(|(n, v)| Header::new(n.as_slice(), v.as_slice()).unwrap())
             .collect();
 
         let result = check_field_section_size(&header_list, None);
@@ -375,7 +375,7 @@ proptest! {
         // 有効な通常ヘッダーのみのトレーラーは受理される
         let filtered: Vec<_> = regular_headers
             .iter()
-            .filter(|h| h.name != b"te")
+            .filter(|h| h.name() != b"te")
             .cloned()
             .collect();
         if !filtered.is_empty() {
@@ -384,14 +384,59 @@ proptest! {
         }
 
         // 擬似ヘッダーを混入
+        //
+        // `:status` の値 `"value"` は構築時検査 (3DIGIT) に違反するため
+        // `Header::new` では構築できない。トレーラーで疑似ヘッダーが拒否される
+        // ことの確認が主目的なので、構築時検査を迂回して直接構築する。
         let mut bad_trailer = filtered;
-        bad_trailer.push(Header::new(pseudo.as_slice(), b"value"));
+        bad_trailer.push(Header::from_validated_parts(
+            std::borrow::Cow::Owned(pseudo.clone()),
+            std::borrow::Cow::Borrowed(b"value"),
+        ));
 
         let result = validate_trailer_headers(&bad_trailer);
         prop_assert!(
             result.is_err(),
             "擬似ヘッダー {:?} を含むトレーラーが受理された",
             String::from_utf8_lossy(&pseudo),
+        );
+    }
+}
+
+// =============================================================================
+// `:protocol` 値の構築時検査 (`Header::new`) と validation 側 (`is_valid_protocol`)
+// の同値性 (RFC 8441 Section 4 / RFC 9110 Section 7.8)
+//
+// `qpack::header::check_upgrade_token` と `validation::is_valid_protocol` の
+// 挙動が乖離していないことを保証する。
+// =============================================================================
+
+proptest! {
+    /// Property: `Header::new(b":protocol", v).is_ok()` ⇔ Extended CONNECT で
+    /// 同じ `v` を渡したリクエストが `validate_request_headers` を通る
+    #[test]
+    fn prop_protocol_check_consistency(
+        value in prop::collection::vec(any::<u8>(), 0..=32),
+    ) {
+        let build_ok = Header::new(b":protocol", &value).is_ok();
+
+        // バイパス経路で Header を組み立て、validation 側の判定だけを取り出す
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::from_validated_parts(
+                std::borrow::Cow::Borrowed(b":protocol"),
+                std::borrow::Cow::Owned(value.clone()),
+            ),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+        ];
+        let validate_ok = validate_request_headers(&headers).is_ok();
+
+        prop_assert_eq!(
+            build_ok, validate_ok,
+            "Header::new と validation::is_valid_protocol の判定が乖離: value={:?}",
+            value,
         );
     }
 }

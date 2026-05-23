@@ -4,7 +4,7 @@
 
 use crate::error::{Error, ErrorCode};
 use crate::frame::{self, DataPayload, Frame, HeadersPayload};
-use crate::qpack::DecodedHeader;
+use crate::qpack::Header;
 
 use super::{RecvBuffer, SendBuffer, StreamState};
 
@@ -54,7 +54,7 @@ pub struct RequestStream {
     /// ストリーム状態
     state: StreamState,
     /// 受信済みヘッダー
-    recv_headers: Vec<DecodedHeader>,
+    recv_headers: Vec<Header>,
     /// 受信済みボディ
     recv_body: Vec<u8>,
     /// HEAD リクエストかどうか (クライアントが HEAD を送信した場合 true)
@@ -381,7 +381,7 @@ impl RequestStream {
     }
 
     /// デコード済みヘッダーを設定 (Connection から呼び出し)
-    pub fn set_recv_headers(&mut self, headers: Vec<DecodedHeader>) {
+    pub fn set_recv_headers(&mut self, headers: Vec<Header>) {
         self.recv_headers = headers;
     }
 
@@ -409,7 +409,7 @@ impl RequestStream {
     }
 
     /// 受信済みヘッダーを取得
-    pub fn received_headers(&self) -> &[DecodedHeader] {
+    pub fn received_headers(&self) -> &[Header] {
         &self.recv_headers
     }
 
@@ -480,7 +480,7 @@ impl RequestStream {
 #[derive(Debug, Clone)]
 pub enum ReceivedData {
     /// ヘッダー
-    Headers(Vec<DecodedHeader>),
+    Headers(Vec<Header>),
     /// ボディデータ
     Data(Vec<u8>),
     /// ストリーム終了
@@ -511,10 +511,10 @@ mod tests {
     fn test_request_stream_send_encoded_headers() {
         let mut stream = RequestStream::new(0);
         let headers = vec![
-            Header::new(b":method", b"GET"),
-            Header::new(b":path", b"/"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
+            Header::new(b":method", b"GET").unwrap(),
+            Header::new(b":path", b"/").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
         ];
 
         // QPACK エンコード
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn test_request_stream_send_body() {
         let mut stream = RequestStream::new(0);
-        let headers = vec![Header::new(b":method", b"POST")];
+        let headers = vec![Header::new(b":method", b"POST").unwrap()];
 
         // QPACK エンコード
         let encoder = QpackEncoder::new();

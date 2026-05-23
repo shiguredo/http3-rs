@@ -21,18 +21,41 @@
   - @voluntas
 - [ADD] `varint::DecodeError` / `varint::EncodeError` / `webtransport::DatagramError` / `webtransport::stream::StreamHeaderDecodeError` に `#[non_exhaustive]` を付与し、将来のバリアント追加を後方互換にする
   - @voluntas
+- [ADD] `qpack::Header::from_static` を `const fn` で追加し、リテラル定数の RFC 9114 / RFC 9110 違反を `const` / `static` 宣言時にコンパイル時 panic として検出可能にする
+  - @voluntas
+- [ADD] `qpack::HeaderError` を新設し、`Header::new` のバリデーションエラーを構造化する (`#[non_exhaustive]`)
+  - @voluntas
+- [ADD] `validation` に `:protocol` 値検査 (RFC 8441 Section 4 / RFC 9220 Section 3 / RFC 9110 Section 7.8 の HTTP Upgrade Token 構文) を追加する
+  - @voluntas
+- [ADD] `qpack::Header::new` / `Header::from_static` の `:protocol` 値検査 (HTTP Upgrade Token 構文) を構築時検査に組み込む
+  - @voluntas
+- [ADD] `internal-test` フィーチャーを追加し、PBT / fuzz / 統合テストから検査バイパス API (`Header::from_validated_parts`) を利用できるようにする (通常のアプリケーションでは有効化しない)
+  - @voluntas
 - [CHANGE] `varint::encode` / `varint::encode_into_vec` / `varint::decode` のシグネチャを `VarInt` を扱う形に変更する
   - @voluntas
 - [CHANGE] `varint::MAX_VALUE` / `varint::encoded_len(u64)` / `varint::try_encoded_len` / `varint::try_encode_into_vec` / `varint::EncodeError::ValueTooLarge` を削除する (`VarInt` 型が値域を保証するため)
   - @voluntas
 - [CHANGE] `frame::encoded_frame_len` の戻り値型を `usize` から `Option<usize>` に変更し、`Frame::Unknown` 等の `u64` フィールドが VarInt 範囲外の場合に `None` を返すようにする
   - @voluntas
+- [CHANGE] `qpack::Header::new` を `Result<Self, HeaderError>` 化し、field-name / field-value / 疑似ヘッダー名・値の構築時検査を強制する
+  - @voluntas
+- [CHANGE] `qpack::Header` のフィールドを private 化し、`name()` / `value()` / `size()` アクセサを提供する。内部表現を `Cow<'static, [u8]>` に変更する (将来 issue 0059 の `Bytes` 化と統合予定)
+  - @voluntas
+- [CHANGE] `qpack::DecodedHeader` を削除し、`qpack::Decoder::decode` / `DynamicDecoder::decode` の戻り値型を `Vec<Header>` / `DecodeOutput::Decoded(Vec<Header>)` に統一する
+  - @voluntas
+- [CHANGE] `qpack::StaticEntry` を削除し、`STATIC_TABLE` を `&[Header]` 化する。`get_static_entry` の戻り値型を `Option<&'static Header>` に変更する
+  - @voluntas
+- [CHANGE] `validation::HeaderField` トレイトを削除し、`validate_request_headers` 等の
+  検証関数群 (`validate_response_headers` / `validate_headers` / `validate_content_length` /
+  `validate_trailer_headers` / `calculate_field_section_size` / `check_field_section_size`)
+  を `&[Header]` 直受けに変更する
+  - @voluntas
+- [CHANGE] `webtransport::ConnectRequest::to_headers` / `webtransport::ConnectResponse::to_headers` の戻り値型を `Result<Vec<Header>, HeaderError>` に変更し、フィールド値の RFC 違反を構造化エラーで通知する
+  - @voluntas
 
 ### misc
 
 - [UPDATE] 仕様引用の節番号を一次資料 (`refs/`) に合わせてコメントを修正する
-  - @voluntas
-- [ADD] `refs/` に RFC 7541, RFC 9110, RFC 9651 の一次資料を追加する
   - @voluntas
 - [UPDATE] 相互運用テスト用クレートの配置を `interop_h3` / `interop_wt` から `interop/h3` / `interop/wt` に移す
   - @voluntas
@@ -43,6 +66,8 @@
 - [UPDATE] edition と rust-version を `[workspace.package]` で共通化し、workspace member は `.workspace = true` で継承するようにする
   - @voluntas
 - [UPDATE] fuzz ターゲットからラウンドトリップ等のプロパティ検証を削除し、パニック安全性の検証だけに絞る
+  - @voluntas
+- [ADD] `refs/` に RFC 7541, RFC 9110, RFC 9651 の一次資料を追加する
   - @voluntas
 - [ADD] ngtcp2/nghttp3 と s2n-quic の WebTransport 相互運用テストを平日 JST 11:00 に実行する GitHub Actions ワークフローを追加する
   - @voluntas

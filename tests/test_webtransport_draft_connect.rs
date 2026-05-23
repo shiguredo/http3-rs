@@ -172,17 +172,18 @@ fn feed_client_settings(server: &mut ServerConnection, client_ctrl: &[u8]) {
 /// WebTransport CONNECT ヘッダーを構築する
 fn wt_connect_headers(draft: DraftVersion) -> Vec<Header> {
     vec![
-        Header::new(b":method", b"CONNECT"),
+        Header::new(b":method", b"CONNECT").unwrap(),
         Header::new(
             b":protocol",
             match draft {
                 DraftVersion::Draft15 => b"webtransport-h3" as &[u8],
                 _ => b"webtransport",
             },
-        ),
-        Header::new(b":scheme", b"https"),
-        Header::new(b":authority", b"example.com"),
-        Header::new(b":path", b"/wt"),
+        )
+        .unwrap(),
+        Header::new(b":scheme", b"https").unwrap(),
+        Header::new(b":authority", b"example.com").unwrap(),
+        Header::new(b":path", b"/wt").unwrap(),
     ]
 }
 
@@ -533,11 +534,11 @@ mod common {
         feed_client_settings(&mut server, &client_ctrl);
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport"),
-            Header::new(b":scheme", b"http"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport").unwrap(),
+            Header::new(b":scheme", b"http").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
         let frame = build_headers_frame(&headers);
         let err = server.feed_stream(0, &frame, false).unwrap_err();
@@ -583,11 +584,11 @@ mod common {
         feed_client_settings(&mut server, &client_ctrl);
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"websocket"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/ws"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"websocket").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/ws").unwrap(),
         ];
         let frame = build_headers_frame(&headers);
         // WebSocket CONNECT は WebTransport のチェックを通らない
@@ -713,8 +714,8 @@ mod wt_protocol_without_available_protocols {
 
         // wt-protocol を含む 2xx を返そうとする → エラー
         let response = vec![
-            Header::new(b":status", b"200"),
-            Header::new(b"wt-protocol", b"\"echo\""),
+            Header::new(b":status", b"200").unwrap(),
+            Header::new(b"wt-protocol", b"\"echo\"").unwrap(),
         ];
         let err = server.send_response(0, &response, false).unwrap_err();
         assert!(
@@ -767,8 +768,8 @@ mod wt_protocol_without_available_protocols {
 
         // 偽の 2xx + WT-Protocol レスポンスをクライアントに feed する
         let response = vec![
-            Header::new(b":status", b"200"),
-            Header::new(b"wt-protocol", b"\"echo\""),
+            Header::new(b":status", b"200").unwrap(),
+            Header::new(b"wt-protocol", b"\"echo\"").unwrap(),
         ];
         let frame = build_headers_frame(&response);
         client.feed_stream(stream_id, &frame, false).unwrap();
@@ -811,11 +812,11 @@ mod protocol_draft_alignment {
     /// `:protocol` を任意指定して WT CONNECT ヘッダーを構築する
     fn wt_connect_headers_with_protocol(protocol: &'static [u8]) -> Vec<Header> {
         vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", protocol),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", protocol).unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ]
     }
 

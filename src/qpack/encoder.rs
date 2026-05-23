@@ -10,27 +10,9 @@
 use std::collections::{HashMap, VecDeque};
 
 use super::dynamic_table::DynamicTable;
+use super::header::Header;
 use super::huffman;
 use super::table::{STATIC_TABLE, find_static_entry};
-
-/// ヘッダーフィールド
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Header {
-    /// ヘッダー名
-    pub name: Vec<u8>,
-    /// ヘッダー値
-    pub value: Vec<u8>,
-}
-
-impl Header {
-    /// 新しいヘッダーを作成
-    pub fn new(name: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Self {
-        Self {
-            name: name.into(),
-            value: value.into(),
-        }
-    }
-}
 
 /// QPACK エンコーダー
 #[derive(Debug, Default)]
@@ -82,17 +64,17 @@ impl Encoder {
 
     /// 単一のヘッダーをエンコード
     fn encode_header(&self, buf: &mut [u8], header: &Header) -> Option<usize> {
-        let (exact_match, name_match) = find_static_entry(&header.name, &header.value);
+        let (exact_match, name_match) = find_static_entry(header.name(), header.value());
 
         if let Some(index) = exact_match {
             // Indexed Field Line (静的テーブルの完全一致)
             self.encode_indexed_field(buf, index)
         } else if let Some(index) = name_match {
             // Literal Field Line with Name Reference (名前のみ一致)
-            self.encode_literal_with_name_ref(buf, index, &header.value)
+            self.encode_literal_with_name_ref(buf, index, header.value())
         } else {
             // Literal Field Line with Literal Name
-            self.encode_literal_with_literal_name(buf, &header.name, &header.value)
+            self.encode_literal_with_literal_name(buf, header.name(), header.value())
         }
     }
 
@@ -276,17 +258,17 @@ pub fn estimate_encoded_size(headers: &[Header]) -> usize {
     let mut size = 2;
 
     for header in headers {
-        let (exact_match, name_match) = find_static_entry(&header.name, &header.value);
+        let (exact_match, name_match) = find_static_entry(header.name(), header.value());
 
         if exact_match.is_some() {
             // Indexed Field Line: 1-2 bytes
             size += 2;
         } else if name_match.is_some() {
             // Literal with Name Reference
-            size += 2 + 1 + header.value.len();
+            size += 2 + 1 + header.value().len();
         } else {
             // Literal with Literal Name
-            size += 2 + header.name.len() + 1 + header.value.len();
+            size += 2 + header.name().len() + 1 + header.value().len();
         }
     }
 
@@ -535,7 +517,7 @@ impl DynamicEncoder {
 
         for header in headers {
             // 動的テーブルで検索
-            let (exact, name_only) = self.table.find_entry(&header.name, &header.value);
+            let (exact, name_only) = self.table.find_entry(header.name(), header.value());
             if let Some(idx) = exact {
                 if idx + 1 > required_insert_count {
                     required_insert_count = idx + 1;
@@ -591,17 +573,17 @@ impl DynamicEncoder {
 
     /// 静的テーブルのみを使用してヘッダーをエンコード
     fn encode_header_static_only(&self, buf: &mut [u8], header: &Header) -> Option<usize> {
-        let (exact_match, name_match) = find_static_entry(&header.name, &header.value);
+        let (exact_match, name_match) = find_static_entry(header.name(), header.value());
 
         if let Some(index) = exact_match {
             // Indexed Field Line (静的テーブル)
             self.encode_indexed_field_static(buf, index)
         } else if let Some(index) = name_match {
             // Literal with Name Reference (静的テーブル)
-            self.encode_literal_with_name_ref_static(buf, index, &header.value)
+            self.encode_literal_with_name_ref_static(buf, index, header.value())
         } else {
             // Literal with Literal Name
-            self.encode_literal_with_literal_name(buf, &header.name, &header.value)
+            self.encode_literal_with_literal_name(buf, header.name(), header.value())
         }
     }
 
@@ -613,10 +595,10 @@ impl DynamicEncoder {
         base: u64,
     ) -> Option<usize> {
         // 動的テーブルで検索
-        let (dyn_exact, dyn_name) = self.table.find_entry(&header.name, &header.value);
+        let (dyn_exact, dyn_name) = self.table.find_entry(header.name(), header.value());
 
         // 静的テーブルで検索
-        let (static_exact, static_name) = find_static_entry(&header.name, &header.value);
+        let (static_exact, static_name) = find_static_entry(header.name(), header.value());
 
         // 優先順位: 動的完全一致 > 静的完全一致 > 動的名前一致 > 静的名前一致 > リテラル
         if let Some(abs_index) = dyn_exact {
@@ -627,13 +609,13 @@ impl DynamicEncoder {
             self.encode_indexed_field_static(buf, index)
         } else if let Some(abs_index) = dyn_name {
             // Literal with Name Reference (動的テーブル)
-            self.encode_literal_with_name_ref_dynamic(buf, abs_index, &header.value, base)
+            self.encode_literal_with_name_ref_dynamic(buf, abs_index, header.value(), base)
         } else if let Some(index) = static_name {
             // Literal with Name Reference (静的テーブル)
-            self.encode_literal_with_name_ref_static(buf, index, &header.value)
+            self.encode_literal_with_name_ref_static(buf, index, header.value())
         } else {
             // Literal with Literal Name
-            self.encode_literal_with_literal_name(buf, &header.name, &header.value)
+            self.encode_literal_with_literal_name(buf, header.name(), header.value())
         }
     }
 
@@ -803,7 +785,7 @@ impl DynamicEncoder {
         name_index: usize,
         value: Vec<u8>,
     ) -> Option<u64> {
-        let name = STATIC_TABLE.get(name_index)?.name.to_vec();
+        let name = STATIC_TABLE.get(name_index)?.name().to_vec();
         self.table.insert(name, value)
     }
 
@@ -864,7 +846,7 @@ mod tests {
     #[test]
     fn test_encode_indexed_field() {
         let encoder = Encoder::new().use_huffman(false);
-        let headers = vec![Header::new(b":method", b"GET")];
+        let headers = vec![Header::new(b":method", b"GET").unwrap()];
 
         let mut buf = vec![0u8; 64];
         let len = encoder.encode(&mut buf, &headers).unwrap();
@@ -879,7 +861,7 @@ mod tests {
     #[test]
     fn test_encode_literal_with_name_ref() {
         let encoder = Encoder::new().use_huffman(false);
-        let headers = vec![Header::new(b":status", b"201")];
+        let headers = vec![Header::new(b":status", b"201").unwrap()];
 
         let mut buf = vec![0u8; 64];
         let len = encoder.encode(&mut buf, &headers).unwrap();
@@ -893,7 +875,7 @@ mod tests {
     #[test]
     fn test_encode_literal_with_literal_name() {
         let encoder = Encoder::new().use_huffman(false);
-        let headers = vec![Header::new(b"x-custom", b"value")];
+        let headers = vec![Header::new(b"x-custom", b"value").unwrap()];
 
         let mut buf = vec![0u8; 64];
         let len = encoder.encode(&mut buf, &headers).unwrap();
@@ -912,10 +894,10 @@ mod tests {
     fn test_encode_multiple_headers() {
         let encoder = Encoder::new();
         let headers = vec![
-            Header::new(b":method", b"GET"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":path", b"/"),
-            Header::new(b":authority", b"example.com"),
+            Header::new(b":method", b"GET").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":path", b"/").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
         ];
 
         let mut buf = vec![0u8; 128];
@@ -929,7 +911,7 @@ mod tests {
         let encoder = Encoder::new();
 
         // Index 98 (x-frame-options: sameorigin)
-        let headers = vec![Header::new(b"x-frame-options", b"sameorigin")];
+        let headers = vec![Header::new(b"x-frame-options", b"sameorigin").unwrap()];
         let mut buf = vec![0u8; 64];
         let len = encoder.encode(&mut buf, &headers).unwrap();
         assert!(len > 0);
@@ -938,8 +920,8 @@ mod tests {
     #[test]
     fn test_estimate_encoded_size() {
         let headers = vec![
-            Header::new(b":method", b"GET"),
-            Header::new(b"x-custom", b"value"),
+            Header::new(b":method", b"GET").unwrap(),
+            Header::new(b"x-custom", b"value").unwrap(),
         ];
         let estimate = estimate_encoded_size(&headers);
         assert!(estimate > 0);
@@ -948,7 +930,7 @@ mod tests {
     #[test]
     fn test_dynamic_encoder_static_only() {
         let mut encoder = DynamicEncoder::new().use_huffman(false);
-        let headers = vec![Header::new(b":method", b"GET")];
+        let headers = vec![Header::new(b":method", b"GET").unwrap()];
 
         let mut buf = vec![0u8; 64];
         let len = encoder.encode(&mut buf, &headers, 0).unwrap();
@@ -971,7 +953,7 @@ mod tests {
         assert_eq!(encoder.table().len(), 1);
 
         // エンコード
-        let headers = vec![Header::new(b":authority", b"www.example.com")];
+        let headers = vec![Header::new(b":authority", b"www.example.com").unwrap()];
         let mut buf = vec![0u8; 64];
         let len = encoder.encode(&mut buf, &headers, 0).unwrap();
 
@@ -992,7 +974,7 @@ mod tests {
         encoder.insert(b":authority".to_vec(), b"www.example.com".to_vec());
 
         // blocked_streams_count < peer_max_blocked_streams: 動的テーブルを使用
-        let headers = vec![Header::new(b":authority", b"www.example.com")];
+        let headers = vec![Header::new(b":authority", b"www.example.com").unwrap()];
         let mut buf = vec![0u8; 64];
         let _len = encoder.encode(&mut buf, &headers, 1).unwrap();
         assert!(buf[0] > 0); // RIC > 0
@@ -1015,7 +997,7 @@ mod tests {
         // しかし、動的テーブルに追加すると動的テーブルが優先される
         encoder.insert(b":method".to_vec(), b"GET".to_vec());
 
-        let headers = vec![Header::new(b":method", b"GET")];
+        let headers = vec![Header::new(b":method", b"GET").unwrap()];
         let mut buf = vec![0u8; 64];
         let len = encoder.encode(&mut buf, &headers, 0).unwrap();
 

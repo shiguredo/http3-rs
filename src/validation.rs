@@ -1,39 +1,35 @@
 //! HTTP/3 メッセージ検証 (RFC 9114 Section 4.1.2)
 //!
 //! 送受信するヘッダーセクションが malformed でないかを検証する。
+//!
+//! ヘッダーフィールド単体の構文検査 (lowercase name / field-vchar value 等) は
+//! `qpack::Header` の構築時検査に統合されている。本モジュールでは
+//! ヘッダーリスト全体や他フィールドとの組み合わせに依存する検査
+//! (CONNECT の構成、`:path` / `:authority` の構文、疑似ヘッダーの順序/重複/存在等)
+//! を担当する。
+//!
+//! # `qpack::header` との検査ロジック重複について
+//!
+//! 単一フィールドの構文検査 (`is_valid_field_name` / `is_valid_field_value` /
+//! `is_valid_scheme` / `is_tchar` / `:status` の 3DIGIT 等) は `qpack::header`
+//! 内の `check_header` / `check_pseudo_value` と意味的に等価な実装を持つ。
+//! 両者は **常に同期している必要がある**。
+//!
+//! 重複を許容している理由:
+//! - decoder 経由で `Header::from_validated_parts_internal` で構築されたヘッダーは
+//!   構築時検査をスキップしているため、wire 上の不正バイト列を含み得る。
+//!   そのまま validate 関数に渡されたときに malformed として弾けるよう、
+//!   ここでも独立に検査する。
+//! - 検査ロジックを完全に共有してしまうと、構築時検査の正しさに依存して
+//!   validation を簡略化するという循環が生まれ、`from_validated_parts_internal`
+//!   経路の安全網が崩れる。
+//!
+//! 両者の挙動が乖離していないことは PBT (`pbt/tests/prop_validation.rs`) で
+//! 確認することを推奨する。
 
 use crate::connection::Role;
 use crate::error::{Error, ErrorCode};
-use crate::qpack::DecodedHeader;
 use crate::qpack::Header;
-
-/// ヘッダーフィールドの名前と値へのアクセスを提供するトレイト
-///
-/// `Header` (送信用) と `DecodedHeader` (受信用) の両方で検証関数を共用するために使用する。
-pub trait HeaderField {
-    /// ヘッダー名を返す
-    fn name(&self) -> &[u8];
-    /// ヘッダー値を返す
-    fn value(&self) -> &[u8];
-}
-
-impl HeaderField for Header {
-    fn name(&self) -> &[u8] {
-        &self.name
-    }
-    fn value(&self) -> &[u8] {
-        &self.value
-    }
-}
-
-impl HeaderField for DecodedHeader {
-    fn name(&self) -> &[u8] {
-        &self.name
-    }
-    fn value(&self) -> &[u8] {
-        &self.value
-    }
-}
 
 /// 接続固有フィールド (RFC 9114 Section 4.2)
 ///
@@ -83,6 +79,34 @@ fn is_valid_scheme(scheme: &[u8]) -> bool {
     scheme[1..]
         .iter()
         .all(|&b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.')
+}
+
+/// `:protocol` の値が HTTP Upgrade Token (RFC 8441 Section 4 / RFC 9220 Section 3)
+/// として有効かを検証する
+///
+/// Upgrade Token は RFC 9110 Section 7.8 で `protocol-name ["/" protocol-version]`
+/// と定義される (両構成要素は token = 1*tchar)。空文字列は不正。
+///
+/// 仕様根拠:
+/// - RFC 8441 Section 4: `:protocol` の値は HTTP Upgrade Token Registry の値
+/// - RFC 9220 Section 3: HTTP/3 への Extended CONNECT 適用
+/// - RFC 9110 Section 7.8: protocol = protocol-name ["/" protocol-version]
+fn is_valid_protocol(value: &[u8]) -> bool {
+    if value.is_empty() {
+        return false;
+    }
+    // protocol-name と protocol-version は token = 1*tchar
+    let mut parts = value.splitn(2, |b| *b == b'/');
+    let name = parts.next().unwrap_or(&[]);
+    if name.is_empty() || !name.iter().all(|&b| is_tchar(b)) {
+        return false;
+    }
+    if let Some(version) = parts.next()
+        && (version.is_empty() || !version.iter().all(|&b| is_tchar(b)))
+    {
+        return false;
+    }
+    true
 }
 
 /// :path が http/https scheme で有効かを検証する (RFC 9114 Section 4.3.1)
@@ -332,7 +356,7 @@ fn is_valid_connect_authority(value: &[u8]) -> bool {
 }
 
 /// リクエストヘッダーを検証 (RFC 9114 Section 4.1.2, 4.3.1, 4.4)
-pub fn validate_request_headers<H: HeaderField>(headers: &[H]) -> Result<(), Error> {
+pub fn validate_request_headers(headers: &[Header]) -> Result<(), Error> {
     let mut method: Option<&[u8]> = None;
     let mut scheme: Option<&[u8]> = None;
     let mut path: Option<&[u8]> = None;
@@ -429,6 +453,13 @@ pub fn validate_request_headers<H: HeaderField>(headers: &[H]) -> Result<(), Err
         // Extended CONNECT (RFC 8441, RFC 9220)
         // :protocol が存在する場合は :scheme, :path が必須
         if scheme.is_none() || path.is_none() {
+            return Err(Error::StreamError(ErrorCode::MessageError));
+        }
+        // :protocol は HTTP Upgrade Token として構文上有効でなければならない
+        // (RFC 8441 Section 4 / RFC 9220 Section 3 / RFC 9110 Section 7.8)
+        if let Some(p) = protocol
+            && !is_valid_protocol(p)
+        {
             return Err(Error::StreamError(ErrorCode::MessageError));
         }
         // :scheme は有効な URI scheme でなければならない (RFC 3986 Section 3.1)
@@ -579,7 +610,7 @@ pub fn validate_request_headers<H: HeaderField>(headers: &[H]) -> Result<(), Err
 }
 
 /// レスポンスヘッダーを検証 (RFC 9114 Section 4.1.2, 4.3.2)
-pub fn validate_response_headers<H: HeaderField>(headers: &[H]) -> Result<(), Error> {
+pub fn validate_response_headers(headers: &[Header]) -> Result<(), Error> {
     let mut status: Option<&[u8]> = None;
     let mut pseudo_done = false;
 
@@ -644,7 +675,7 @@ pub fn validate_response_headers<H: HeaderField>(headers: &[H]) -> Result<(), Er
 }
 
 /// ヘッダーを role に応じて検証
-pub fn validate_headers<H: HeaderField>(headers: &[H], role: Role) -> Result<(), Error> {
+pub fn validate_headers(headers: &[Header], role: Role) -> Result<(), Error> {
     match role {
         // サーバーが受信するのはリクエスト
         Role::Server => validate_request_headers(headers),
@@ -661,8 +692,8 @@ pub fn validate_headers<H: HeaderField>(headers: &[H], role: Role) -> Result<(),
 /// - skip_body_check == false かつ値 != received_body_size の場合: malformed
 ///
 /// HEAD レスポンスや 1xx/204/304 レスポンスは skip_body_check = true を渡すこと。
-pub fn validate_content_length<H: HeaderField>(
-    headers: &[H],
+pub fn validate_content_length(
+    headers: &[Header],
     received_body_size: u64,
     skip_body_check: bool,
 ) -> Result<(), Error> {
@@ -709,7 +740,7 @@ pub fn validate_content_length<H: HeaderField>(
 ///
 /// トレーラーセクションには疑似ヘッダーを含めてはならない (RFC 9114 Section 4.3)。
 /// ロールに関わらず同じルールが適用される。
-pub fn validate_trailer_headers<H: HeaderField>(headers: &[H]) -> Result<(), Error> {
+pub fn validate_trailer_headers(headers: &[Header]) -> Result<(), Error> {
     for header in headers {
         // トレーラーに疑似ヘッダーは禁止 (RFC 9114 Section 4.3)
         if header.name().starts_with(b":") {
@@ -743,20 +774,14 @@ pub fn validate_trailer_headers<H: HeaderField>(headers: &[H]) -> Result<(), Err
 /// フィールドセクションサイズを計算する (RFC 9114 Section 4.2.2)
 ///
 /// サイズは各フィールドの名前長 + 値長 + 32 バイトのオーバーヘッドの合計。
-pub fn calculate_field_section_size<H: HeaderField>(headers: &[H]) -> u64 {
-    headers
-        .iter()
-        .map(|h| h.name().len() as u64 + h.value().len() as u64 + 32)
-        .sum()
+pub fn calculate_field_section_size(headers: &[Header]) -> u64 {
+    headers.iter().map(|h| h.size() as u64).sum()
 }
 
 /// peer の SETTINGS_MAX_FIELD_SECTION_SIZE を超えていないかチェックする (RFC 9114 Section 4.2.2)
 ///
 /// peer がこの設定を送信していない場合 (None) はチェックしない。
-pub fn check_field_section_size<H: HeaderField>(
-    headers: &[H],
-    peer_max: Option<u64>,
-) -> Result<(), Error> {
+pub fn check_field_section_size(headers: &[Header], peer_max: Option<u64>) -> Result<(), Error> {
     if let Some(max_size) = peer_max {
         let size = calculate_field_section_size(headers);
         if size > max_size {
@@ -770,11 +795,11 @@ pub fn check_field_section_size<H: HeaderField>(
 mod tests {
     use super::*;
 
-    fn h(name: &[u8], value: &[u8]) -> DecodedHeader {
-        DecodedHeader {
-            name: name.to_vec(),
-            value: value.to_vec(),
-        }
+    fn h(name: &[u8], value: &[u8]) -> Header {
+        Header::from_validated_parts(
+            std::borrow::Cow::Owned(name.to_vec()),
+            std::borrow::Cow::Owned(value.to_vec()),
+        )
     }
 
     // =========================================================================
@@ -1117,7 +1142,7 @@ mod tests {
     #[test]
     fn test_empty_trailer_is_valid() {
         // フィールドなしのトレーラーも正当
-        let headers: Vec<DecodedHeader> = vec![];
+        let headers: Vec<Header> = vec![];
         assert!(validate_trailer_headers(&headers).is_ok());
     }
 
@@ -1841,5 +1866,61 @@ mod tests {
             h(b":path", b"/ws"),
         ];
         assert!(validate_request_headers(&headers).is_ok());
+    }
+
+    // =========================================================================
+    // `:protocol` の HTTP Upgrade Token 検査 (RFC 9110 Section 7.8)
+    // =========================================================================
+
+    fn ext_connect_headers(protocol: &[u8]) -> Vec<Header> {
+        vec![
+            h(b":method", b"CONNECT"),
+            h(b":protocol", protocol),
+            h(b":scheme", b"https"),
+            h(b":path", b"/wt"),
+            h(b":authority", b"example.com"),
+        ]
+    }
+
+    #[test]
+    fn test_protocol_empty_is_malformed() {
+        let headers = ext_connect_headers(b"");
+        assert!(validate_request_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn test_protocol_token_only_is_valid() {
+        let headers = ext_connect_headers(b"webtransport-h3");
+        assert!(validate_request_headers(&headers).is_ok());
+    }
+
+    #[test]
+    fn test_protocol_with_version_is_valid() {
+        let headers = ext_connect_headers(b"h3/1.0");
+        assert!(validate_request_headers(&headers).is_ok());
+    }
+
+    #[test]
+    fn test_protocol_trailing_slash_is_malformed() {
+        let headers = ext_connect_headers(b"h3/");
+        assert!(validate_request_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn test_protocol_leading_slash_is_malformed() {
+        let headers = ext_connect_headers(b"/h3");
+        assert!(validate_request_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn test_protocol_double_slash_is_malformed() {
+        let headers = ext_connect_headers(b"a/b/c");
+        assert!(validate_request_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn test_protocol_space_is_malformed() {
+        let headers = ext_connect_headers(b"web transport");
+        assert!(validate_request_headers(&headers).is_err());
     }
 }

@@ -1,533 +1,240 @@
 //! QPACK 静的テーブル (RFC 9204 Appendix A)
 //!
-//! 99 エントリの静的テーブルを提供。
+//! 99 エントリの静的テーブルを提供する。エントリはすべて
+//! `Header::from_static` で組み立てるため、RFC 違反のリテラルがあれば
+//! コンパイル時 (`const` 評価) に検出される。
 
-/// 静的テーブルエントリ
-#[derive(Debug, Clone, Copy)]
-pub struct StaticEntry {
-    /// ヘッダー名
-    pub name: &'static [u8],
-    /// ヘッダー値
-    pub value: &'static [u8],
-}
+use super::header::Header;
 
-/// 静的テーブル (99 エントリ)
-pub static STATIC_TABLE: &[StaticEntry] = &[
+/// 静的テーブル (99 エントリ, RFC 9204 Appendix A)
+pub static STATIC_TABLE: &[Header] = &[
     // 0
-    StaticEntry {
-        name: b":authority",
-        value: b"",
-    },
+    Header::from_static(b":authority", b""),
     // 1
-    StaticEntry {
-        name: b":path",
-        value: b"/",
-    },
+    Header::from_static(b":path", b"/"),
     // 2
-    StaticEntry {
-        name: b"age",
-        value: b"0",
-    },
+    Header::from_static(b"age", b"0"),
     // 3
-    StaticEntry {
-        name: b"content-disposition",
-        value: b"",
-    },
+    Header::from_static(b"content-disposition", b""),
     // 4
-    StaticEntry {
-        name: b"content-length",
-        value: b"0",
-    },
+    Header::from_static(b"content-length", b"0"),
     // 5
-    StaticEntry {
-        name: b"cookie",
-        value: b"",
-    },
+    Header::from_static(b"cookie", b""),
     // 6
-    StaticEntry {
-        name: b"date",
-        value: b"",
-    },
+    Header::from_static(b"date", b""),
     // 7
-    StaticEntry {
-        name: b"etag",
-        value: b"",
-    },
+    Header::from_static(b"etag", b""),
     // 8
-    StaticEntry {
-        name: b"if-modified-since",
-        value: b"",
-    },
+    Header::from_static(b"if-modified-since", b""),
     // 9
-    StaticEntry {
-        name: b"if-none-match",
-        value: b"",
-    },
+    Header::from_static(b"if-none-match", b""),
     // 10
-    StaticEntry {
-        name: b"last-modified",
-        value: b"",
-    },
+    Header::from_static(b"last-modified", b""),
     // 11
-    StaticEntry {
-        name: b"link",
-        value: b"",
-    },
+    Header::from_static(b"link", b""),
     // 12
-    StaticEntry {
-        name: b"location",
-        value: b"",
-    },
+    Header::from_static(b"location", b""),
     // 13
-    StaticEntry {
-        name: b"referer",
-        value: b"",
-    },
+    Header::from_static(b"referer", b""),
     // 14
-    StaticEntry {
-        name: b"set-cookie",
-        value: b"",
-    },
+    Header::from_static(b"set-cookie", b""),
     // 15
-    StaticEntry {
-        name: b":method",
-        value: b"CONNECT",
-    },
+    Header::from_static(b":method", b"CONNECT"),
     // 16
-    StaticEntry {
-        name: b":method",
-        value: b"DELETE",
-    },
+    Header::from_static(b":method", b"DELETE"),
     // 17
-    StaticEntry {
-        name: b":method",
-        value: b"GET",
-    },
+    Header::from_static(b":method", b"GET"),
     // 18
-    StaticEntry {
-        name: b":method",
-        value: b"HEAD",
-    },
+    Header::from_static(b":method", b"HEAD"),
     // 19
-    StaticEntry {
-        name: b":method",
-        value: b"OPTIONS",
-    },
+    Header::from_static(b":method", b"OPTIONS"),
     // 20
-    StaticEntry {
-        name: b":method",
-        value: b"POST",
-    },
+    Header::from_static(b":method", b"POST"),
     // 21
-    StaticEntry {
-        name: b":method",
-        value: b"PUT",
-    },
+    Header::from_static(b":method", b"PUT"),
     // 22
-    StaticEntry {
-        name: b":scheme",
-        value: b"http",
-    },
+    Header::from_static(b":scheme", b"http"),
     // 23
-    StaticEntry {
-        name: b":scheme",
-        value: b"https",
-    },
+    Header::from_static(b":scheme", b"https"),
     // 24
-    StaticEntry {
-        name: b":status",
-        value: b"103",
-    },
+    Header::from_static(b":status", b"103"),
     // 25
-    StaticEntry {
-        name: b":status",
-        value: b"200",
-    },
+    Header::from_static(b":status", b"200"),
     // 26
-    StaticEntry {
-        name: b":status",
-        value: b"304",
-    },
+    Header::from_static(b":status", b"304"),
     // 27
-    StaticEntry {
-        name: b":status",
-        value: b"404",
-    },
+    Header::from_static(b":status", b"404"),
     // 28
-    StaticEntry {
-        name: b":status",
-        value: b"503",
-    },
+    Header::from_static(b":status", b"503"),
     // 29
-    StaticEntry {
-        name: b"accept",
-        value: b"*/*",
-    },
+    Header::from_static(b"accept", b"*/*"),
     // 30
-    StaticEntry {
-        name: b"accept",
-        value: b"application/dns-message",
-    },
+    Header::from_static(b"accept", b"application/dns-message"),
     // 31
-    StaticEntry {
-        name: b"accept-encoding",
-        value: b"gzip, deflate, br",
-    },
+    Header::from_static(b"accept-encoding", b"gzip, deflate, br"),
     // 32
-    StaticEntry {
-        name: b"accept-ranges",
-        value: b"bytes",
-    },
+    Header::from_static(b"accept-ranges", b"bytes"),
     // 33
-    StaticEntry {
-        name: b"access-control-allow-headers",
-        value: b"cache-control",
-    },
+    Header::from_static(b"access-control-allow-headers", b"cache-control"),
     // 34
-    StaticEntry {
-        name: b"access-control-allow-headers",
-        value: b"content-type",
-    },
+    Header::from_static(b"access-control-allow-headers", b"content-type"),
     // 35
-    StaticEntry {
-        name: b"access-control-allow-origin",
-        value: b"*",
-    },
+    Header::from_static(b"access-control-allow-origin", b"*"),
     // 36
-    StaticEntry {
-        name: b"cache-control",
-        value: b"max-age=0",
-    },
+    Header::from_static(b"cache-control", b"max-age=0"),
     // 37
-    StaticEntry {
-        name: b"cache-control",
-        value: b"max-age=2592000",
-    },
+    Header::from_static(b"cache-control", b"max-age=2592000"),
     // 38
-    StaticEntry {
-        name: b"cache-control",
-        value: b"max-age=604800",
-    },
+    Header::from_static(b"cache-control", b"max-age=604800"),
     // 39
-    StaticEntry {
-        name: b"cache-control",
-        value: b"no-cache",
-    },
+    Header::from_static(b"cache-control", b"no-cache"),
     // 40
-    StaticEntry {
-        name: b"cache-control",
-        value: b"no-store",
-    },
+    Header::from_static(b"cache-control", b"no-store"),
     // 41
-    StaticEntry {
-        name: b"cache-control",
-        value: b"public, max-age=31536000",
-    },
+    Header::from_static(b"cache-control", b"public, max-age=31536000"),
     // 42
-    StaticEntry {
-        name: b"content-encoding",
-        value: b"br",
-    },
+    Header::from_static(b"content-encoding", b"br"),
     // 43
-    StaticEntry {
-        name: b"content-encoding",
-        value: b"gzip",
-    },
+    Header::from_static(b"content-encoding", b"gzip"),
     // 44
-    StaticEntry {
-        name: b"content-type",
-        value: b"application/dns-message",
-    },
+    Header::from_static(b"content-type", b"application/dns-message"),
     // 45
-    StaticEntry {
-        name: b"content-type",
-        value: b"application/javascript",
-    },
+    Header::from_static(b"content-type", b"application/javascript"),
     // 46
-    StaticEntry {
-        name: b"content-type",
-        value: b"application/json",
-    },
+    Header::from_static(b"content-type", b"application/json"),
     // 47
-    StaticEntry {
-        name: b"content-type",
-        value: b"application/x-www-form-urlencoded",
-    },
+    Header::from_static(b"content-type", b"application/x-www-form-urlencoded"),
     // 48
-    StaticEntry {
-        name: b"content-type",
-        value: b"image/gif",
-    },
+    Header::from_static(b"content-type", b"image/gif"),
     // 49
-    StaticEntry {
-        name: b"content-type",
-        value: b"image/jpeg",
-    },
+    Header::from_static(b"content-type", b"image/jpeg"),
     // 50
-    StaticEntry {
-        name: b"content-type",
-        value: b"image/png",
-    },
+    Header::from_static(b"content-type", b"image/png"),
     // 51
-    StaticEntry {
-        name: b"content-type",
-        value: b"text/css",
-    },
+    Header::from_static(b"content-type", b"text/css"),
     // 52
-    StaticEntry {
-        name: b"content-type",
-        value: b"text/html; charset=utf-8",
-    },
+    Header::from_static(b"content-type", b"text/html; charset=utf-8"),
     // 53
-    StaticEntry {
-        name: b"content-type",
-        value: b"text/plain",
-    },
+    Header::from_static(b"content-type", b"text/plain"),
     // 54
-    StaticEntry {
-        name: b"content-type",
-        value: b"text/plain;charset=utf-8",
-    },
+    Header::from_static(b"content-type", b"text/plain;charset=utf-8"),
     // 55
-    StaticEntry {
-        name: b"range",
-        value: b"bytes=0-",
-    },
+    Header::from_static(b"range", b"bytes=0-"),
     // 56
-    StaticEntry {
-        name: b"strict-transport-security",
-        value: b"max-age=31536000",
-    },
+    Header::from_static(b"strict-transport-security", b"max-age=31536000"),
     // 57
-    StaticEntry {
-        name: b"strict-transport-security",
-        value: b"max-age=31536000; includesubdomains",
-    },
+    Header::from_static(
+        b"strict-transport-security",
+        b"max-age=31536000; includesubdomains",
+    ),
     // 58
-    StaticEntry {
-        name: b"strict-transport-security",
-        value: b"max-age=31536000; includesubdomains; preload",
-    },
+    Header::from_static(
+        b"strict-transport-security",
+        b"max-age=31536000; includesubdomains; preload",
+    ),
     // 59
-    StaticEntry {
-        name: b"vary",
-        value: b"accept-encoding",
-    },
+    Header::from_static(b"vary", b"accept-encoding"),
     // 60
-    StaticEntry {
-        name: b"vary",
-        value: b"origin",
-    },
+    Header::from_static(b"vary", b"origin"),
     // 61
-    StaticEntry {
-        name: b"x-content-type-options",
-        value: b"nosniff",
-    },
+    Header::from_static(b"x-content-type-options", b"nosniff"),
     // 62
-    StaticEntry {
-        name: b"x-xss-protection",
-        value: b"1; mode=block",
-    },
+    Header::from_static(b"x-xss-protection", b"1; mode=block"),
     // 63
-    StaticEntry {
-        name: b":status",
-        value: b"100",
-    },
+    Header::from_static(b":status", b"100"),
     // 64
-    StaticEntry {
-        name: b":status",
-        value: b"204",
-    },
+    Header::from_static(b":status", b"204"),
     // 65
-    StaticEntry {
-        name: b":status",
-        value: b"206",
-    },
+    Header::from_static(b":status", b"206"),
     // 66
-    StaticEntry {
-        name: b":status",
-        value: b"302",
-    },
+    Header::from_static(b":status", b"302"),
     // 67
-    StaticEntry {
-        name: b":status",
-        value: b"400",
-    },
+    Header::from_static(b":status", b"400"),
     // 68
-    StaticEntry {
-        name: b":status",
-        value: b"403",
-    },
+    Header::from_static(b":status", b"403"),
     // 69
-    StaticEntry {
-        name: b":status",
-        value: b"421",
-    },
+    Header::from_static(b":status", b"421"),
     // 70
-    StaticEntry {
-        name: b":status",
-        value: b"425",
-    },
+    Header::from_static(b":status", b"425"),
     // 71
-    StaticEntry {
-        name: b":status",
-        value: b"500",
-    },
+    Header::from_static(b":status", b"500"),
     // 72
-    StaticEntry {
-        name: b"accept-language",
-        value: b"",
-    },
+    Header::from_static(b"accept-language", b""),
     // 73
-    StaticEntry {
-        name: b"access-control-allow-credentials",
-        value: b"FALSE",
-    },
+    Header::from_static(b"access-control-allow-credentials", b"FALSE"),
     // 74
-    StaticEntry {
-        name: b"access-control-allow-credentials",
-        value: b"TRUE",
-    },
+    Header::from_static(b"access-control-allow-credentials", b"TRUE"),
     // 75
-    StaticEntry {
-        name: b"access-control-allow-headers",
-        value: b"*",
-    },
+    Header::from_static(b"access-control-allow-headers", b"*"),
     // 76
-    StaticEntry {
-        name: b"access-control-allow-methods",
-        value: b"get",
-    },
+    Header::from_static(b"access-control-allow-methods", b"get"),
     // 77
-    StaticEntry {
-        name: b"access-control-allow-methods",
-        value: b"get, post, options",
-    },
+    Header::from_static(b"access-control-allow-methods", b"get, post, options"),
     // 78
-    StaticEntry {
-        name: b"access-control-allow-methods",
-        value: b"options",
-    },
+    Header::from_static(b"access-control-allow-methods", b"options"),
     // 79
-    StaticEntry {
-        name: b"access-control-expose-headers",
-        value: b"content-length",
-    },
+    Header::from_static(b"access-control-expose-headers", b"content-length"),
     // 80
-    StaticEntry {
-        name: b"access-control-request-headers",
-        value: b"content-type",
-    },
+    Header::from_static(b"access-control-request-headers", b"content-type"),
     // 81
-    StaticEntry {
-        name: b"access-control-request-method",
-        value: b"get",
-    },
+    Header::from_static(b"access-control-request-method", b"get"),
     // 82
-    StaticEntry {
-        name: b"access-control-request-method",
-        value: b"post",
-    },
+    Header::from_static(b"access-control-request-method", b"post"),
     // 83
-    StaticEntry {
-        name: b"alt-svc",
-        value: b"clear",
-    },
+    Header::from_static(b"alt-svc", b"clear"),
     // 84
-    StaticEntry {
-        name: b"authorization",
-        value: b"",
-    },
+    Header::from_static(b"authorization", b""),
     // 85
-    StaticEntry {
-        name: b"content-security-policy",
-        value: b"script-src 'none'; object-src 'none'; base-uri 'none'",
-    },
+    Header::from_static(
+        b"content-security-policy",
+        b"script-src 'none'; object-src 'none'; base-uri 'none'",
+    ),
     // 86
-    StaticEntry {
-        name: b"early-data",
-        value: b"1",
-    },
+    Header::from_static(b"early-data", b"1"),
     // 87
-    StaticEntry {
-        name: b"expect-ct",
-        value: b"",
-    },
+    Header::from_static(b"expect-ct", b""),
     // 88
-    StaticEntry {
-        name: b"forwarded",
-        value: b"",
-    },
+    Header::from_static(b"forwarded", b""),
     // 89
-    StaticEntry {
-        name: b"if-range",
-        value: b"",
-    },
+    Header::from_static(b"if-range", b""),
     // 90
-    StaticEntry {
-        name: b"origin",
-        value: b"",
-    },
+    Header::from_static(b"origin", b""),
     // 91
-    StaticEntry {
-        name: b"purpose",
-        value: b"prefetch",
-    },
+    Header::from_static(b"purpose", b"prefetch"),
     // 92
-    StaticEntry {
-        name: b"server",
-        value: b"",
-    },
+    Header::from_static(b"server", b""),
     // 93
-    StaticEntry {
-        name: b"timing-allow-origin",
-        value: b"*",
-    },
+    Header::from_static(b"timing-allow-origin", b"*"),
     // 94
-    StaticEntry {
-        name: b"upgrade-insecure-requests",
-        value: b"1",
-    },
+    Header::from_static(b"upgrade-insecure-requests", b"1"),
     // 95
-    StaticEntry {
-        name: b"user-agent",
-        value: b"",
-    },
+    Header::from_static(b"user-agent", b""),
     // 96
-    StaticEntry {
-        name: b"x-forwarded-for",
-        value: b"",
-    },
+    Header::from_static(b"x-forwarded-for", b""),
     // 97
-    StaticEntry {
-        name: b"x-frame-options",
-        value: b"deny",
-    },
+    Header::from_static(b"x-frame-options", b"deny"),
     // 98
-    StaticEntry {
-        name: b"x-frame-options",
-        value: b"sameorigin",
-    },
+    Header::from_static(b"x-frame-options", b"sameorigin"),
 ];
 
 /// 静的テーブルのエントリ数
 pub const STATIC_TABLE_LEN: usize = 99;
 
-/// インデックスから静的テーブルエントリを取得
+/// インデックスから静的テーブルエントリを取得する
 #[inline]
-pub fn get_static_entry(index: usize) -> Option<&'static StaticEntry> {
+pub fn get_static_entry(index: usize) -> Option<&'static Header> {
     STATIC_TABLE.get(index)
 }
 
-/// 名前と値のペアで静的テーブルを検索
+/// 名前と値のペアで静的テーブルを検索する
 ///
-/// 完全一致のインデックス、または名前のみ一致のインデックスを返す
+/// 完全一致のインデックスと、名前のみ一致した最初のインデックスを返す。
 pub fn find_static_entry(name: &[u8], value: &[u8]) -> (Option<usize>, Option<usize>) {
     let mut name_match = None;
 
     for (index, entry) in STATIC_TABLE.iter().enumerate() {
-        if entry.name == name {
-            if entry.value == value {
+        if entry.name() == name {
+            if entry.value() == value {
                 return (Some(index), Some(index));
             }
             if name_match.is_none() {
@@ -552,20 +259,20 @@ mod tests {
     #[test]
     fn test_get_static_entry() {
         let entry = get_static_entry(0).unwrap();
-        assert_eq!(entry.name, b":authority");
-        assert_eq!(entry.value, b"");
+        assert_eq!(entry.name(), b":authority");
+        assert_eq!(entry.value(), b"");
 
         let entry = get_static_entry(17).unwrap();
-        assert_eq!(entry.name, b":method");
-        assert_eq!(entry.value, b"GET");
+        assert_eq!(entry.name(), b":method");
+        assert_eq!(entry.value(), b"GET");
 
         let entry = get_static_entry(25).unwrap();
-        assert_eq!(entry.name, b":status");
-        assert_eq!(entry.value, b"200");
+        assert_eq!(entry.name(), b":status");
+        assert_eq!(entry.value(), b"200");
 
         let entry = get_static_entry(98).unwrap();
-        assert_eq!(entry.name, b"x-frame-options");
-        assert_eq!(entry.value, b"sameorigin");
+        assert_eq!(entry.name(), b"x-frame-options");
+        assert_eq!(entry.value(), b"sameorigin");
 
         assert!(get_static_entry(99).is_none());
     }

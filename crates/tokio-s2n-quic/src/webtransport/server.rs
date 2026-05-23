@@ -319,7 +319,7 @@ impl WtSessionRequest {
 
     /// セッションリクエストを受け入れる
     pub async fn accept(self) -> crate::Result<WtSession> {
-        let response_headers = ConnectResponse::new(200).to_headers();
+        let response_headers = ConnectResponse::new(200).to_headers()?;
 
         // Sans I/O でレスポンスをエンコード
         let data = {
@@ -358,7 +358,7 @@ impl WtSessionRequest {
             )));
         }
 
-        let response_headers = ConnectResponse::new(status).to_headers();
+        let response_headers = ConnectResponse::new(status).to_headers()?;
 
         let data = {
             let mut s = self.state.lock().unwrap();

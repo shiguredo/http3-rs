@@ -49,6 +49,12 @@ impl From<shiguredo_http3::Error> for Error {
     }
 }
 
+impl From<shiguredo_http3::HeaderError> for Error {
+    fn from(e: shiguredo_http3::HeaderError) -> Self {
+        Self::InvalidState(format!("invalid header: {e}"))
+    }
+}
+
 impl From<s2n_quic::connection::Error> for Error {
     fn from(e: s2n_quic::connection::Error) -> Self {
         Self::transport(e)

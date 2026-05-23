@@ -7,4 +7,4 @@ publish = false
 
 [dev-dependencies]
 proptest = "1.11"
-shiguredo_http3 = { path = "../" }
+shiguredo_http3 = { path = "../", features = ["internal-test"] }

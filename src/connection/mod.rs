@@ -19,10 +19,10 @@
 //!
 //! // リクエストを送信
 //! let stream_id = conn.send_request(&[
-//!     Header::new(b":method", b"GET"),
-//!     Header::new(b":path", b"/"),
-//!     Header::new(b":scheme", b"https"),
-//!     Header::new(b":authority", b"example.com"),
+//!     Header::new(b":method", b"GET").unwrap(),
+//!     Header::new(b":path", b"/").unwrap(),
+//!     Header::new(b":scheme", b"https").unwrap(),
+//!     Header::new(b":authority", b"example.com").unwrap(),
 //! ], true).unwrap();
 //!
 //! // QUIC からデータを受信
@@ -2776,7 +2776,7 @@ impl Connection {
     fn emit_header_events(
         &mut self,
         stream_id: u64,
-        headers: Vec<crate::qpack::DecodedHeader>,
+        headers: Vec<crate::qpack::Header>,
         is_trailer: bool,
     ) -> Result<(), Error> {
         if is_trailer {
@@ -2787,7 +2787,7 @@ impl Connection {
             // サーバー側: WebTransport CONNECT を受信した場合の前提条件チェック
             // (draft-ietf-webtrans-http3-15 Section 3.1, 7.1)
             // ローカルの WebTransport 設定が有効でなければ、WebTransport CONNECT は処理できない
-            if self.role == Role::Server && is_webtransport_connect_decoded(&headers) {
+            if self.role == Role::Server && is_webtransport_connect(&headers) {
                 if !self.local_settings.is_webtransport_enabled() {
                     return Err(Error::StreamError(ErrorCode::MessageError));
                 }
@@ -2848,8 +2848,8 @@ impl Connection {
                 if draft.is_some() {
                     let proto_header = headers
                         .iter()
-                        .find(|h| h.name == b":protocol")
-                        .map(|h| h.value.as_slice())
+                        .find(|h| h.name() == b":protocol")
+                        .map(|h| h.value())
                         .ok_or(Error::StreamError(ErrorCode::MessageError))?;
                     let mutual = self.mutually_advertised_wt_drafts();
                     let proto_ok = mutual
@@ -2863,7 +2863,7 @@ impl Connection {
                 // (draft-ietf-webtrans-http3-15 Section 3.2)
                 let scheme_is_https = headers
                     .iter()
-                    .any(|h| h.name == b":scheme" && h.value == b"https");
+                    .any(|h| h.name() == b":scheme" && h.value() == b"https");
                 if !scheme_is_https {
                     return Err(Error::StreamError(ErrorCode::MessageError));
                 }
@@ -2895,7 +2895,7 @@ impl Connection {
             // (draft-ietf-webtrans-http3-15 Section 3)
             // 先行到着ストリームにより既に Pending セッションが存在する場合は温存する
             // (draft-ietf-webtrans-http3-15 Section 4.6)
-            if self.role == Role::Server && is_webtransport_connect_decoded(&headers) {
+            if self.role == Role::Server && is_webtransport_connect(&headers) {
                 let session = self
                     .wt_sessions
                     .entry(stream_id)
@@ -2903,8 +2903,8 @@ impl Connection {
                 // クライアントの WT-Available-Protocols を保存する
                 // (draft-ietf-webtrans-http3-15 Section 3.3)
                 for h in &headers {
-                    if h.name == b"wt-available-protocols" {
-                        if let Ok(value) = std::str::from_utf8(&h.value) {
+                    if h.name() == b"wt-available-protocols" {
+                        if let Ok(value) = std::str::from_utf8(h.value()) {
                             session.available_protocols =
                                 crate::webtransport::ConnectRequest::parse_available_protocols(
                                     value,
@@ -2960,8 +2960,8 @@ impl Connection {
                 let wt_protocol_invalid = if let Some(session) = self.wt_sessions.get(&stream_id) {
                     if session.state == WtSessionState::Pending {
                         let selected = headers.iter().find_map(|h| {
-                            if h.name == b"wt-protocol" {
-                                std::str::from_utf8(&h.value)
+                            if h.name() == b"wt-protocol" {
+                                std::str::from_utf8(h.value())
                                     .ok()
                                     .and_then(crate::webtransport::ConnectResponse::parse_protocol)
                             } else {
@@ -3143,8 +3143,8 @@ impl Connection {
         for header in headers {
             self.events.push_back(Event::Header {
                 stream_id,
-                name: header.name,
-                value: header.value,
+                name: header.name().to_vec(),
+                value: header.value().to_vec(),
             });
         }
         self.events.push_back(Event::HeadersEnd { stream_id });
@@ -3399,7 +3399,7 @@ impl Connection {
             let expected_proto = draft.protocol_value().as_bytes();
             let proto_ok = headers
                 .iter()
-                .any(|h| h.name == b":protocol" && h.value == expected_proto);
+                .any(|h| h.name() == b":protocol" && h.value() == expected_proto);
             if !proto_ok {
                 return Err(Error::ConnectionError(ErrorCode::InternalError));
             }
@@ -3444,7 +3444,7 @@ impl Connection {
         // HEAD リクエストの場合は Content-Length 検証でのレスポンス body チェックをスキップする
         if headers
             .iter()
-            .any(|h| h.name == b":method" && h.value == b"HEAD")
+            .any(|h| h.name() == b":method" && h.value() == b"HEAD")
         {
             stream.set_is_head_request(true);
         }
@@ -3452,8 +3452,8 @@ impl Connection {
         // 2xx レスポンス受信時に is_connect を設定するために追跡する
         let is_connect = headers
             .iter()
-            .any(|h| h.name == b":method" && h.value == b"CONNECT");
-        let has_protocol = headers.iter().any(|h| h.name == b":protocol");
+            .any(|h| h.name() == b":method" && h.value() == b"CONNECT");
+        let has_protocol = headers.iter().any(|h| h.name() == b":protocol");
         if is_connect && !has_protocol {
             // plain CONNECT ではストリームを open のまま維持する必要がある (RFC 9114 Section 4.4)
             if fin {
@@ -3470,8 +3470,8 @@ impl Connection {
             let mut session = WtSession::new();
             // WT-Available-Protocols を保存 (Section 3.3)
             for h in headers {
-                if h.name == b"wt-available-protocols" {
-                    if let Ok(value) = std::str::from_utf8(&h.value) {
+                if h.name() == b"wt-available-protocols" {
+                    if let Ok(value) = std::str::from_utf8(h.value()) {
                         session.available_protocols =
                             crate::webtransport::ConnectRequest::parse_available_protocols(value);
                     }
@@ -3507,12 +3507,12 @@ impl Connection {
         //
         // - WT-Available-Protocols ありの場合: WT-Protocol は必須かつ list 内の値である必要がある
         // - WT-Available-Protocols なしの場合: WT-Protocol を返すこと自体が仕様前提を満たさない違反
-        if is_success_status_raw(headers)
+        if is_success_status(headers)
             && let Some(session) = self.wt_sessions.get(&stream_id)
         {
             let selected = headers.iter().find_map(|h| {
-                if h.name == b"wt-protocol" {
-                    std::str::from_utf8(&h.value)
+                if h.name() == b"wt-protocol" {
+                    std::str::from_utf8(h.value())
                         .ok()
                         .and_then(crate::webtransport::ConnectResponse::parse_protocol)
                 } else {
@@ -3565,12 +3565,12 @@ impl Connection {
         // 1xx 中間レスポンスかどうかを判定 (RFC 9114 Section 4.1)
         // HTTP/3 は 101 (Switching Protocols) をサポートしない (RFC 9114 Section 4.5)
         let is_interim = headers.iter().any(|h| {
-            h.name == b":status"
-                && h.value.len() == 3
-                && h.value[0] == b'1'
-                && h.value[1].is_ascii_digit()
-                && h.value[2].is_ascii_digit()
-                && h.value != b"101"
+            h.name() == b":status"
+                && h.value().len() == 3
+                && h.value()[0] == b'1'
+                && h.value()[1].is_ascii_digit()
+                && h.value()[2].is_ascii_digit()
+                && h.value() != b"101"
         });
 
         stream.send_encoded_headers(&qpack_buf, fin, is_interim)?;
@@ -3581,7 +3581,7 @@ impl Connection {
         let queue_initial_capsules = fc_enabled_server && self.peer_requires_initial_wt_capsules();
         let mut fc_violation_server = false;
         if self.role == Role::Server
-            && is_success_status_raw(headers)
+            && is_success_status(headers)
             && let Some(session) = self.wt_sessions.get_mut(&stream_id)
             && session.state == WtSessionState::Pending
         {
@@ -3903,79 +3903,57 @@ impl Connection {
     }
 }
 
-/// ヘッダーから :status を取り出し、1xx 中間レスポンスかどうかを判定する
+/// ヘッダーが WebTransport CONNECT かどうか判定する
 ///
-/// RFC 9114 Section 4.1: 1xx はボディとトレーラーを持たない。
-/// 通常の CONNECT リクエストかどうかを判定する (RFC 9114 Section 4.4)
-///
-/// :method が CONNECT で :protocol が存在しない場合に true を返す。
-/// Extended CONNECT (:protocol 付き) は通常のメッセージフォーマットに従う。
-/// ヘッダーが WebTransport CONNECT かどうか判定する (送信用 Header 型)
-///
-/// `:method` = `CONNECT` かつ `:protocol` が `webtransport-h3` または `webtransport` の場合に true
+/// `:method` = `CONNECT` かつ `:protocol` が `webtransport-h3` または `webtransport`
+/// (draft-ietf-webtrans-http3-15 Section 3.2 / draft-02 互換) の場合に true。
 fn is_webtransport_connect(headers: &[Header]) -> bool {
     let is_connect = headers
         .iter()
-        .any(|h| h.name == b":method" && h.value == b"CONNECT");
+        .any(|h| h.name() == b":method" && h.value() == b"CONNECT");
     let is_wt_protocol = headers.iter().any(|h| {
-        h.name == b":protocol" && (h.value == b"webtransport-h3" || h.value == b"webtransport")
+        h.name() == b":protocol"
+            && (h.value() == b"webtransport-h3" || h.value() == b"webtransport")
     });
     is_connect && is_wt_protocol
 }
 
-/// ヘッダーが WebTransport CONNECT かどうか判定する (受信用 DecodedHeader 型)
+/// 通常の CONNECT リクエストかどうかを判定する (RFC 9114 Section 4.4)
 ///
-/// `:method` = `CONNECT` かつ `:protocol` が `webtransport-h3` または `webtransport` の場合に true
-fn is_webtransport_connect_decoded(headers: &[crate::qpack::DecodedHeader]) -> bool {
+/// `:method` が `CONNECT` で `:protocol` が存在しない場合に true。
+/// Extended CONNECT (`:protocol` 付き) は別の経路で処理する。
+fn is_plain_connect(headers: &[Header]) -> bool {
     let is_connect = headers
         .iter()
-        .any(|h| h.name == b":method" && h.value == b"CONNECT");
-    let is_wt_protocol = headers.iter().any(|h| {
-        h.name == b":protocol" && (h.value == b"webtransport-h3" || h.value == b"webtransport")
-    });
-    is_connect && is_wt_protocol
-}
-
-fn is_plain_connect(headers: &[crate::qpack::DecodedHeader]) -> bool {
-    let is_connect = headers
-        .iter()
-        .any(|h| h.name == b":method" && h.value == b"CONNECT");
-    let has_protocol = headers.iter().any(|h| h.name == b":protocol");
+        .any(|h| h.name() == b":method" && h.value() == b"CONNECT");
+    let has_protocol = headers.iter().any(|h| h.name() == b":protocol");
     is_connect && !has_protocol
 }
 
-fn is_informational_status(headers: &[crate::qpack::DecodedHeader]) -> bool {
+/// :status が 1xx 中間レスポンスかどうかを判定する
+///
+/// RFC 9114 Section 4.1: 1xx はボディとトレーラーを持たない。
+/// HTTP/3 は 101 (Switching Protocols) をサポートしない (RFC 9114 Section 4.5)。
+fn is_informational_status(headers: &[Header]) -> bool {
     headers
         .iter()
-        .find(|h| h.name == b":status")
-        .and_then(|h| std::str::from_utf8(&h.value).ok())
+        .find(|h| h.name() == b":status")
+        .and_then(|h| std::str::from_utf8(h.value()).ok())
         .and_then(|s| s.parse::<u16>().ok())
         // HTTP/3 は 101 (Switching Protocols) をサポートしない (RFC 9114 Section 4.5)
         .map(|code| code < 200 && code != 101)
         .unwrap_or(false)
 }
 
-/// :status が 2xx 成功レスポンスかどうかを判定する (DecodedHeader 版)
+/// :status が 2xx 成功レスポンスかどうかを判定する
 ///
-/// plain CONNECT のトンネル確立判定に使用する (RFC 9114 Section 4.4)。
-fn is_success_status(headers: &[crate::qpack::DecodedHeader]) -> bool {
+/// plain CONNECT のトンネル確立判定 (RFC 9114 Section 4.4) や、
+/// サーバー側で送信するレスポンスヘッダーの判定に使用する。
+fn is_success_status(headers: &[Header]) -> bool {
     headers
         .iter()
-        .find(|h| h.name == b":status")
-        .and_then(|h| std::str::from_utf8(&h.value).ok())
-        .and_then(|s| s.parse::<u16>().ok())
-        .map(|code| (200..300).contains(&code))
-        .unwrap_or(false)
-}
-
-/// :status が 2xx 成功レスポンスかどうかを判定する (Header 版)
-///
-/// サーバーが送信するレスポンスヘッダーの判定に使用する。
-fn is_success_status_raw(headers: &[Header]) -> bool {
-    headers
-        .iter()
-        .find(|h| h.name == b":status")
-        .and_then(|h| std::str::from_utf8(&h.value).ok())
+        .find(|h| h.name() == b":status")
+        .and_then(|h| std::str::from_utf8(h.value()).ok())
         .and_then(|s| s.parse::<u16>().ok())
         .map(|code| (200..300).contains(&code))
         .unwrap_or(false)
@@ -3985,11 +3963,11 @@ fn is_success_status_raw(headers: &[Header]) -> bool {
 ///
 /// RFC 9114 Section 4.1.2: これらのレスポンスは content-length があっても
 /// DATA フレームなしで正当。HEAD レスポンスは呼び出し側で別途判定する。
-fn is_no_body_status(headers: &[crate::qpack::DecodedHeader]) -> bool {
+fn is_no_body_status(headers: &[Header]) -> bool {
     headers
         .iter()
-        .find(|h| h.name == b":status")
-        .and_then(|h| std::str::from_utf8(&h.value).ok())
+        .find(|h| h.name() == b":status")
+        .and_then(|h| std::str::from_utf8(h.value()).ok())
         .and_then(|s| s.parse::<u16>().ok())
         .map(|code| code < 200 || code == 204 || code == 304)
         .unwrap_or(false)
@@ -4016,10 +3994,10 @@ mod tests {
         let mut conn = Connection::client(Settings::default());
         conn.set_control_stream_id(2).unwrap();
         let headers = vec![
-            Header::new(b":method", b"GET"),
-            Header::new(b":path", b"/"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
+            Header::new(b":method", b"GET").unwrap(),
+            Header::new(b":path", b"/").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
         ];
 
         let stream_id = conn.send_request(&headers, true).unwrap();
@@ -4218,11 +4196,13 @@ mod tests {
 
     #[test]
     fn test_is_informational_status() {
-        use crate::qpack::DecodedHeader;
+        use crate::qpack::Header;
 
-        let make = |name: &[u8], value: &[u8]| DecodedHeader {
-            name: name.to_vec(),
-            value: value.to_vec(),
+        let make = |name: &[u8], value: &[u8]| {
+            Header::from_validated_parts(
+                std::borrow::Cow::Owned(name.to_vec()),
+                std::borrow::Cow::Owned(value.to_vec()),
+            )
         };
 
         // 1xx は informational (101 を除く)
@@ -4736,11 +4716,11 @@ mod tests {
         conn.set_control_stream_id(2).unwrap();
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport-h3"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport-h3").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
 
         // peer SETTINGS 未受信なので InternalError
@@ -4762,11 +4742,11 @@ mod tests {
         conn.feed_stream(3, &[0x00, 0x04, 0x00], false).unwrap();
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport-h3"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport-h3").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
 
         let err = conn.send_request(&headers, false).unwrap_err();
@@ -4788,11 +4768,11 @@ mod tests {
 
         // クライアントから WT CONNECT を送信
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport-h3"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport-h3").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
         let stream_id = client.send_request(&headers, false).unwrap_err();
         // クライアントも peer SETTINGS 未受信なので送信失敗する
@@ -4859,11 +4839,11 @@ mod tests {
             .unwrap();
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"websocket"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/ws"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"websocket").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/ws").unwrap(),
         ];
 
         // WebSocket 等の Extended CONNECT は WT チェックなしで通る
@@ -4936,11 +4916,11 @@ mod tests {
 
         // draft-07 CONNECT HEADERS フレームを手動構築
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
         let frame_data = build_headers_frame(&headers);
 
@@ -4989,11 +4969,11 @@ mod tests {
 
         // draft-15 CONNECT HEADERS フレームを手動構築
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport-h3"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport-h3").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
         let frame_data = build_headers_frame(&headers);
 
@@ -5073,11 +5053,11 @@ mod tests {
         let (mut client, _server) = setup_wt_pair();
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport-h3"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport-h3").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
         let stream_id = client.send_request(&headers, false).unwrap();
 
@@ -5095,11 +5075,11 @@ mod tests {
 
         // クライアントが WT CONNECT を送信
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport-h3"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport-h3").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
         let stream_id = client.send_request(&headers, false).unwrap();
         let (req_data, _) = client.take_stream_data(stream_id).unwrap();
@@ -5110,7 +5090,7 @@ mod tests {
         let _ = server.drain_events().unwrap();
 
         // サーバーが 200 OK を返す
-        let response = vec![Header::new(b":status", b"200")];
+        let response = vec![Header::new(b":status", b"200").unwrap()];
         server.send_response(stream_id, &response, false).unwrap();
         let (resp_data, _) = server.take_stream_data(stream_id).unwrap();
 
@@ -5153,17 +5133,17 @@ mod tests {
         let _ = server.drain_events().unwrap();
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
         let frame = build_headers_frame(&headers);
         server.feed_stream(0, &frame, false).unwrap();
         let _ = server.drain_events().unwrap();
 
-        let response = vec![Header::new(b":status", b"200")];
+        let response = vec![Header::new(b":status", b"200").unwrap()];
         server.send_response(0, &response, false).unwrap();
 
         let capsules = server.take_wt_pending_capsules(0);
@@ -5208,17 +5188,17 @@ mod tests {
         let _ = server.drain_events().unwrap();
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
         let frame = build_headers_frame(&headers);
         server.feed_stream(0, &frame, false).unwrap();
         let _ = server.drain_events().unwrap();
 
-        let response = vec![Header::new(b":status", b"200")];
+        let response = vec![Header::new(b":status", b"200").unwrap()];
         server.send_response(0, &response, false).unwrap();
 
         assert!(server.take_wt_pending_capsules(0).is_empty());
@@ -5230,18 +5210,18 @@ mod tests {
 
         // WT CONNECT + 200 OK のハンドシェイク
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport-h3"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport-h3").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
         let stream_id = client.send_request(&headers, false).unwrap();
         let (req_data, _) = client.take_stream_data(stream_id).unwrap();
         server.feed_stream(stream_id, &req_data, false).unwrap();
         let _ = server.drain_events().unwrap();
 
-        let response = vec![Header::new(b":status", b"200")];
+        let response = vec![Header::new(b":status", b"200").unwrap()];
         server.send_response(stream_id, &response, false).unwrap();
         let (resp_data, _) = server.take_stream_data(stream_id).unwrap();
         client.feed_stream(stream_id, &resp_data, false).unwrap();
@@ -5278,18 +5258,18 @@ mod tests {
 
         // WT CONNECT + 200 OK のハンドシェイク
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport-h3"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport-h3").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
         let stream_id = client.send_request(&headers, false).unwrap();
         let (req_data, _) = client.take_stream_data(stream_id).unwrap();
         server.feed_stream(stream_id, &req_data, false).unwrap();
         let _ = server.drain_events().unwrap();
 
-        let response = vec![Header::new(b":status", b"200")];
+        let response = vec![Header::new(b":status", b"200").unwrap()];
         server.send_response(stream_id, &response, false).unwrap();
         let (resp_data, _) = server.take_stream_data(stream_id).unwrap();
         client.feed_stream(stream_id, &resp_data, false).unwrap();
@@ -5733,11 +5713,11 @@ mod tests {
 
         // クライアントが WT CONNECT を送信
         let headers = vec![
-            Header::new(b":method", b"CONNECT"),
-            Header::new(b":protocol", b"webtransport-h3"),
-            Header::new(b":scheme", b"https"),
-            Header::new(b":authority", b"example.com"),
-            Header::new(b":path", b"/wt"),
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport-h3").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
         ];
         let stream_id = client.send_request(&headers, false).unwrap();
         // セッション確立まで進めず Pending のままで GOAWAY を受信させる

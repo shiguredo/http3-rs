@@ -35,11 +35,18 @@ enum FuzzInput {
     },
 }
 
-/// 生のヘッダータプルを Header に変換 (最大 20 件に制限)
+/// 生のヘッダータプルを `Header` に変換する (最大 20 件に制限)
+///
+/// 検証対象は `validate_*_headers` 等の組合せ検査がパニックしないことなので、
+/// `Header::new` の構築時検査をスキップして任意バイト列を `Header` 内に
+/// 注入する `from_validated_parts` を使う。これにより wire 由来の不正バイト列
+/// (decoder 経由) に対する `validate_*` の panic 耐性を fuzz でテストできる。
 fn to_headers(raw: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<Header> {
     raw.into_iter()
         .take(20)
-        .map(|(n, v)| Header::new(n, v))
+        .map(|(n, v)| {
+            Header::from_validated_parts(std::borrow::Cow::Owned(n), std::borrow::Cow::Owned(v))
+        })
         .collect()
 }
 

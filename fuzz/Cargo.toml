@@ -13,6 +13,7 @@ arbitrary = { version = "1", features = ["derive"] }
 
 [dependencies.shiguredo_http3]
 path = ".."
+features = ["internal-test"]
 
 [[bin]]
 name = "fuzz_varint"

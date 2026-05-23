@@ -370,9 +370,9 @@ impl H3Request {
             let mut headers = vec![Header::new(
                 b":status",
                 response.status.to_string().as_bytes(),
-            )];
+            )?];
             for (name, value) in &response.headers {
-                headers.push(Header::new(name.as_slice(), value.as_slice()));
+                headers.push(Header::new(name.as_slice(), value.as_slice())?);
             }
 
             s.prepare_response(self.stream_id, &headers, &response.body)?;
