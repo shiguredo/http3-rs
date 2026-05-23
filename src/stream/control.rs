@@ -5,6 +5,7 @@
 use crate::error::{Error, ErrorCode};
 use crate::frame::{self, Frame, GoawayPayload, SettingsPayload};
 use crate::settings::Settings;
+use crate::varint::VarInt;
 
 use super::{RecvBuffer, SendBuffer};
 
@@ -88,27 +89,17 @@ impl ControlStreamSend {
     /// GOAWAY フレームを送信キューに追加
     ///
     /// 制御ストリームが Ready 状態でなければエラーを返す (RFC 9114 Section 7.2.6)。
-    pub fn send_goaway(&mut self, id: u64) -> Result<(), crate::error::Error> {
+    /// `id` の値域は [`VarInt`] 型レベルで保証される (RFC 9000 Section 16)。
+    pub fn send_goaway(&mut self, id: VarInt) -> Result<(), Error> {
         if self.send_state != ControlSendState::Ready {
             return Err(crate::error::Error::ConnectionError(
                 crate::error::ErrorCode::ClosedCriticalStream,
             ));
         }
 
-        // GOAWAY id は RFC 9000 Section 16 の VarInt 範囲内であること
-        // (RFC 9114 Section 7.2.6, RFC 9000 Section 2.1)。
-        // 本 issue 時点では `u64` 受けのまま検査するが、後続 issue 0087 で
-        // 引数型を `VarInt` に昇格させて型レベルで保証する。
-        // 範囲外はローカル API 利用側のバグなので H3_INTERNAL_ERROR で返す
-        // (wire frame の問題ではないため H3_FRAME_ERROR は不適切)。
-        if crate::varint::VarInt::new(id).is_err() {
-            return Err(crate::error::Error::ConnectionError(
-                crate::error::ErrorCode::InternalError,
-            ));
-        }
         let frame = Frame::Goaway(GoawayPayload::new(id));
-        let frame_len =
-            frame::encoded_frame_len(&frame).expect("GOAWAY id fits in VarInt after check");
+        let frame_len = frame::encoded_frame_len(&frame)
+            .expect("GOAWAY id is VarInt typed, payload always fits");
         let mut buf = vec![0u8; frame_len];
         let written =
             frame::encode_frame(&mut buf, &frame).expect("encoded_frame_len validated above");
@@ -232,7 +223,12 @@ impl ControlStreamRecv {
                     };
 
                     // フレーム全体を受信できているか
-                    if data.len() < header.total_len() {
+                    // total_len が None なら 32bit プラットフォームで usize に収まらない
+                    // → H3_FRAME_ERROR (RFC 9114 Section 7.1)
+                    let Some(total_len) = header.total_len() else {
+                        return Err(Error::ConnectionError(ErrorCode::FrameError));
+                    };
+                    if data.len() < total_len {
                         return Ok(None);
                     }
 

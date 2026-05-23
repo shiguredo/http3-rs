@@ -1,9 +1,10 @@
 //! Property-Based Testing for HTTP/3 Frames (RFC 9114)
 
 use proptest::prelude::*;
+use shiguredo_http3::VarInt;
 use shiguredo_http3::frame::{
-    DataPayload, Frame, FrameType, GoawayPayload, HeadersPayload, SettingsPayload, decode_frame,
-    encode_frame, encoded_frame_len,
+    DataPayload, Frame, FrameType, GoawayPayload, HeadersPayload, SettingsPayload, UnknownFrame,
+    decode_frame, encode_frame, encoded_frame_len,
 };
 
 prop_compose! {
@@ -142,9 +143,7 @@ proptest! {
     /// Property: DATA フレームのエンコード/デコードラウンドトリップ
     #[test]
     fn prop_data_frame_roundtrip(payload in valid_payload()) {
-        let frame = Frame::Data(DataPayload {
-            data: payload.clone(),
-        });
+        let frame = Frame::Data(DataPayload::new(payload.clone()));
 
         let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
@@ -155,7 +154,7 @@ proptest! {
 
         if let Frame::Data(data) = decoded {
             prop_assert_eq!(
-                data.data, payload,
+                data.data(), payload.as_slice(),
                 "DATA payload mismatch"
             );
         } else {
@@ -166,9 +165,7 @@ proptest! {
     /// Property: DATA フレームの長さはペイロード長と一致
     #[test]
     fn prop_data_frame_length_matches_payload(payload in valid_payload()) {
-        let frame = Frame::Data(DataPayload {
-            data: payload.clone(),
-        });
+        let frame = Frame::Data(DataPayload::new(payload.clone()));
 
         // FrameType::Data は 0x00 (1 バイト VarInt) で構築不能ではないため、
         // ランタイム値の `VarInt::new` を使って整合性を取る (const 文脈ではないので
@@ -198,9 +195,7 @@ proptest! {
     /// Property: HEADERS フレームのエンコード/デコードラウンドトリップ
     #[test]
     fn prop_headers_frame_roundtrip(encoded_block in valid_encoded_headers()) {
-        let frame = Frame::Headers(HeadersPayload {
-            encoded_field_section: encoded_block.clone(),
-        });
+        let frame = Frame::Headers(HeadersPayload::new(encoded_block.clone()));
 
         let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
@@ -211,7 +206,7 @@ proptest! {
 
         if let Frame::Headers(headers) = decoded {
             prop_assert_eq!(
-                headers.encoded_field_section, encoded_block,
+                headers.encoded_field_section(), encoded_block.as_slice(),
                 "HEADERS encoded block mismatch"
             );
         } else {
@@ -280,7 +275,8 @@ proptest! {
     /// Property: GOAWAY フレームのエンコード/デコードラウンドトリップ
     #[test]
     fn prop_goaway_frame_roundtrip(id in valid_goaway_id()) {
-        let frame = Frame::Goaway(GoawayPayload { id });
+        let id = VarInt::new(id).unwrap();
+        let frame = Frame::Goaway(GoawayPayload::new(id));
 
         let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
@@ -291,7 +287,7 @@ proptest! {
 
         if let Frame::Goaway(goaway) = decoded {
             prop_assert_eq!(
-                goaway.id, id,
+                goaway.id(), id,
                 "GOAWAY id mismatch"
             );
         } else {
@@ -306,15 +302,21 @@ proptest! {
 
 proptest! {
     /// Property: 未知のフレームタイプはペイロードとともに保存される
+    ///
+    /// VarInt 全領域 (0..=2^62-1, RFC 9000 Section 16) から既知タイプと
+    /// HTTP/2 専用 ID (RFC 9114 Section 7.2 / Section 11.2.1 Table 2) を除いて生成する。
     #[test]
     fn prop_unknown_frame_preserved(
-        unknown_type in (0x100u64..0x1000), // 未知の範囲
+        unknown_type in (0u64..(1u64 << 62)).prop_filter(
+            "既知 / HTTP/2 専用フレームタイプを除外",
+            |t| FrameType::from_type(*t).is_none() && !FrameType::is_http2_only(*t),
+        ),
         payload in valid_payload(),
     ) {
-        let frame = Frame::Unknown {
-            frame_type: unknown_type,
-            payload: payload.clone(),
-        };
+        let frame_type = VarInt::new(unknown_type).unwrap();
+        let unknown = UnknownFrame::new(frame_type, payload.clone())
+            .expect("生成範囲は既知タイプでも HTTP/2 専用でもない");
+        let frame = Frame::Unknown(unknown);
 
         let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
@@ -323,9 +325,9 @@ proptest! {
 
         prop_assert_eq!(encoded_len, decoded_len);
 
-        if let Frame::Unknown { frame_type, payload: decoded_payload } = decoded {
-            prop_assert_eq!(frame_type, unknown_type);
-            prop_assert_eq!(decoded_payload, payload);
+        if let Frame::Unknown(decoded_unknown) = decoded {
+            prop_assert_eq!(decoded_unknown.frame_type(), frame_type);
+            prop_assert_eq!(decoded_unknown.payload(), payload.as_slice());
         } else {
             prop_assert!(false, "Expected Unknown frame");
         }
@@ -340,7 +342,7 @@ proptest! {
     /// Property: encoded_frame_len は常に実際のエンコード長と一致
     #[test]
     fn prop_encoded_frame_len_accurate(payload in valid_payload()) {
-        let frame = Frame::Data(DataPayload { data: payload });
+        let frame = Frame::Data(DataPayload::new(payload));
 
         let predicted_len = encoded_frame_len(&frame).unwrap();
         let mut buf = vec![0u8; predicted_len + 100]; // 余裕を持たせる

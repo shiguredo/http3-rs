@@ -117,7 +117,7 @@ proptest! {
         // DATA フレームからペイロードを取り出す
         match frame {
             shiguredo_http3::Frame::Data(payload) => {
-                let (decoded, cap_consumed) = Capsule::decode(&payload.data)
+                let (decoded, cap_consumed) = Capsule::decode(payload.data())
                     .expect("Capsule::decode should not error")
                     .expect("Capsule::decode should not be incomplete");
                 prop_assert_eq!(
@@ -125,7 +125,7 @@ proptest! {
                     "カプセルがラウンドトリップで変化した"
                 );
                 prop_assert_eq!(
-                    cap_consumed, payload.data.len(),
+                    cap_consumed, payload.len(),
                     "カプセル消費バイト数が不一致"
                 );
             }
