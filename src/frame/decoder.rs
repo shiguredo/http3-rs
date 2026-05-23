@@ -94,7 +94,7 @@ pub fn decode_frame_header(buf: &[u8]) -> Result<FrameHeader, FrameDecodeError> 
 
     // HTTP/2 専用フレームのチェック
     if FrameType::is_http2_only(frame_type.get()) {
-        return Err(FrameDecodeError::Http2Frame(frame_type.get()));
+        return Err(FrameDecodeError::Http2Frame(frame_type));
     }
 
     // wire 上の実バイト長を保持する (RFC 9000 Section 16 は最小エンコード必須でない
@@ -138,7 +138,9 @@ pub fn decode_frame(buf: &[u8]) -> Result<(Frame, usize), FrameDecodeError> {
             // 問わず H3_FRAME_UNEXPECTED で拒否する。
             // MAX_PUSH_ID は control stream 上で正当に受信されうるため別経路で扱う
             // (Section 7.2.7)。
-            return Err(FrameDecodeError::ServerPushNotSupported(frame_type_u64));
+            return Err(FrameDecodeError::ServerPushNotSupported(
+                header.frame_type(),
+            ));
         }
         None => Frame::Unknown(
             UnknownFrame::new(header.frame_type(), payload.to_vec())
@@ -214,12 +216,18 @@ mod tests {
         // Type=2 (PRIORITY - HTTP/2 only)
         let buf = [0x02, 0x05];
         let result = decode_frame_header(&buf);
-        assert_eq!(result, Err(FrameDecodeError::Http2Frame(0x02)));
+        assert_eq!(
+            result,
+            Err(FrameDecodeError::Http2Frame(VarInt::from_static(0x02)))
+        );
 
         // Type=6 (PING - HTTP/2 only)
         let buf = [0x06, 0x08];
         let result = decode_frame_header(&buf);
-        assert_eq!(result, Err(FrameDecodeError::Http2Frame(0x06)));
+        assert_eq!(
+            result,
+            Err(FrameDecodeError::Http2Frame(VarInt::from_static(0x06)))
+        );
     }
 
     #[test]
@@ -355,12 +363,22 @@ mod tests {
         // CANCEL_PUSH (0x03) - サーバープッシュはサポートしない
         let buf = [0x03, 0x01, 0x00];
         let result = decode_frame(&buf);
-        assert_eq!(result, Err(FrameDecodeError::ServerPushNotSupported(0x03)));
+        assert_eq!(
+            result,
+            Err(FrameDecodeError::ServerPushNotSupported(
+                VarInt::from_static(0x03)
+            ))
+        );
 
         // PUSH_PROMISE (0x05) - サーバープッシュはサポートしない
         let buf = [0x05, 0x02, 0x00, 0x00];
         let result = decode_frame(&buf);
-        assert_eq!(result, Err(FrameDecodeError::ServerPushNotSupported(0x05)));
+        assert_eq!(
+            result,
+            Err(FrameDecodeError::ServerPushNotSupported(
+                VarInt::from_static(0x05)
+            ))
+        );
     }
 
     #[test]
