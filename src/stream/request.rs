@@ -167,9 +167,14 @@ impl RequestStream {
 
         // HEADERS フレーム
         let frame = Frame::Headers(HeadersPayload::new(encoded.to_vec()));
-        let frame_len = frame::encoded_frame_len(&frame);
+        // HEADERS は内部で構築するペイロード長 (QPACK エンコード結果) しか扱わず、
+        // 必ず VarInt 範囲内に収まる。後続 issue 0087 で型レベルに昇格予定。
+        let frame_len =
+            frame::encoded_frame_len(&frame).expect("HEADERS frame length fits in VarInt");
         let mut frame_buf = vec![0u8; frame_len];
-        frame::encode_frame(&mut frame_buf, &frame);
+        let written =
+            frame::encode_frame(&mut frame_buf, &frame).expect("encoded_frame_len validated above");
+        debug_assert_eq!(written, frame_len);
 
         self.send_buf.push(&frame_buf);
 
@@ -216,9 +221,14 @@ impl RequestStream {
         if !data.is_empty() {
             // DATA フレーム
             let frame = Frame::Data(DataPayload::new(data.to_vec()));
-            let frame_len = frame::encoded_frame_len(&frame);
+            // DATA フレームのペイロード長は呼び出し側スライス長と一致するため、必ず
+            // VarInt 範囲内 (`usize` の上限値 < 2^62 - 1)。
+            let frame_len =
+                frame::encoded_frame_len(&frame).expect("DATA frame length fits in VarInt");
             let mut frame_buf = vec![0u8; frame_len];
-            frame::encode_frame(&mut frame_buf, &frame);
+            let written = frame::encode_frame(&mut frame_buf, &frame)
+                .expect("encoded_frame_len validated above");
+            debug_assert_eq!(written, frame_len);
 
             self.send_buf.push(&frame_buf);
             self.send_state = RequestSendState::SendingBody;

@@ -71,3 +71,4 @@ pub use qpack::{
 pub use settings::{Settings, SettingsId};
 pub use stream::{RequestStream, StreamKind, StreamState, UniStreamType};
 pub use validation::HeaderField;
+pub use varint::{VarInt, VarIntError};

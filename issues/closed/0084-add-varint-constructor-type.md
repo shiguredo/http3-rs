@@ -1,6 +1,8 @@
 # 0084: VarInt 補助型を導入し RFC 9000 §16 の値域を型で表現する
 
 Created: 2026-05-23
+Completed: 2026-05-23
+Branch: feature/add-varint-type
 Model: Opus 4.7
 
 ## 概要
@@ -395,3 +397,42 @@ pub enum DecodeError {
 - [[0086-change-settings-construct-time-validation]] (Settings 値型に VarInt を適用)
 - [[0087-change-frame-construct-time-validation]] (Frame ペイロードに VarInt を適用)
 - [[0088-add-trybuild-and-pbt-construct-time-validation]] (`from_static` の compile_fail テスト)
+
+## 解決方法
+
+`src/varint.rs` を新 API に書き換え、`VarInt` 構造体 / `VarIntError` を導入。`src/lib.rs` から `pub use varint::{VarInt, VarIntError}` を公開。
+
+### 主な変更点
+
+- `VarInt` 構造体: 値域 `0..=2^62 - 1` を型で表現。
+- `VarInt::new` (`const fn`) / `VarInt::from_static` (`const fn` + `#[track_caller]`)。
+- `VarInt::encoded_len` / `VarInt::MAX` / `VarInt::ZERO` / `Display` / `From<u8/u16/u32>` / `TryFrom<u64/usize>`。
+- `pub(crate) const fn from_validated_parts`: `decode` 経路のみで使用。
+- `varint::encode` / `encode_into_vec` / `decode` のシグネチャを `VarInt` 受け取り / 返却に変更。
+- `varint::MAX_VALUE` / `encoded_len(u64)` / `try_encoded_len` / `try_encode_into_vec` / `EncodeError::ValueTooLarge` を削除。
+- `varint::DecodeError` / `EncodeError` に `#[non_exhaustive]` を付与。
+- `frame::encoded_frame_len` の戻り値を `usize` から `Option<usize>` に変更し、嘘の長さを返さないように修正。`encoded_varint_len` の沈黙フォールバックを廃止。`goaway_id_encoded_len` ヘルパーは削除。
+- `Frame::Unknown` 等で frame_type が VarInt 範囲外なら `encode_frame_header` / `encode_frame` / `encoded_frame_len` 全てが `None` を返すよう統一。
+- `frame::FrameHeader` / `Frame::Goaway.id` / `Frame::MaxPushId` 等の `u64` フィールドは本 issue では維持し、後続 issue 0087 で `VarInt` 化する方針を確認。
+- WebTransport stream の `UNIDIRECTIONAL_STREAM_TYPE` / `BIDIRECTIONAL_SIGNAL_VALUE` を `const VarInt`（`from_static`）でラップ。
+- `Datagram::new` に session_id の VarInt 範囲検査を追加し、`DatagramError::SessionIdOutOfRange` を追加 (`#[non_exhaustive]` 付与)。
+- `StreamHeader::new` にも同様の検査と `StreamHeaderDecodeError::SessionIdOutOfRange` を追加 (`#[non_exhaustive]` 付与)。
+- `stream::control::send_goaway` で id の VarInt 範囲検査を追加し、範囲外時は `ErrorCode::InternalError` で返す。
+- `send_settings` / `send_encoded_headers` / `send_body` / `send_goaway` で `encode_frame` の戻り値を `expect` で受け、`debug_assert_eq!` で長さ整合を保証。
+- `webtransport::capsule` モジュールヘッダーに `# Panics` 節を追加し、後続 issue で構造的に解消する旨を明記。
+
+### テスト
+
+- `src/varint.rs` の `#[cfg(test)] mod tests` には PBT で代替できない単体テスト (const 文脈の正常系・`from_validated_parts` 境界・エラー文面の RFC 引用検査・64bit ガード付き `TryFrom<usize>` 拒否) のみ残し、ラウンドトリップ・境界値・`From` のパターンは `pbt/tests/prop_varint.rs` に統合。
+- PBT に `prop_encode_succeeds_for_any_varint` / `prop_short_buffer_returns_buffer_too_short` / `prop_display_matches_u64` / `prop_from_u8_roundtrip` / `prop_from_u16_roundtrip` / `prop_from_u32_roundtrip` / `prop_try_from_u64_value_domain` を追加。
+- `src/frame/encoder.rs` に `Frame::Unknown` 範囲外時の `encoded_frame_len` / `encode_frame` が `None` を返すユニットテストを追加。
+- `src/webtransport/datagram.rs` / `src/webtransport/stream.rs` に `SessionIdOutOfRange` の単体テストを追加。
+
+### 影響範囲追従
+
+- `src/connection/mod.rs` / `src/frame/{decoder,encoder}.rs` / `src/webtransport/{datagram,capsule,stream}.rs` / `src/stream/{control,request}.rs` / `pbt/tests/prop_{varint,frame,datagram,webtransport}.rs` / `examples/wt_server/src/{main,webtransport}.rs` / `interop/wt/src/lib.rs` / `tests/test_webtransport_draft_connect.rs` を新 API に追従。
+- `fuzz/fuzz_targets/fuzz_varint.rs` は戻り値を `_` で破棄しているため変更不要。
+
+### CHANGES.md
+
+`## develop` セクションに ADD x4 / CHANGE x3 のエントリを追加。

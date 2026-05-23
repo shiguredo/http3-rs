@@ -123,7 +123,7 @@ proptest! {
             data: payload.clone(),
         });
 
-        let mut buf = vec![0u8; encoded_frame_len(&frame)];
+        let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
 
         let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
@@ -147,11 +147,18 @@ proptest! {
             data: payload.clone(),
         });
 
-        let expected_len = shiguredo_http3::varint::encoded_len(FrameType::Data as u64)
-            + shiguredo_http3::varint::encoded_len(payload.len() as u64)
+        // FrameType::Data は 0x00 (1 バイト VarInt) で構築不能ではないため、
+        // ランタイム値の `VarInt::new` を使って整合性を取る (const 文脈ではないので
+        // `from_static` は使わない)。
+        let expected_len = shiguredo_http3::VarInt::new(FrameType::Data as u64)
+            .unwrap()
+            .encoded_len()
+            + shiguredo_http3::VarInt::new(payload.len() as u64)
+                .unwrap()
+                .encoded_len()
             + payload.len();
 
-        let actual_len = encoded_frame_len(&frame);
+        let actual_len = encoded_frame_len(&frame).unwrap();
 
         prop_assert_eq!(
             actual_len, expected_len,
@@ -172,7 +179,7 @@ proptest! {
             encoded_field_section: encoded_block.clone(),
         });
 
-        let mut buf = vec![0u8; encoded_frame_len(&frame)];
+        let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
 
         let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
@@ -204,7 +211,7 @@ proptest! {
         }
         let frame = Frame::Settings(payload);
 
-        let mut buf = vec![0u8; encoded_frame_len(&frame)];
+        let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
 
         let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
@@ -229,7 +236,7 @@ proptest! {
     fn prop_empty_settings_frame_valid(_dummy in Just(())) {
         let frame = Frame::Settings(SettingsPayload::new());
 
-        let mut buf = vec![0u8; encoded_frame_len(&frame)];
+        let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
 
         let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
@@ -254,7 +261,7 @@ proptest! {
     fn prop_goaway_frame_roundtrip(id in valid_goaway_id()) {
         let frame = Frame::Goaway(GoawayPayload { id });
 
-        let mut buf = vec![0u8; encoded_frame_len(&frame)];
+        let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
 
         let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
@@ -288,7 +295,7 @@ proptest! {
             payload: payload.clone(),
         };
 
-        let mut buf = vec![0u8; encoded_frame_len(&frame)];
+        let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
         let encoded_len = encode_frame(&mut buf, &frame).unwrap();
 
         let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
@@ -314,7 +321,7 @@ proptest! {
     fn prop_encoded_frame_len_accurate(payload in valid_payload()) {
         let frame = Frame::Data(DataPayload { data: payload });
 
-        let predicted_len = encoded_frame_len(&frame);
+        let predicted_len = encoded_frame_len(&frame).unwrap();
         let mut buf = vec![0u8; predicted_len + 100]; // 余裕を持たせる
         let actual_len = encode_frame(&mut buf, &frame).unwrap();
 

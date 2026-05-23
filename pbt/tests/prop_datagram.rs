@@ -2,10 +2,8 @@
 //! (RFC 9297, draft-ietf-webtrans-http3-15 Section 4.5)
 
 use proptest::prelude::*;
+use shiguredo_http3::VarInt;
 use shiguredo_http3::webtransport::Datagram;
-
-/// 可変長整数の最大値
-const MAX_VARINT: u64 = (1 << 62) - 1;
 
 // =============================================================================
 // Strategy ヘルパー
@@ -116,12 +114,15 @@ proptest! {
     ///           decode の結果の session_id は 4 の倍数
     #[test]
     fn prop_arbitrary_qsi_decodes_to_multiple_of_4(
-        qsi in 0u64..=(MAX_VARINT / 4),
+        qsi in 0u64..=(VarInt::MAX.get() / 4),
         payload in valid_payload(),
     ) {
         // Quarter Stream ID を直接エンコードする
         let mut buf = Vec::new();
-        shiguredo_http3::varint::encode_into_vec(&mut buf, qsi);
+        shiguredo_http3::varint::encode_into_vec(
+            &mut buf,
+            shiguredo_http3::VarInt::new(qsi).unwrap(),
+        );
         buf.extend_from_slice(&payload);
 
         let (decoded, consumed) = Datagram::decode(&buf)

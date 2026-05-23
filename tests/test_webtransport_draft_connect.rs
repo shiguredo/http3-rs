@@ -26,9 +26,15 @@ fn build_headers_frame(headers: &[Header]) -> Vec<u8> {
 
     let mut frame = Vec::new();
     // HEADERS フレームタイプ: 0x01
-    shiguredo_http3::varint::encode_into_vec(&mut frame, 0x01);
+    shiguredo_http3::varint::encode_into_vec(
+        &mut frame,
+        shiguredo_http3::VarInt::from_static(0x01),
+    );
     // ペイロード長
-    shiguredo_http3::varint::encode_into_vec(&mut frame, qpack_len as u64);
+    shiguredo_http3::varint::encode_into_vec(
+        &mut frame,
+        shiguredo_http3::VarInt::new(qpack_len as u64).expect("qpack length fits in VarInt"),
+    );
     frame.extend_from_slice(&qpack_buf);
     frame
 }
@@ -917,8 +923,11 @@ mod pending_data_frame {
     fn build_headers_then_data(headers: &[Header], body: &[u8]) -> Vec<u8> {
         let mut frame = build_headers_frame(headers);
         // DATA フレーム: type=0x00 + length(varint) + body
-        shiguredo_http3::varint::encode_into_vec(&mut frame, 0x00);
-        shiguredo_http3::varint::encode_into_vec(&mut frame, body.len() as u64);
+        shiguredo_http3::varint::encode_into_vec(&mut frame, shiguredo_http3::VarInt::ZERO);
+        shiguredo_http3::varint::encode_into_vec(
+            &mut frame,
+            shiguredo_http3::VarInt::new(body.len() as u64).expect("body length fits in VarInt"),
+        );
         frame.extend_from_slice(body);
         frame
     }

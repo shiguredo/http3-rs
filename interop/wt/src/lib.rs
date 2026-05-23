@@ -62,15 +62,20 @@ pub fn cleanup_certificate_files(cert_path: &PathBuf, key_path: &PathBuf) {
 }
 
 /// QUIC 可変長整数をエンコードする (RFC 9000 Section 16)
+///
+/// `value` が VarInt 範囲 (`0..=2^62 - 1`) を超える場合は panic する。
 pub fn encode_varint(value: u64) -> Vec<u8> {
     let mut buf = Vec::new();
-    shiguredo_http3::varint::encode_into_vec(&mut buf, value);
+    let v = shiguredo_http3::VarInt::new(value).expect("interop varint value fits in VarInt");
+    shiguredo_http3::varint::encode_into_vec(&mut buf, v);
     buf
 }
 
 /// QUIC 可変長整数をデコードする (RFC 9000 Section 16)
 pub fn decode_varint(data: &[u8]) -> Option<(u64, usize)> {
-    shiguredo_http3::varint::decode(data).ok()
+    shiguredo_http3::varint::decode(data)
+        .ok()
+        .map(|(v, n)| (v.get(), n))
 }
 
 /// WebTransport 双方向ストリームヘッダーをエンコードする

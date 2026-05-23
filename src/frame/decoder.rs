@@ -43,13 +43,13 @@ pub fn decode_frame_header(buf: &[u8]) -> Result<FrameHeader, FrameDecodeError> 
         varint::decode(&buf[type_len..]).map_err(|_| FrameDecodeError::BufferTooShort)?;
 
     // HTTP/2 専用フレームのチェック
-    if FrameType::is_http2_only(frame_type) {
-        return Err(FrameDecodeError::Http2Frame(frame_type));
+    if FrameType::is_http2_only(frame_type.get()) {
+        return Err(FrameDecodeError::Http2Frame(frame_type.get()));
     }
 
     Ok(FrameHeader {
-        frame_type,
-        payload_len,
+        frame_type: frame_type.get(),
+        payload_len: payload_len.get(),
         header_len: type_len + len_len,
     })
 }
@@ -118,17 +118,20 @@ fn decode_settings_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
             varint::decode(&payload[offset..]).map_err(|_| FrameDecodeError::InvalidLength)?;
         offset += value_len;
 
+        let id_raw = id.get();
+        let value_raw = value.get();
+
         // HTTP/2 専用設定のチェック (RFC 9114 Section 7.2.4)
-        if SettingsId::is_http2_only(id) {
-            return Err(FrameDecodeError::InvalidSettingsId(id));
+        if SettingsId::is_http2_only(id_raw) {
+            return Err(FrameDecodeError::InvalidSettingsId(id_raw));
         }
 
         // 同一フレーム内の重複 ID チェック (RFC 9114 Section 7.2.4)
-        if !seen_ids.insert(id) {
-            return Err(FrameDecodeError::InvalidSettingsId(id));
+        if !seen_ids.insert(id_raw) {
+            return Err(FrameDecodeError::InvalidSettingsId(id_raw));
         }
 
-        settings.add(id, value);
+        settings.add(id_raw, value_raw);
     }
 
     Ok(Frame::Settings(settings))
@@ -140,7 +143,7 @@ fn decode_goaway_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
     if consumed != payload.len() {
         return Err(FrameDecodeError::InvalidLength);
     }
-    Ok(Frame::Goaway(GoawayPayload::new(id)))
+    Ok(Frame::Goaway(GoawayPayload::new(id.get())))
 }
 
 fn decode_max_push_id_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
@@ -149,7 +152,7 @@ fn decode_max_push_id_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
     if consumed != payload.len() {
         return Err(FrameDecodeError::InvalidLength);
     }
-    Ok(Frame::MaxPushId(id))
+    Ok(Frame::MaxPushId(id.get()))
 }
 
 #[cfg(test)]

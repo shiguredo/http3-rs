@@ -23,9 +23,10 @@
 //!
 //! - Section 4.5: Datagrams
 
-use crate::varint;
+use crate::varint::{self, VarInt};
 
 /// `Datagram::new` のバリデーションエラー
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatagramError {
     /// `session_id` が client-initiated bidirectional stream ID ではない
@@ -34,6 +35,11 @@ pub enum DatagramError {
     /// (draft-ietf-webtrans-http3-15 Section 4.5 / RFC 9000 Section 2.1:
     /// クライアント開始双方向ストリームの ID は 4 の倍数)
     InvalidSessionId,
+
+    /// `session_id` が QUIC ストリーム ID 空間の上限 (`2^62 - 1`) を超えている
+    ///
+    /// (RFC 9000 Section 2.1, Section 16: ストリーム ID は QUIC VarInt)
+    SessionIdOutOfRange,
 }
 
 /// WebTransport データグラム (Section 4.5)
@@ -57,6 +63,13 @@ impl Datagram {
     ///
     /// Sans I/O 境界として呼び出し側にエラー判定を委ねるため、パニックしない。
     pub fn new(session_id: u64, payload: Vec<u8>) -> Result<Self, DatagramError> {
+        // session_id は QUIC ストリーム ID であり、RFC 9000 Section 16 の VarInt 範囲
+        // (`0..=2^62 - 1`) に収まらなければならない。
+        // この検査は `encode` (Quarter Stream ID をエンコードする) の安全性を構造的に
+        // 保証する役割も持つ。
+        if VarInt::new(session_id).is_err() {
+            return Err(DatagramError::SessionIdOutOfRange);
+        }
         if !session_id.is_multiple_of(4) {
             return Err(DatagramError::InvalidSessionId);
         }
@@ -77,7 +90,11 @@ impl Datagram {
     ///
     /// `buf` に Quarter Stream ID (varint) とペイロードを追記する。
     pub fn encode(&self, buf: &mut Vec<u8>) {
-        varint::encode_into_vec(buf, self.quarter_stream_id());
+        // `Datagram::new` で session_id <= 2^62 - 1 を検査済みのため、
+        // quarter_stream_id = session_id / 4 は必ず VarInt 範囲内 (<= 2^60 - 1)。
+        let qsi = VarInt::new(self.quarter_stream_id())
+            .expect("quarter_stream_id is bounded by Datagram::new");
+        varint::encode_into_vec(buf, qsi);
         buf.extend_from_slice(&self.payload);
     }
 
@@ -90,6 +107,7 @@ impl Datagram {
     /// `session_id = quarter_stream_id * 4` として復元する。
     pub fn decode(buf: &[u8]) -> Option<(Self, usize)> {
         let (qsi, varint_len) = varint::decode(buf).ok()?;
+        let qsi = qsi.get();
         // RFC 9297 Section 2.1: Quarter Stream ID は QUIC ストリーム ID 空間
         // (2^62 - 1) を 4 で割った値、すなわち 2^60 - 1 が上限。
         // これを超える値は不正であり、呼び出し側は H3_DATAGRAM_ERROR で
@@ -180,6 +198,17 @@ mod tests {
         assert_eq!(
             Datagram::new(5, vec![0xff]),
             Err(DatagramError::InvalidSessionId)
+        );
+    }
+
+    #[test]
+    fn test_datagram_rejects_session_id_out_of_range() {
+        // session_id が VarInt 範囲 (2^62 - 1) を超える場合は拒否
+        // (4 の倍数判定より先に値域判定を行う)
+        let too_large = (1u64 << 62) & !0x3;
+        assert_eq!(
+            Datagram::new(too_large, vec![]),
+            Err(DatagramError::SessionIdOutOfRange)
         );
     }
 }
