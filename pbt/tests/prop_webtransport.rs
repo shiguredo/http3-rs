@@ -768,7 +768,10 @@ prop_compose! {
 
 /// 可変長整数をエンコード
 fn encode_varint_for_test(buf: &mut Vec<u8>, value: u64) {
-    shiguredo_http3::varint::encode_into_vec(buf, value);
+    shiguredo_http3::varint::encode_into_vec(
+        buf,
+        shiguredo_http3::VarInt::new(value).expect("value fits in VarInt"),
+    );
 }
 
 proptest! {

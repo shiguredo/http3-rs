@@ -183,6 +183,7 @@ impl WtSessionRequest {
                 // ストリームタイプを判定する
                 let (stream_type, _) = shiguredo_http3::varint::decode(&buf)
                     .map_err(|_| Error::InvalidState("stream type decode error".into()))?;
+                let stream_type = stream_type.get();
 
                 tracing::info!("WebTransport: uni stream {} type: 0x{:x}", sid, stream_type);
 
@@ -942,6 +943,7 @@ fn parse_settings_from_control(buf: &[u8]) -> std::result::Result<H3Settings, Se
     // ストリームタイプバイト (0x00) をスキップする
     let (stream_type, type_len) =
         shiguredo_http3::varint::decode(buf).map_err(|_| SettingsParseState::NeedMoreData)?;
+    let stream_type = stream_type.get();
     if stream_type != 0x00 {
         return Err(SettingsParseState::Error(format!(
             "expected control stream type 0x00, got {stream_type:#x}"
@@ -952,6 +954,7 @@ fn parse_settings_from_control(buf: &[u8]) -> std::result::Result<H3Settings, Se
     // フレームタイプを読む
     let (frame_type, ft_len) =
         shiguredo_http3::varint::decode(rest).map_err(|_| SettingsParseState::NeedMoreData)?;
+    let frame_type = frame_type.get();
     if frame_type != 0x04 {
         return Err(SettingsParseState::Error(format!(
             "expected SETTINGS frame type 0x04, got {frame_type:#x}"
@@ -961,6 +964,7 @@ fn parse_settings_from_control(buf: &[u8]) -> std::result::Result<H3Settings, Se
     // フレーム長を読む
     let (payload_len, pl_len) = shiguredo_http3::varint::decode(&rest[ft_len..])
         .map_err(|_| SettingsParseState::NeedMoreData)?;
+    let payload_len = payload_len.get();
     let payload_start = ft_len + pl_len;
     let payload_end = payload_start + payload_len as usize;
     if rest.len() < payload_end {
@@ -983,6 +987,8 @@ fn parse_settings_from_control(buf: &[u8]) -> std::result::Result<H3Settings, Se
         let (value, value_len) = shiguredo_http3::varint::decode(&payload_buf[pos..])
             .map_err(|_| SettingsParseState::Error("settings value decode error".into()))?;
         pos += value_len;
+        let id = id.get();
+        let value = value.get();
         tracing::info!("WebTransport: client SETTINGS entry: id=0x{id:x}, value={value}");
         payload.add(id, value);
     }

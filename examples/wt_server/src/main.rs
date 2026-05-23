@@ -201,11 +201,12 @@ async fn handle_connection(
 
             // H3 DATA フレーム: type=0x00, length=varint, payload
             buf.push(0x00);
-            let len_size = shiguredo_http3::varint::encoded_len(capsule_bytes.len() as u64);
+            let payload_len = shiguredo_http3::VarInt::new(capsule_bytes.len() as u64)
+                .expect("capsule payload length fits in VarInt");
+            let len_size = payload_len.encoded_len();
             let len_start = buf.len();
             buf.resize(len_start + len_size, 0);
-            shiguredo_http3::varint::encode(&mut buf[len_start..], capsule_bytes.len() as u64)
-                .unwrap();
+            shiguredo_http3::varint::encode(&mut buf[len_start..], payload_len).unwrap();
             buf.extend_from_slice(&capsule_bytes);
         }
 

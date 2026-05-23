@@ -1,8 +1,17 @@
 //! WebTransport Capsule Protocol (draft-ietf-webtrans-http3-15 Section 5.6, 6)
 //!
 //! WebTransport セッション管理とフロー制御のための Capsule を定義。
+//!
+//! # Panics
+//!
+//! 本モジュールの `Capsule` 各 variant の `u64` フィールド
+//! (`MaxData::maximum`, `MaxStreams::maximum`, `DataBlocked::maximum`,
+//! `StreamsBlocked::maximum`, `Unknown::payload.len()` 等) は RFC 9000 Section 16 の
+//! VarInt 範囲 (`0..=2^62 - 1`) を超えると `encode` / `encode_as_data_frame` で
+//! panic する。これらの値域検査は後続 issue で Capsule の構築時検査型化を行う際に
+//! 構造的に保証する予定。それまでは利用側で範囲外値を渡さないこと。
 
-use crate::varint;
+use crate::varint::{self, VarInt};
 
 /// Maximum Streams の上限値 (2^60)
 /// draft-ietf-webtrans-http3-15 Section 5.6.2
@@ -153,13 +162,24 @@ pub enum Capsule {
 }
 
 /// 可変長整数を Vec にエンコード
+///
+/// 呼び出し側は値が VarInt 範囲内 (RFC 9000 Section 16) であることを保証する。
+/// 範囲外の値が渡された場合は panic する。
 fn encode_varint(buf: &mut Vec<u8>, value: u64) {
+    let value = VarInt::new(value).expect("capsule field value fits in VarInt");
     varint::encode_into_vec(buf, value);
 }
 
-/// 可変長整数をデコード (Option を返す)
+/// 可変長整数をエンコードしたサイズを返す
+fn varint_encoded_len(value: u64) -> usize {
+    VarInt::new(value)
+        .expect("capsule field value fits in VarInt")
+        .encoded_len()
+}
+
+/// 可変長整数をデコード (生の `u64` 値を返す)
 fn decode_varint(buf: &[u8]) -> Option<(u64, usize)> {
-    varint::decode(buf).ok()
+    varint::decode(buf).ok().map(|(v, n)| (v.get(), n))
 }
 
 impl Capsule {
@@ -188,7 +208,7 @@ impl Capsule {
         let mut capsule_bytes = Vec::new();
         self.encode(&mut capsule_bytes);
         // DATA フレーム: タイプ (0x00) + ペイロード長 + ペイロード
-        encode_varint(buf, 0x00);
+        varint::encode_into_vec(buf, VarInt::ZERO);
         encode_varint(buf, capsule_bytes.len() as u64);
         buf.extend_from_slice(&capsule_bytes);
     }
@@ -214,7 +234,7 @@ impl Capsule {
             }
 
             Self::MaxData { maximum } => {
-                let payload_len = varint::encoded_len(*maximum);
+                let payload_len = varint_encoded_len(*maximum);
                 Self::encode_capsule_header(buf, CapsuleType::MaxData as u64, payload_len);
                 encode_varint(buf, *maximum);
             }
@@ -228,13 +248,13 @@ impl Capsule {
                 } else {
                     CapsuleType::MaxStreamsUni as u64
                 };
-                let payload_len = varint::encoded_len(*maximum);
+                let payload_len = varint_encoded_len(*maximum);
                 Self::encode_capsule_header(buf, capsule_type, payload_len);
                 encode_varint(buf, *maximum);
             }
 
             Self::DataBlocked { maximum } => {
-                let payload_len = varint::encoded_len(*maximum);
+                let payload_len = varint_encoded_len(*maximum);
                 Self::encode_capsule_header(buf, CapsuleType::DataBlocked as u64, payload_len);
                 encode_varint(buf, *maximum);
             }
@@ -248,7 +268,7 @@ impl Capsule {
                 } else {
                     CapsuleType::StreamsBlockedUni as u64
                 };
-                let payload_len = varint::encoded_len(*maximum);
+                let payload_len = varint_encoded_len(*maximum);
                 Self::encode_capsule_header(buf, capsule_type, payload_len);
                 encode_varint(buf, *maximum);
             }

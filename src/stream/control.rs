@@ -71,9 +71,15 @@ impl ControlStreamSend {
         // SETTINGS フレーム
         let payload = SettingsPayload::from_settings(settings);
         let frame = Frame::Settings(payload);
-        let frame_len = frame::encoded_frame_len(&frame);
+        // SETTINGS の id / value はアプリ層が `Settings` 経由で構築するため、
+        // 本 issue 時点では VarInt 範囲内であることをアプリ層責務として扱う。
+        // 後続 issue 0086 で `Setting` enum に昇格して型レベルに移す。
+        let frame_len =
+            frame::encoded_frame_len(&frame).expect("SETTINGS frame fields fit in VarInt");
         buf.resize(1 + frame_len, 0);
-        frame::encode_frame(&mut buf[1..], &frame);
+        let written =
+            frame::encode_frame(&mut buf[1..], &frame).expect("encoded_frame_len validated above");
+        debug_assert_eq!(written, frame_len);
 
         self.send_buf.push(&buf);
         self.send_state = ControlSendState::Ready;
@@ -89,10 +95,24 @@ impl ControlStreamSend {
             ));
         }
 
+        // GOAWAY id は RFC 9000 Section 16 の VarInt 範囲内であること
+        // (RFC 9114 Section 7.2.6, RFC 9000 Section 2.1)。
+        // 本 issue 時点では `u64` 受けのまま検査するが、後続 issue 0087 で
+        // 引数型を `VarInt` に昇格させて型レベルで保証する。
+        // 範囲外はローカル API 利用側のバグなので H3_INTERNAL_ERROR で返す
+        // (wire frame の問題ではないため H3_FRAME_ERROR は不適切)。
+        if crate::varint::VarInt::new(id).is_err() {
+            return Err(crate::error::Error::ConnectionError(
+                crate::error::ErrorCode::InternalError,
+            ));
+        }
         let frame = Frame::Goaway(GoawayPayload::new(id));
-        let frame_len = frame::encoded_frame_len(&frame);
+        let frame_len =
+            frame::encoded_frame_len(&frame).expect("GOAWAY id fits in VarInt after check");
         let mut buf = vec![0u8; frame_len];
-        frame::encode_frame(&mut buf, &frame);
+        let written =
+            frame::encode_frame(&mut buf, &frame).expect("encoded_frame_len validated above");
+        debug_assert_eq!(written, frame_len);
 
         self.send_buf.push(&buf);
         Ok(())

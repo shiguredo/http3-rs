@@ -1302,7 +1302,7 @@ impl Connection {
 
         let remaining = &type_data[type_len..];
 
-        match stream_type {
+        match stream_type.get() {
             0x00 => {
                 // Control Stream
                 if self.control_recv.stream_id().is_some() {
@@ -1432,6 +1432,7 @@ impl Connection {
 
         match crate::varint::decode(&buf) {
             Ok((session_id, id_len)) => {
+                let session_id = session_id.get();
                 // session_id は client-initiated bidirectional stream ID でなければならない
                 // (draft-ietf-webtrans-http3-15 Section 4.2)
                 // RFC 9000 Section 2.1: client-initiated bidi は stream_id % 4 == 0
@@ -1586,7 +1587,7 @@ impl Connection {
         match crate::varint::decode(&buf) {
             Ok((value, _)) => {
                 self.pending_bidi_dispatch.remove(&stream_id);
-                if value == crate::webtransport::stream::BIDIRECTIONAL_SIGNAL_VALUE {
+                if value.get() == crate::webtransport::stream::BIDIRECTIONAL_SIGNAL_VALUE {
                     // WT_STREAM (0x41): WT bidi ストリームとして処理
                     self.handle_wt_bidi_stream(stream_id, &buf, fin)?;
                 } else {
@@ -2049,15 +2050,20 @@ impl Connection {
     /// 0 を返す (CONNECT stream や非 WT ストリーム)。将来のドラフトで stream
     /// header フォーマットが変更される可能性がある。
     pub fn wt_stream_header_len(&self, stream_id: u64) -> u64 {
-        use crate::varint;
+        use crate::varint::VarInt;
         use crate::webtransport::stream::{BIDIRECTIONAL_SIGNAL_VALUE, UNIDIRECTIONAL_STREAM_TYPE};
+        // signal value / stream type は WebTransport プロトコルの定数なので const 文脈で
+        // VarInt 構築できる (`from_static` でコンパイル時検査)。
+        const BIDI_SIGNAL: VarInt = VarInt::from_static(BIDIRECTIONAL_SIGNAL_VALUE);
+        const UNI_TYPE: VarInt = VarInt::from_static(UNIDIRECTIONAL_STREAM_TYPE);
         if let Some(&session_id) = self.wt_bidi_streams.get(&stream_id) {
-            return (varint::encoded_len(BIDIRECTIONAL_SIGNAL_VALUE)
-                + varint::encoded_len(session_id)) as u64;
+            // session_id は QUIC ストリーム ID 空間 (`<= 2^62 - 1`) で構造的に保証される。
+            let session_id = VarInt::new(session_id).expect("session_id fits in VarInt");
+            return (BIDI_SIGNAL.encoded_len() + session_id.encoded_len()) as u64;
         }
         if let Some(&session_id) = self.wt_uni_streams.get(&stream_id) {
-            return (varint::encoded_len(UNIDIRECTIONAL_STREAM_TYPE)
-                + varint::encoded_len(session_id)) as u64;
+            let session_id = VarInt::new(session_id).expect("session_id fits in VarInt");
+            return (UNI_TYPE.encoded_len() + session_id.encoded_len()) as u64;
         }
         0
     }
@@ -2212,7 +2218,7 @@ impl Connection {
 
         // signal value は 0x41 (WT_STREAM) でなければならない
         // (draft-ietf-webtrans-http3-15 Section 4.3)
-        if signal_value != 0x41 {
+        if signal_value.get() != 0x41 {
             // 0x41 以外の signal value はリクエストストリームの先頭以外での WT_STREAM 受信、
             // または不正な signal value。H3_FRAME_ERROR として接続エラー。
             return Err(Error::ConnectionError(ErrorCode::FrameError));
@@ -2222,6 +2228,7 @@ impl Connection {
         let remaining = &buf[signal_len..];
         match crate::varint::decode(remaining) {
             Ok((session_id, id_len)) => {
+                let session_id = session_id.get();
                 // session_id は client-initiated bidirectional stream ID でなければならない
                 // (draft-ietf-webtrans-http3-15 Section 4.2)
                 if session_id & 0x03 != 0x00 {
@@ -4872,8 +4879,11 @@ mod tests {
 
         // HEADERS フレーム: type=0x01, length=varint, payload=QPACK エンコード済み
         let mut frame = Vec::new();
-        crate::varint::encode_into_vec(&mut frame, 0x01); // HEADERS frame type
-        crate::varint::encode_into_vec(&mut frame, qpack_len as u64);
+        crate::varint::encode_into_vec(&mut frame, crate::VarInt::from_static(0x01)); // HEADERS frame type
+        crate::varint::encode_into_vec(
+            &mut frame,
+            crate::VarInt::new(qpack_len as u64).expect("qpack_len fits in VarInt"),
+        );
         frame.extend_from_slice(&qpack_buf);
         frame
     }
@@ -5396,7 +5406,10 @@ mod tests {
             let stream_id = 10 + (i as u64) * 4;
             // ストリームタイプ 0x54 + session_id varint
             let mut buf = vec![0x40, 0x54];
-            crate::varint::encode_into_vec(&mut buf, session_id);
+            crate::varint::encode_into_vec(
+                &mut buf,
+                crate::VarInt::new(session_id).expect("session_id fits in VarInt"),
+            );
             server.feed_stream(stream_id, &buf, false).unwrap();
         }
         assert_eq!(server.count_pending_wt_sessions(), WT_MAX_PENDING_SESSIONS);
@@ -5405,7 +5418,10 @@ mod tests {
         let overflow_session_id = ((WT_MAX_PENDING_SESSIONS + 1) * 4) as u64;
         let overflow_stream_id = 10 + (WT_MAX_PENDING_SESSIONS as u64) * 4;
         let mut buf = vec![0x40, 0x54];
-        crate::varint::encode_into_vec(&mut buf, overflow_session_id);
+        crate::varint::encode_into_vec(
+            &mut buf,
+            crate::VarInt::new(overflow_session_id).expect("overflow_session_id fits in VarInt"),
+        );
         server.feed_stream(overflow_stream_id, &buf, false).unwrap();
 
         // 最終イベントが BufferedStreamRejected であること
@@ -5432,7 +5448,10 @@ mod tests {
             let session_id = ((i + 1) * 4) as u64;
             let qsi = session_id / 4;
             let mut buf = Vec::new();
-            crate::varint::encode_into_vec(&mut buf, qsi);
+            crate::varint::encode_into_vec(
+                &mut buf,
+                crate::VarInt::new(qsi).expect("qsi fits in VarInt"),
+            );
             buf.extend_from_slice(b"x");
             server.feed_datagram(&buf).unwrap();
         }
@@ -5441,7 +5460,10 @@ mod tests {
         // 上限超過の datagram は破棄され、Pending セッション数は増えない
         let overflow_session_id = ((WT_MAX_PENDING_SESSIONS + 1) * 4) as u64;
         let mut buf = Vec::new();
-        crate::varint::encode_into_vec(&mut buf, overflow_session_id / 4);
+        crate::varint::encode_into_vec(
+            &mut buf,
+            crate::VarInt::new(overflow_session_id / 4).expect("quarter session id fits in VarInt"),
+        );
         buf.extend_from_slice(b"x");
         server.feed_datagram(&buf).unwrap();
         assert_eq!(server.count_pending_wt_sessions(), WT_MAX_PENDING_SESSIONS);

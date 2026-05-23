@@ -11,6 +11,23 @@
 
 ## develop
 
+- [ADD] `VarInt` / `VarIntError` を新設し、RFC 9000 Section 16 の値域 (`0..=2^62 - 1`) を型で表現する
+  - @voluntas
+- [ADD] `VarInt::from_static` を `const fn` で提供し、`2^62` 以上のリテラル定数を `const` / `static` 宣言時にコンパイル時 panic として検出可能にする
+  - @voluntas
+- [ADD] `webtransport::DatagramError::SessionIdOutOfRange` を追加し、`Datagram::new` に session_id の VarInt 範囲検査を導入する
+  - @voluntas
+- [ADD] `webtransport::stream::StreamHeaderDecodeError::SessionIdOutOfRange` を追加し、`StreamHeader::new` に session_id の VarInt 範囲検査を導入する
+  - @voluntas
+- [ADD] `varint::DecodeError` / `varint::EncodeError` / `webtransport::DatagramError` / `webtransport::stream::StreamHeaderDecodeError` に `#[non_exhaustive]` を付与し、将来のバリアント追加を後方互換にする
+  - @voluntas
+- [CHANGE] `varint::encode` / `varint::encode_into_vec` / `varint::decode` のシグネチャを `VarInt` を扱う形に変更する
+  - @voluntas
+- [CHANGE] `varint::MAX_VALUE` / `varint::encoded_len(u64)` / `varint::try_encoded_len` / `varint::try_encode_into_vec` / `varint::EncodeError::ValueTooLarge` を削除する (`VarInt` 型が値域を保証するため)
+  - @voluntas
+- [CHANGE] `frame::encoded_frame_len` の戻り値型を `usize` から `Option<usize>` に変更し、`Frame::Unknown` 等の `u64` フィールドが VarInt 範囲外の場合に `None` を返すようにする
+  - @voluntas
+
 ### misc
 
 - [UPDATE] 仕様引用の節番号を一次資料 (`refs/`) に合わせてコメントを修正する

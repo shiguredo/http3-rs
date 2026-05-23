@@ -1,43 +1,41 @@
 //! Property-Based Testing for QUIC Variable-Length Integer (RFC 9000 Section 16)
 
 use proptest::prelude::*;
+use shiguredo_http3::VarInt;
 use shiguredo_http3::varint;
 
-/// 可変長整数の最大値
-const MAX_VARINT: u64 = (1 << 62) - 1;
-
 prop_compose! {
-    /// 有効な可変長整数値を生成
-    fn valid_varint()(value in 0u64..=MAX_VARINT) -> u64 {
-        value
+    /// 有効な VarInt を生成
+    fn valid_varint()(value in 0u64..=VarInt::MAX.get()) -> VarInt {
+        VarInt::new(value).unwrap()
     }
 }
 
 prop_compose! {
     /// 1 バイトエンコード範囲の値を生成 (0-63)
-    fn one_byte_value()(value in 0u64..64) -> u64 {
-        value
+    fn one_byte_value()(value in 0u64..64) -> VarInt {
+        VarInt::new(value).unwrap()
     }
 }
 
 prop_compose! {
     /// 2 バイトエンコード範囲の値を生成 (64-16383)
-    fn two_byte_value()(value in 64u64..16384) -> u64 {
-        value
+    fn two_byte_value()(value in 64u64..16384) -> VarInt {
+        VarInt::new(value).unwrap()
     }
 }
 
 prop_compose! {
     /// 4 バイトエンコード範囲の値を生成 (16384-1073741823)
-    fn four_byte_value()(value in 16384u64..1073741824) -> u64 {
-        value
+    fn four_byte_value()(value in 16384u64..1073741824) -> VarInt {
+        VarInt::new(value).unwrap()
     }
 }
 
 prop_compose! {
     /// 8 バイトエンコード範囲の値を生成 (1073741824-MAX)
-    fn eight_byte_value()(value in 1073741824u64..=MAX_VARINT) -> u64 {
-        value
+    fn eight_byte_value()(value in 1073741824u64..=VarInt::MAX.get()) -> VarInt {
+        VarInt::new(value).unwrap()
     }
 }
 
@@ -53,20 +51,43 @@ proptest! {
         prop_assert_eq!(encoded_len, decoded_len, "Length mismatch for value {}", value);
     }
 
-    /// Property: encoded_len() が実際のエンコード長と一致する
+    /// Property: VarInt::encoded_len() が実際のエンコード長と一致する
     #[test]
     fn prop_encoded_len_matches_actual(value in valid_varint()) {
-        let expected_len = varint::encoded_len(value);
+        let expected_len = value.encoded_len();
         let mut buf = [0u8; 8];
         let actual_len = varint::encode(&mut buf, value).unwrap();
 
         prop_assert_eq!(expected_len, actual_len, "encoded_len mismatch for {}", value);
     }
 
+    /// Property: 任意 VarInt は `encoded_len()` 分のバッファで必ずエンコードできる
+    /// (`EncodeError::ValueTooLarge` を削除した正当性: 値域は型レベルで保証される)
+    #[test]
+    fn prop_encode_succeeds_for_any_varint(value in valid_varint()) {
+        let mut buf = vec![0u8; value.encoded_len()];
+        let result = varint::encode(&mut buf, value);
+        prop_assert!(result.is_ok(), "encode should succeed for any VarInt");
+    }
+
+    /// Property: バッファ長が `encoded_len()` 未満なら必ず `BufferTooShort` を返す
+    #[test]
+    fn prop_short_buffer_returns_buffer_too_short(
+        value in valid_varint(),
+        shortfall in 1usize..=8,
+    ) {
+        let need = value.encoded_len();
+        // shortfall 分だけ短いバッファ (need == 1 の場合は 0 バイトバッファ)
+        let len = need.saturating_sub(shortfall);
+        let mut buf = vec![0u8; len];
+        let result = varint::encode(&mut buf, value);
+        prop_assert_eq!(result, Err(varint::EncodeError::BufferTooShort));
+    }
+
     /// Property: 1 バイト値は 1 バイトでエンコードされる
     #[test]
     fn prop_one_byte_encoding(value in one_byte_value()) {
-        let len = varint::encoded_len(value);
+        let len = value.encoded_len();
         prop_assert_eq!(len, 1, "Value {} should encode to 1 byte", value);
 
         let mut buf = [0u8; 8];
@@ -78,7 +99,7 @@ proptest! {
     /// Property: 2 バイト値は 2 バイトでエンコードされる
     #[test]
     fn prop_two_byte_encoding(value in two_byte_value()) {
-        let len = varint::encoded_len(value);
+        let len = value.encoded_len();
         prop_assert_eq!(len, 2, "Value {} should encode to 2 bytes", value);
 
         let mut buf = [0u8; 8];
@@ -90,7 +111,7 @@ proptest! {
     /// Property: 4 バイト値は 4 バイトでエンコードされる
     #[test]
     fn prop_four_byte_encoding(value in four_byte_value()) {
-        let len = varint::encoded_len(value);
+        let len = value.encoded_len();
         prop_assert_eq!(len, 4, "Value {} should encode to 4 bytes", value);
 
         let mut buf = [0u8; 8];
@@ -102,7 +123,7 @@ proptest! {
     /// Property: 8 バイト値は 8 バイトでエンコードされる
     #[test]
     fn prop_eight_byte_encoding(value in eight_byte_value()) {
-        let len = varint::encoded_len(value);
+        let len = value.encoded_len();
         prop_assert_eq!(len, 8, "Value {} should encode to 8 bytes", value);
 
         let mut buf = [0u8; 8];
@@ -121,14 +142,6 @@ proptest! {
         prop_assert_eq!(encoded_len, peeked_len, "peek_len mismatch for {}", value);
     }
 
-    /// Property: バッファサイズが不足している場合はエラー
-    #[test]
-    fn prop_insufficient_buffer_returns_error(value in two_byte_value()) {
-        let mut buf = [0u8; 1]; // 2 バイト値には不十分
-        let result = varint::encode(&mut buf, value);
-        prop_assert!(result.is_err(), "Should fail for insufficient buffer");
-    }
-
     /// Property: エンコード結果はビッグエンディアン順
     #[test]
     fn prop_encoding_is_big_endian(value in two_byte_value()) {
@@ -136,25 +149,50 @@ proptest! {
         varint::encode(&mut buf, value).unwrap();
 
         // 2 バイトエンコードの場合、値は 0x4000 | value として格納
-        let expected_high = (0x40 | ((value >> 8) & 0x3f)) as u8;
-        let expected_low = (value & 0xff) as u8;
+        let raw = value.get();
+        let expected_high = (0x40 | ((raw >> 8) & 0x3f)) as u8;
+        let expected_low = (raw & 0xff) as u8;
 
         prop_assert_eq!(buf[0], expected_high, "High byte mismatch");
         prop_assert_eq!(buf[1], expected_low, "Low byte mismatch");
     }
-}
 
-/// Property: MAX_VALUE を超える値はエンコードできない
-#[test]
-fn prop_value_exceeding_max_fails() {
-    let mut buf = [0u8; 8];
-    let result = varint::encode(&mut buf, MAX_VARINT + 1);
-    assert!(result.is_err());
-}
+    /// Property: `From<u8>` は任意 u8 で値が一致する
+    #[test]
+    fn prop_from_u8_roundtrip(value in any::<u8>()) {
+        let v = VarInt::from(value);
+        prop_assert_eq!(v.get(), u64::from(value));
+    }
 
-/// Property: 空バッファのデコードはエラー
-#[test]
-fn prop_empty_buffer_decode_fails() {
-    let result = varint::decode(&[]);
-    assert!(result.is_err());
+    /// Property: `From<u16>` は任意 u16 で値が一致する
+    #[test]
+    fn prop_from_u16_roundtrip(value in any::<u16>()) {
+        let v = VarInt::from(value);
+        prop_assert_eq!(v.get(), u64::from(value));
+    }
+
+    /// Property: `From<u32>` は任意 u32 で値が一致する
+    #[test]
+    fn prop_from_u32_roundtrip(value in any::<u32>()) {
+        let v = VarInt::from(value);
+        prop_assert_eq!(v.get(), u64::from(value));
+    }
+
+    /// Property: `TryFrom<u64>` は値域内で必ず Ok、値域外で必ず Err
+    #[test]
+    fn prop_try_from_u64_value_domain(value in any::<u64>()) {
+        let result = VarInt::try_from(value);
+        if value <= VarInt::MAX.get() {
+            prop_assert!(result.is_ok());
+            prop_assert_eq!(result.unwrap().get(), value);
+        } else {
+            prop_assert!(result.is_err());
+        }
+    }
+
+    /// Property: `VarInt::Display` 出力は内部値の 10 進表現と一致する
+    #[test]
+    fn prop_display_matches_u64(value in valid_varint()) {
+        prop_assert_eq!(format!("{value}"), format!("{}", value.get()));
+    }
 }
