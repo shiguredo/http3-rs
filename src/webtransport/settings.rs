@@ -1,76 +1,38 @@
 //! WebTransport SETTINGS (draft-ietf-webtrans-http3-15 Section 9.2)
 //!
-//! HTTP/3 SETTINGS パラメータの WebTransport 拡張を定義。
+//! HTTP/3 SETTINGS パラメータの WebTransport 拡張を定義する。
+//!
+//! ID 別の wire 構造とブール値の検査は [`crate::settings::Setting`] が一手に
+//! 担うため、本モジュールは「WebTransport 固有フィールドの型付きコレクション」
+//! と「`Setting` から本構造体への流し込み」のみを提供する。
 
 use super::connect::DraftVersion;
+use crate::settings::Setting;
+use crate::varint::VarInt;
 
-/// WebTransport SETTINGS パラメータ ID
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u64)]
-pub enum SettingsId {
-    /// WebTransport 有効化 (SETTINGS_WT_ENABLED)
-    /// draft-ietf-webtrans-http3-15 Section 3.1, Section 9.2
-    /// 将来のドラフトで変更される可能性がある
-    WtEnabled = 0x2c7cf000,
-    /// 初期単方向ストリーム上限 (SETTINGS_WT_INITIAL_MAX_STREAMS_UNI)
-    WtInitialMaxStreamsUni = 0x2b64,
-    /// 初期双方向ストリーム上限 (SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI)
-    WtInitialMaxStreamsBidi = 0x2b65,
-    /// 初期データ上限 (SETTINGS_WT_INITIAL_MAX_DATA)
-    WtInitialMaxData = 0x2b61,
-    /// WebTransport 有効化 (draft-02)
-    EnableWebTransportDraft02 = 0x2b603742,
-    /// WebTransport 最大セッション数 (draft-07)
-    WebTransportMaxSessionsDraft07 = 0xc671706a,
-    /// WebTransport 最大セッション数 (draft-14)
-    /// draft-14 Section 9.2
-    WtMaxSessionsDraft14 = 0x14e9cd29,
-}
-
-impl SettingsId {
-    /// ID から `SettingsId` を作成
-    pub fn from_id(id: u64) -> Option<Self> {
-        match id {
-            0x2c7cf000 => Some(Self::WtEnabled),
-            0x2b64 => Some(Self::WtInitialMaxStreamsUni),
-            0x2b65 => Some(Self::WtInitialMaxStreamsBidi),
-            0x2b61 => Some(Self::WtInitialMaxData),
-            0x2b603742 => Some(Self::EnableWebTransportDraft02),
-            0xc671706a => Some(Self::WebTransportMaxSessionsDraft07),
-            0x14e9cd29 => Some(Self::WtMaxSessionsDraft14),
-            _ => None,
-        }
-    }
-
-    /// WebTransport 関連の設定 ID かどうか
-    pub fn is_webtransport(id: u64) -> bool {
-        matches!(
-            id,
-            0x2c7cf000 | 0x2b64 | 0x2b65 | 0x2b61 | 0x2b603742 | 0xc671706a | 0x14e9cd29
-        )
-    }
-}
-
-/// WebTransport 設定
+/// WebTransport 設定 (型付きフィールドのコレクション)
+///
+/// draft-ietf-webtrans-http3-02 / -07 / -14 / -15。
+/// 将来のドラフトで変更される可能性がある。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     /// WebTransport 有効化 (デフォルト: 0 = WebTransport 無効, 0 より大きければ有効)
     /// draft-ietf-webtrans-http3-15 Section 3.1, Section 9.2
     /// 将来のドラフトで変更される可能性がある
-    pub wt_enabled: u64,
+    pub wt_enabled: VarInt,
     /// 初期単方向ストリーム上限 (デフォルト: 0)
-    pub wt_initial_max_streams_uni: u64,
+    pub wt_initial_max_streams_uni: VarInt,
     /// 初期双方向ストリーム上限 (デフォルト: 0)
-    pub wt_initial_max_streams_bidi: u64,
+    pub wt_initial_max_streams_bidi: VarInt,
     /// 初期データ上限 (デフォルト: 0)
-    pub wt_initial_max_data: u64,
+    pub wt_initial_max_data: VarInt,
     /// WebTransport 有効化 (draft-02)
     pub enable_webtransport_draft02: Option<bool>,
     /// WebTransport 最大セッション数 (draft-07)
-    pub webtransport_max_sessions_draft07: Option<u64>,
+    pub webtransport_max_sessions_draft07: Option<VarInt>,
     /// WebTransport 最大セッション数 (draft-14)
     /// draft-14 Section 9.2
-    pub wt_max_sessions_draft14: Option<u64>,
+    pub wt_max_sessions_draft14: Option<VarInt>,
 }
 
 impl Default for Settings {
@@ -83,10 +45,10 @@ impl Settings {
     /// 新しい Settings を作成 (すべてデフォルト値)
     pub const fn new() -> Self {
         Self {
-            wt_enabled: 0,
-            wt_initial_max_streams_uni: 0,
-            wt_initial_max_streams_bidi: 0,
-            wt_initial_max_data: 0,
+            wt_enabled: VarInt::ZERO,
+            wt_initial_max_streams_uni: VarInt::ZERO,
+            wt_initial_max_streams_bidi: VarInt::ZERO,
+            wt_initial_max_data: VarInt::ZERO,
             enable_webtransport_draft02: None,
             webtransport_max_sessions_draft07: None,
             wt_max_sessions_draft14: None,
@@ -96,25 +58,25 @@ impl Settings {
     /// WebTransport 有効化を設定
     /// draft-ietf-webtrans-http3-15 Section 3.1, Section 9.2
     /// 将来のドラフトで変更される可能性がある
-    pub fn wt_enabled(mut self, value: u64) -> Self {
+    pub fn wt_enabled(mut self, value: VarInt) -> Self {
         self.wt_enabled = value;
         self
     }
 
     /// 初期単方向ストリーム上限を設定
-    pub fn wt_initial_max_streams_uni(mut self, max_streams: u64) -> Self {
+    pub fn wt_initial_max_streams_uni(mut self, max_streams: VarInt) -> Self {
         self.wt_initial_max_streams_uni = max_streams;
         self
     }
 
     /// 初期双方向ストリーム上限を設定
-    pub fn wt_initial_max_streams_bidi(mut self, max_streams: u64) -> Self {
+    pub fn wt_initial_max_streams_bidi(mut self, max_streams: VarInt) -> Self {
         self.wt_initial_max_streams_bidi = max_streams;
         self
     }
 
     /// 初期データ上限を設定
-    pub fn wt_initial_max_data(mut self, max_data: u64) -> Self {
+    pub fn wt_initial_max_data(mut self, max_data: VarInt) -> Self {
         self.wt_initial_max_data = max_data;
         self
     }
@@ -126,16 +88,80 @@ impl Settings {
     }
 
     /// WebTransport 最大セッション数 (draft-07) を設定
-    pub fn webtransport_max_sessions_draft07(mut self, max_sessions: u64) -> Self {
+    pub fn webtransport_max_sessions_draft07(mut self, max_sessions: VarInt) -> Self {
         self.webtransport_max_sessions_draft07 = Some(max_sessions);
         self
     }
 
     /// WebTransport 最大セッション数 (draft-14) を設定
     /// draft-14 Section 9.2
-    pub fn wt_max_sessions_draft14(mut self, max_sessions: u64) -> Self {
+    pub fn wt_max_sessions_draft14(mut self, max_sessions: VarInt) -> Self {
         self.wt_max_sessions_draft14 = Some(max_sessions);
         self
+    }
+
+    /// `Setting` のスライスから WebTransport 関連設定だけを取り出して構築する
+    ///
+    /// WebTransport 関連の variant が 1 つも含まれない場合は `None` を返す。
+    ///
+    /// 呼び出し側は [`crate::frame::SettingsPayload::add`] を経由して構築された
+    /// スライス (ID 重複なし) を渡す前提で、本関数は重複検査をしない。直接
+    /// `&[Setting]` を渡す内部呼び出しで万一同一 variant が複数現れた場合は
+    /// debug ビルドで panic させ、release ビルドは最後の値で上書きする
+    /// (本関数の不変条件破壊を `debug_assert!` で検出する)。
+    pub(crate) fn from_payload(settings: &[Setting]) -> Option<Self> {
+        let mut wt = Self::new();
+        let mut found = false;
+        let mut seen_wt_ids = std::collections::HashSet::new();
+        for setting in settings {
+            // 同一 WT variant の重複は呼び出し側 (`SettingsPayload::add`) が
+            // 弾いている前提だが、本関数の不変条件を debug ビルドで検証する。
+            match *setting {
+                Setting::WtEnabled(v) => {
+                    debug_assert!(seen_wt_ids.insert(setting.id()));
+                    wt.wt_enabled = v;
+                    found = true;
+                }
+                Setting::WtInitialMaxStreamsUni(v) => {
+                    debug_assert!(seen_wt_ids.insert(setting.id()));
+                    wt.wt_initial_max_streams_uni = v;
+                    found = true;
+                }
+                Setting::WtInitialMaxStreamsBidi(v) => {
+                    debug_assert!(seen_wt_ids.insert(setting.id()));
+                    wt.wt_initial_max_streams_bidi = v;
+                    found = true;
+                }
+                Setting::WtInitialMaxData(v) => {
+                    debug_assert!(seen_wt_ids.insert(setting.id()));
+                    wt.wt_initial_max_data = v;
+                    found = true;
+                }
+                Setting::EnableWebTransportDraft02(b) => {
+                    debug_assert!(seen_wt_ids.insert(setting.id()));
+                    wt.enable_webtransport_draft02 = Some(b);
+                    found = true;
+                }
+                Setting::WebTransportMaxSessionsDraft07(v) => {
+                    debug_assert!(seen_wt_ids.insert(setting.id()));
+                    wt.webtransport_max_sessions_draft07 = Some(v);
+                    found = true;
+                }
+                Setting::WtMaxSessionsDraft14(v) => {
+                    debug_assert!(seen_wt_ids.insert(setting.id()));
+                    wt.wt_max_sessions_draft14 = Some(v);
+                    found = true;
+                }
+                // 非 WebTransport variant および Unknown は無視
+                Setting::QpackMaxTableCapacity(_)
+                | Setting::MaxFieldSectionSize(_)
+                | Setting::QpackBlockedStreams(_)
+                | Setting::EnableConnectProtocol(_)
+                | Setting::H3Datagram(_)
+                | Setting::Unknown(_) => {}
+            }
+        }
+        found.then_some(wt)
     }
 
     /// SETTINGS からドラフトバージョンを検出する
@@ -161,16 +187,16 @@ impl Settings {
     /// draft-ietf-webtrans-http3-02 / -07 / -14 / -15
     /// 将来のドラフトで変更される可能性がある
     pub fn detect_draft_pattern(&self) -> Option<DraftVersion> {
-        if self.wt_enabled > 0 {
+        if self.wt_enabled.get() > 0 {
             return Some(DraftVersion::Draft15);
         }
         if self
             .webtransport_max_sessions_draft07
-            .is_some_and(|v| v > 0)
+            .is_some_and(|v| v.get() > 0)
         {
             return Some(DraftVersion::Draft07);
         }
-        if self.wt_max_sessions_draft14.is_some_and(|v| v > 0) {
+        if self.wt_max_sessions_draft14.is_some_and(|v| v.get() > 0) {
             return Some(DraftVersion::Draft14);
         }
         if self.enable_webtransport_draft02 == Some(true) {
@@ -184,12 +210,12 @@ impl Settings {
     /// draft-02/07/14/15 のいずれかで有効になっていれば true。
     /// 将来のドラフトで変更される可能性がある
     pub fn is_enabled(&self) -> bool {
-        self.wt_enabled > 0
+        self.wt_enabled.get() > 0
             || self.enable_webtransport_draft02 == Some(true)
             || self
                 .webtransport_max_sessions_draft07
-                .is_some_and(|v| v > 0)
-            || self.wt_max_sessions_draft14.is_some_and(|v| v > 0)
+                .is_some_and(|v| v.get() > 0)
+            || self.wt_max_sessions_draft14.is_some_and(|v| v.get() > 0)
     }
 
     /// フロー制御が有効かどうか
@@ -203,17 +229,10 @@ impl Settings {
     /// draft-ietf-webtrans-http3-14 Section 5.1, draft-ietf-webtrans-http3-15 Section 5.1
     /// 将来のドラフトで変更される可能性がある
     pub fn declares_flow_control(&self) -> bool {
-        self.wt_max_sessions_draft14.is_some_and(|v| v > 1)
-            || self.wt_initial_max_streams_uni != 0
-            || self.wt_initial_max_streams_bidi != 0
-            || self.wt_initial_max_data != 0
-    }
-
-    /// フロー制御を有効として扱うかどうか
-    ///
-    /// 互換性のためにローカル宣言判定を返す。
-    pub fn flow_control_enabled(&self) -> bool {
-        self.declares_flow_control()
+        self.wt_max_sessions_draft14.is_some_and(|v| v.get() > 1)
+            || self.wt_initial_max_streams_uni.get() != 0
+            || self.wt_initial_max_streams_bidi.get() != 0
+            || self.wt_initial_max_data.get() != 0
     }
 
     /// ピアとのネゴシエーション結果としてフロー制御が有効かどうか
@@ -241,104 +260,34 @@ impl Settings {
         match self.detect_draft_pattern() {
             Some(DraftVersion::Draft14) => true,
             Some(DraftVersion::Draft07) => {
-                self.wt_initial_max_streams_uni != 0
-                    || self.wt_initial_max_streams_bidi != 0
-                    || self.wt_initial_max_data != 0
+                self.wt_initial_max_streams_uni.get() != 0
+                    || self.wt_initial_max_streams_bidi.get() != 0
+                    || self.wt_initial_max_data.get() != 0
             }
             _ => false,
         }
     }
 
-    /// 複数セッションの同時使用が許可されるかどうか
-    ///
-    /// フロー制御が有効でない場合、エンドポイントは同時に 1 セッションのみ使用可能 (MUST NOT)。
-    /// draft-ietf-webtrans-http3-15 Section 5.2
-    /// 将来のドラフトで変更される可能性がある
-    pub fn allows_multiple_sessions_with_peer(&self, peer: &Self) -> bool {
-        self.flow_control_enabled_with_peer(peer)
-    }
-
-    /// SettingsPayload から WebTransport Settings を作成
-    ///
-    /// WebTransport 関連の設定 ID のみをパースする。
-    /// 1 つも WebTransport 関連 ID が含まれない場合は None を返す。
-    ///
-    /// `SETTINGS_ENABLE_WEBTRANSPORT_DRAFT02` (0x2b603742) はブール設定であり、
-    /// 値が 0 または 1 以外の場合は `H3_SETTINGS_ERROR` を返す。
-    /// draft-ietf-webtrans-http3-02 由来。将来変更される可能性がある。
-    pub fn from_payload(
-        payload: &crate::frame::SettingsPayload,
-    ) -> Result<Option<Self>, crate::error::Error> {
-        let mut settings = Self::new();
-        let mut found = false;
-        for (id, value) in &payload.entries {
-            match *id {
-                0x2c7cf000 => {
-                    settings.wt_enabled = *value;
-                    found = true;
-                }
-                0x2b64 => {
-                    settings.wt_initial_max_streams_uni = *value;
-                    found = true;
-                }
-                0x2b65 => {
-                    settings.wt_initial_max_streams_bidi = *value;
-                    found = true;
-                }
-                0x2b61 => {
-                    settings.wt_initial_max_data = *value;
-                    found = true;
-                }
-                // SETTINGS_ENABLE_WEBTRANSPORT_DRAFT02: ブール設定
-                // 値は 0 または 1 のみ
-                // (draft-ietf-webtrans-http3-02 由来、将来変更される可能性がある)
-                0x2b603742 => {
-                    if *value > 1 {
-                        return Err(crate::error::Error::ConnectionError(
-                            crate::error::ErrorCode::SettingsError,
-                        ));
-                    }
-                    settings.enable_webtransport_draft02 = Some(*value == 1);
-                    found = true;
-                }
-                0xc671706a => {
-                    settings.webtransport_max_sessions_draft07 = Some(*value);
-                    found = true;
-                }
-                0x14e9cd29 => {
-                    settings.wt_max_sessions_draft14 = Some(*value);
-                    found = true;
-                }
-                _ => {} // H3 設定や不明な ID は無視
-            }
-        }
-        Ok(found.then_some(settings))
-    }
-
     /// 設定エントリのイテレータを返す
     ///
-    /// 0 以外の値を持つ設定のみを返す。
-    pub fn iter(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+    /// 値が 0 / `None` の WebTransport 設定はエントリに含めない。
+    pub fn iter(&self) -> impl Iterator<Item = Setting> + '_ {
         let entries = [
-            (self.wt_enabled > 0).then_some((SettingsId::WtEnabled as u64, self.wt_enabled)),
-            (self.wt_initial_max_streams_uni > 0).then_some((
-                SettingsId::WtInitialMaxStreamsUni as u64,
-                self.wt_initial_max_streams_uni,
-            )),
-            (self.wt_initial_max_streams_bidi > 0).then_some((
-                SettingsId::WtInitialMaxStreamsBidi as u64,
-                self.wt_initial_max_streams_bidi,
-            )),
-            (self.wt_initial_max_data > 0).then_some((
-                SettingsId::WtInitialMaxData as u64,
-                self.wt_initial_max_data,
-            )),
+            (self.wt_enabled != VarInt::ZERO).then_some(Setting::WtEnabled(self.wt_enabled)),
+            (self.wt_initial_max_streams_uni != VarInt::ZERO).then_some(
+                Setting::WtInitialMaxStreamsUni(self.wt_initial_max_streams_uni),
+            ),
+            (self.wt_initial_max_streams_bidi != VarInt::ZERO).then_some(
+                Setting::WtInitialMaxStreamsBidi(self.wt_initial_max_streams_bidi),
+            ),
+            (self.wt_initial_max_data != VarInt::ZERO)
+                .then_some(Setting::WtInitialMaxData(self.wt_initial_max_data)),
             self.enable_webtransport_draft02
-                .map(|v| (SettingsId::EnableWebTransportDraft02 as u64, u64::from(v))),
+                .map(Setting::EnableWebTransportDraft02),
             self.webtransport_max_sessions_draft07
-                .map(|v| (SettingsId::WebTransportMaxSessionsDraft07 as u64, v)),
+                .map(Setting::WebTransportMaxSessionsDraft07),
             self.wt_max_sessions_draft14
-                .map(|v| (SettingsId::WtMaxSessionsDraft14 as u64, v)),
+                .map(Setting::WtMaxSessionsDraft14),
         ];
         entries.into_iter().flatten()
     }
@@ -348,77 +297,43 @@ impl Settings {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_settings_id_from_id() {
-        assert_eq!(SettingsId::from_id(0x2c7cf000), Some(SettingsId::WtEnabled));
-        assert_eq!(
-            SettingsId::from_id(0x2b64),
-            Some(SettingsId::WtInitialMaxStreamsUni)
-        );
-        assert_eq!(
-            SettingsId::from_id(0x2b65),
-            Some(SettingsId::WtInitialMaxStreamsBidi)
-        );
-        assert_eq!(
-            SettingsId::from_id(0x2b61),
-            Some(SettingsId::WtInitialMaxData)
-        );
-        assert_eq!(
-            SettingsId::from_id(0x2b603742),
-            Some(SettingsId::EnableWebTransportDraft02)
-        );
-        assert_eq!(
-            SettingsId::from_id(0xc671706a),
-            Some(SettingsId::WebTransportMaxSessionsDraft07)
-        );
-        assert_eq!(SettingsId::from_id(0x99), None);
-    }
-
-    #[test]
-    fn test_settings_id_is_webtransport() {
-        assert!(SettingsId::is_webtransport(0x2c7cf000));
-        assert!(SettingsId::is_webtransport(0x2b64));
-        assert!(SettingsId::is_webtransport(0x2b65));
-        assert!(SettingsId::is_webtransport(0x2b61));
-        assert!(SettingsId::is_webtransport(0x2b603742));
-        assert!(SettingsId::is_webtransport(0xc671706a));
-        assert!(!SettingsId::is_webtransport(0x01));
-        assert!(!SettingsId::is_webtransport(0x99));
+    fn v(n: u64) -> VarInt {
+        VarInt::new(n).unwrap()
     }
 
     #[test]
     fn test_settings_default() {
         let settings = Settings::default();
-        assert_eq!(settings.wt_enabled, 0);
+        assert_eq!(settings.wt_enabled, VarInt::ZERO);
         assert!(!settings.is_enabled());
-        assert!(!settings.flow_control_enabled());
+        assert!(!settings.declares_flow_control());
     }
 
     #[test]
     fn test_settings_builder() {
         let settings = Settings::new()
-            .wt_enabled(1)
-            .wt_initial_max_streams_uni(100)
-            .wt_initial_max_streams_bidi(50)
-            .wt_initial_max_data(1024 * 1024);
+            .wt_enabled(v(1))
+            .wt_initial_max_streams_uni(v(100))
+            .wt_initial_max_streams_bidi(v(50))
+            .wt_initial_max_data(v(1024 * 1024));
 
-        assert_eq!(settings.wt_enabled, 1);
-        assert_eq!(settings.wt_initial_max_streams_uni, 100);
-        assert_eq!(settings.wt_initial_max_streams_bidi, 50);
-        assert_eq!(settings.wt_initial_max_data, 1024 * 1024);
+        assert_eq!(settings.wt_enabled, v(1));
+        assert_eq!(settings.wt_initial_max_streams_uni, v(100));
+        assert_eq!(settings.wt_initial_max_streams_bidi, v(50));
+        assert_eq!(settings.wt_initial_max_data, v(1024 * 1024));
         assert!(settings.is_enabled());
-        assert!(settings.flow_control_enabled());
+        assert!(settings.declares_flow_control());
     }
 
     #[test]
     fn test_settings_draft02_07() {
         let settings = Settings::new()
             .enable_webtransport_draft02(true)
-            .webtransport_max_sessions_draft07(5);
+            .webtransport_max_sessions_draft07(v(5));
 
         assert!(settings.is_enabled());
         assert_eq!(settings.enable_webtransport_draft02, Some(true));
-        assert_eq!(settings.webtransport_max_sessions_draft07, Some(5));
+        assert_eq!(settings.webtransport_max_sessions_draft07, Some(v(5)));
     }
 
     #[test]
@@ -432,109 +347,122 @@ mod tests {
 
     #[test]
     fn test_is_enabled_draft07() {
-        let settings = Settings::new().webtransport_max_sessions_draft07(1);
+        let settings = Settings::new().webtransport_max_sessions_draft07(v(1));
         assert!(settings.is_enabled());
 
-        let settings = Settings::new().webtransport_max_sessions_draft07(0);
+        let settings = Settings::new().webtransport_max_sessions_draft07(v(0));
         assert!(!settings.is_enabled());
     }
 
     #[test]
     fn test_flow_control_enabled() {
         // wt_enabled のみではフロー制御無効 (draft-15: INITIAL_MAX_* が必要)
-        let settings = Settings::new().wt_enabled(1);
-        assert!(!settings.flow_control_enabled());
+        let settings = Settings::new().wt_enabled(v(1));
+        assert!(!settings.declares_flow_control());
 
-        let settings = Settings::new().wt_enabled(2);
-        assert!(!settings.flow_control_enabled());
+        let settings = Settings::new().wt_enabled(v(2));
+        assert!(!settings.declares_flow_control());
 
         // INITIAL_MAX_* が非ゼロならフロー制御有効
-        let settings = Settings::new().wt_enabled(1).wt_initial_max_streams_uni(10);
-        assert!(settings.flow_control_enabled());
+        let settings = Settings::new()
+            .wt_enabled(v(1))
+            .wt_initial_max_streams_uni(v(10));
+        assert!(settings.declares_flow_control());
 
-        let settings = Settings::new().wt_enabled(1).wt_initial_max_streams_bidi(5);
-        assert!(settings.flow_control_enabled());
+        let settings = Settings::new()
+            .wt_enabled(v(1))
+            .wt_initial_max_streams_bidi(v(5));
+        assert!(settings.declares_flow_control());
 
-        let settings = Settings::new().wt_enabled(1).wt_initial_max_data(1024);
-        assert!(settings.flow_control_enabled());
+        let settings = Settings::new()
+            .wt_enabled(v(1))
+            .wt_initial_max_data(v(1024));
+        assert!(settings.declares_flow_control());
     }
 
     #[test]
     fn test_flow_control_enabled_with_peer() {
-        let local = Settings::new().wt_initial_max_streams_uni(10);
-        let peer = Settings::new().wt_enabled(1);
+        let local = Settings::new().wt_initial_max_streams_uni(v(10));
+        let peer = Settings::new().wt_enabled(v(1));
         assert!(!local.flow_control_enabled_with_peer(&peer));
 
-        let peer = Settings::new().wt_initial_max_data(1);
+        let peer = Settings::new().wt_initial_max_data(v(1));
         assert!(local.flow_control_enabled_with_peer(&peer));
     }
 
     #[test]
     fn test_settings_iter() {
-        let settings = Settings::new().wt_enabled(1).wt_initial_max_data(4096);
+        let settings = Settings::new()
+            .wt_enabled(v(1))
+            .wt_initial_max_data(v(4096));
 
         let entries: Vec<_> = settings.iter().collect();
         assert_eq!(entries.len(), 2);
-        assert!(entries.contains(&(0x2c7cf000, 1)));
-        assert!(entries.contains(&(0x2b61, 4096)));
+        assert!(entries.contains(&Setting::WtEnabled(v(1))));
+        assert!(entries.contains(&Setting::WtInitialMaxData(v(4096))));
     }
 
     #[test]
     fn test_settings_iter_with_draft02_07() {
         let settings = Settings::new()
-            .wt_enabled(1)
+            .wt_enabled(v(1))
             .enable_webtransport_draft02(true)
-            .webtransport_max_sessions_draft07(3);
+            .webtransport_max_sessions_draft07(v(3));
 
         let entries: Vec<_> = settings.iter().collect();
         assert_eq!(entries.len(), 3);
-        assert!(entries.contains(&(0x2c7cf000, 1)));
-        assert!(entries.contains(&(0x2b603742, 1)));
-        assert!(entries.contains(&(0xc671706a, 3)));
+        assert!(entries.contains(&Setting::WtEnabled(v(1))));
+        assert!(entries.contains(&Setting::EnableWebTransportDraft02(true)));
+        assert!(entries.contains(&Setting::WebTransportMaxSessionsDraft07(v(3))));
     }
 
     #[test]
-    fn test_from_payload() {
-        let mut payload = crate::frame::SettingsPayload::new();
-        payload.add(0x2c7cf000, 1);
-        payload.add(0x2b64, 100);
-        payload.add(0x2b65, 50);
-        payload.add(0x2b61, 1048576);
-        payload.add(0x2b603742, 1);
-        payload.add(0xc671706a, 3);
-
-        let settings = Settings::from_payload(&payload).unwrap().unwrap();
-        assert_eq!(settings.wt_enabled, 1);
-        assert_eq!(settings.wt_initial_max_streams_uni, 100);
-        assert_eq!(settings.wt_initial_max_streams_bidi, 50);
-        assert_eq!(settings.wt_initial_max_data, 1048576);
-        assert_eq!(settings.enable_webtransport_draft02, Some(true));
-        assert_eq!(settings.webtransport_max_sessions_draft07, Some(3));
+    fn test_from_payload_wt_setting() {
+        // WebTransport variant のみ反映され、非 WT / Unknown は無視されることを検証
+        let unknown = Setting::from_wire(v(0xdead), v(1)).unwrap();
+        let entries = [
+            Setting::WtEnabled(v(1)),
+            Setting::WtInitialMaxStreamsUni(v(100)),
+            Setting::WtInitialMaxStreamsBidi(v(50)),
+            Setting::WtInitialMaxData(v(1024)),
+            Setting::EnableWebTransportDraft02(true),
+            Setting::WebTransportMaxSessionsDraft07(v(3)),
+            Setting::WtMaxSessionsDraft14(v(2)),
+            Setting::H3Datagram(true), // 非 WT、無視される
+            unknown,                   // Unknown、無視される
+        ];
+        let wt = Settings::from_payload(&entries).unwrap();
+        assert_eq!(wt.wt_enabled, v(1));
+        assert_eq!(wt.wt_initial_max_streams_uni, v(100));
+        assert_eq!(wt.wt_initial_max_streams_bidi, v(50));
+        assert_eq!(wt.wt_initial_max_data, v(1024));
+        assert_eq!(wt.enable_webtransport_draft02, Some(true));
+        assert_eq!(wt.webtransport_max_sessions_draft07, Some(v(3)));
+        assert_eq!(wt.wt_max_sessions_draft14, Some(v(2)));
     }
 
     #[test]
-    fn test_from_payload_none_when_no_wt_entries() {
-        let mut payload = crate::frame::SettingsPayload::new();
-        payload.add(0x01, 4096); // QPACK_MAX_TABLE_CAPACITY (H3 設定)
-
-        assert!(Settings::from_payload(&payload).unwrap().is_none());
+    fn test_from_payload_returns_none_without_wt_entries() {
+        // WT variant が 1 つも含まれない場合は None
+        let entries = [Setting::H3Datagram(true)];
+        assert!(Settings::from_payload(&entries).is_none());
     }
 
     #[test]
     fn test_detect_draft_pattern_draft15() {
-        let settings = Settings::new().wt_enabled(1);
+        let settings = Settings::new().wt_enabled(v(1));
         assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft15));
     }
 
     #[test]
     fn test_detect_draft_pattern_draft14() {
-        let settings = Settings::new().wt_max_sessions_draft14(1);
+        let settings = Settings::new().wt_max_sessions_draft14(v(1));
         assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft14));
     }
 
     #[test]
     fn test_detect_draft_pattern_draft07() {
-        let settings = Settings::new().webtransport_max_sessions_draft07(1);
+        let settings = Settings::new().webtransport_max_sessions_draft07(v(1));
         assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft07));
     }
 
@@ -554,7 +482,7 @@ mod tests {
         assert_eq!(settings.detect_draft_pattern(), None);
 
         // draft-14 が 0 の場合も None
-        let settings = Settings::new().wt_max_sessions_draft14(0);
+        let settings = Settings::new().wt_max_sessions_draft14(v(0));
         assert_eq!(settings.detect_draft_pattern(), None);
     }
 
@@ -563,15 +491,15 @@ mod tests {
         // draft-07 と draft-14 を両方送る場合は SETTINGS ネゴシエーションとしては
         // draft-07 を優先する (Safari が draft-14 固有の応答 SETTINGS を拒否するため)
         let settings = Settings::new()
-            .webtransport_max_sessions_draft07(1)
-            .wt_max_sessions_draft14(1);
+            .webtransport_max_sessions_draft07(v(1))
+            .wt_max_sessions_draft14(v(1));
         assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft07));
 
         // draft-15 が最優先
         let settings = Settings::new()
-            .wt_enabled(1)
-            .wt_max_sessions_draft14(1)
-            .webtransport_max_sessions_draft07(1);
+            .wt_enabled(v(1))
+            .wt_max_sessions_draft14(v(1))
+            .webtransport_max_sessions_draft07(v(1));
         assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft15));
     }
 
@@ -582,10 +510,10 @@ mod tests {
         // - draft-15 系 ID の SETTINGS_WT_INITIAL_MAX_*
         // draft 自体は draft-07 として扱う。
         let settings = Settings::new()
-            .webtransport_max_sessions_draft07(1)
-            .wt_initial_max_data(8388608)
-            .wt_initial_max_streams_uni(100)
-            .wt_initial_max_streams_bidi(100);
+            .webtransport_max_sessions_draft07(v(1))
+            .wt_initial_max_data(v(8_388_608))
+            .wt_initial_max_streams_uni(v(100))
+            .wt_initial_max_streams_bidi(v(100));
         assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft07));
     }
 
@@ -596,47 +524,47 @@ mod tests {
         // SETTINGS ネゴシエーションとしては draft-07 を優先する。
         // draft-14 固有のカプセルベースフロー制御はセッション確立後に別途扱う。
         let settings = Settings::new()
-            .webtransport_max_sessions_draft07(1)
-            .wt_max_sessions_draft14(1)
-            .wt_initial_max_data(8388608)
-            .wt_initial_max_streams_uni(100)
-            .wt_initial_max_streams_bidi(100);
+            .webtransport_max_sessions_draft07(v(1))
+            .wt_max_sessions_draft14(v(1))
+            .wt_initial_max_data(v(8_388_608))
+            .wt_initial_max_streams_uni(v(100))
+            .wt_initial_max_streams_bidi(v(100));
         assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft07));
     }
 
     #[test]
     fn test_declares_flow_control_draft14_max_sessions() {
         // draft-14: WT_MAX_SESSIONS > 1 でフロー制御宣言
-        let settings = Settings::new().wt_max_sessions_draft14(2);
+        let settings = Settings::new().wt_max_sessions_draft14(v(2));
         assert!(settings.declares_flow_control());
 
         // WT_MAX_SESSIONS = 1 ではフロー制御宣言にならない
-        let settings = Settings::new().wt_max_sessions_draft14(1);
+        let settings = Settings::new().wt_max_sessions_draft14(v(1));
         assert!(!settings.declares_flow_control());
     }
 
     #[test]
     fn test_requires_initial_capsule_flow_control_compat_safari_observed() {
         let settings = Settings::new()
-            .webtransport_max_sessions_draft07(1)
-            .wt_initial_max_streams_uni(100)
-            .wt_initial_max_streams_bidi(100)
-            .wt_initial_max_data(8 * 1024 * 1024);
+            .webtransport_max_sessions_draft07(v(1))
+            .wt_initial_max_streams_uni(v(100))
+            .wt_initial_max_streams_bidi(v(100))
+            .wt_initial_max_data(v(8 * 1024 * 1024));
         assert!(settings.requires_initial_capsule_flow_control_compat());
     }
 
     #[test]
     fn test_requires_initial_capsule_flow_control_compat_draft07_plain() {
-        let settings = Settings::new().webtransport_max_sessions_draft07(1);
+        let settings = Settings::new().webtransport_max_sessions_draft07(v(1));
         assert!(!settings.requires_initial_capsule_flow_control_compat());
     }
 
     #[test]
     fn test_is_enabled_draft14() {
-        let settings = Settings::new().wt_max_sessions_draft14(1);
+        let settings = Settings::new().wt_max_sessions_draft14(v(1));
         assert!(settings.is_enabled());
 
-        let settings = Settings::new().wt_max_sessions_draft14(0);
+        let settings = Settings::new().wt_max_sessions_draft14(v(0));
         assert!(!settings.is_enabled());
     }
 }

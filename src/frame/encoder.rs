@@ -58,11 +58,16 @@ fn encoded_varint_len(value: u64) -> Option<usize> {
 }
 
 /// SETTINGS ペイロードのエンコード長を計算
+///
+/// 各 [`Setting`](crate::settings::Setting) の wire 表現が VarInt 範囲内である
+/// ことは構築時に保証されているため、本関数はバッファサイズの合算のみを行う。
+/// 内部総和の `usize` オーバーフローのみ `None` で返す。
 fn encoded_settings_payload_len(payload: &SettingsPayload) -> Option<u64> {
     let mut total: usize = 0;
-    for (id, value) in &payload.entries {
-        total = total.checked_add(encoded_varint_len(*id)?)?;
-        total = total.checked_add(encoded_varint_len(*value)?)?;
+    for setting in payload.settings() {
+        let (id, value) = setting.as_wire();
+        total = total.checked_add(id.encoded_len())?;
+        total = total.checked_add(value.encoded_len())?;
     }
     Some(total as u64)
 }
@@ -120,9 +125,8 @@ fn encode_settings_frame(buf: &mut [u8], payload: &SettingsPayload) -> Option<us
 
     let mut offset = encode_frame_header(buf, frame_type, payload_len)?;
 
-    for (id, value) in &payload.entries {
-        let id = VarInt::new(*id).ok()?;
-        let value = VarInt::new(*value).ok()?;
+    for setting in payload.settings() {
+        let (id, value) = setting.as_wire();
         offset += varint::encode(&mut buf[offset..], id).ok()?;
         offset += varint::encode(&mut buf[offset..], value).ok()?;
     }

@@ -3,9 +3,10 @@
 use proptest::prelude::*;
 use shiguredo_http3::webtransport::{
     ApplicationErrorCode, Capsule, ConnectRequest, ConnectResponse, Datagram, Error, ErrorCode,
-    FlowControlLimits, MAX_STREAMS_LIMIT, Session, SessionState, Settings, SettingsId, Stream,
-    StreamHeader, stream_type,
+    FlowControlLimits, MAX_STREAMS_LIMIT, Session, SessionState, Settings, Stream, StreamHeader,
+    stream_type,
 };
+use shiguredo_http3::{Setting, VarInt};
 
 // =============================================================================
 // Capsule Properties
@@ -819,8 +820,8 @@ proptest! {
     /// Property: wt_enabled のみではフロー制御無効 (draft-15)
     #[test]
     fn prop_settings_flow_control_wt_enabled_only(wt_enabled in 1u64..100) {
-        let settings = Settings::new().wt_enabled(wt_enabled);
-        prop_assert!(!settings.flow_control_enabled());
+        let settings = Settings::new().wt_enabled(VarInt::new(wt_enabled).unwrap());
+        prop_assert!(!settings.declares_flow_control());
     }
 
     /// Property: INITIAL_MAX_* が 0 以外ならフロー制御有効 (draft-15)
@@ -830,23 +831,24 @@ proptest! {
         max_streams_bidi in 1u64..100,
         max_data in 1u64..100000,
     ) {
+        let v = |x: u64| VarInt::new(x).unwrap();
         // max_streams_uni != 0
         let settings = Settings::new()
-            .wt_enabled(1)
-            .wt_initial_max_streams_uni(max_streams_uni);
-        prop_assert!(settings.flow_control_enabled());
+            .wt_enabled(VarInt::from_static(1))
+            .wt_initial_max_streams_uni(v(max_streams_uni));
+        prop_assert!(settings.declares_flow_control());
 
         // max_streams_bidi != 0
         let settings = Settings::new()
-            .wt_enabled(1)
-            .wt_initial_max_streams_bidi(max_streams_bidi);
-        prop_assert!(settings.flow_control_enabled());
+            .wt_enabled(VarInt::from_static(1))
+            .wt_initial_max_streams_bidi(v(max_streams_bidi));
+        prop_assert!(settings.declares_flow_control());
 
         // max_data != 0
         let settings = Settings::new()
-            .wt_enabled(1)
-            .wt_initial_max_data(max_data);
-        prop_assert!(settings.flow_control_enabled());
+            .wt_enabled(VarInt::from_static(1))
+            .wt_initial_max_data(v(max_data));
+        prop_assert!(settings.declares_flow_control());
     }
 
     /// Property: 全て 0 または wt_enabled = 0 なら無効
@@ -854,7 +856,7 @@ proptest! {
     fn prop_settings_disabled_when_zero(_dummy in Just(())) {
         let settings = Settings::new();
         prop_assert!(!settings.is_enabled());
-        prop_assert!(!settings.flow_control_enabled());
+        prop_assert!(!settings.declares_flow_control());
     }
 }
 
@@ -1476,31 +1478,33 @@ proptest! {
         max_streams_bidi in 0u64..1000,
         max_data in 0u64..100000,
     ) {
+        let v = |x: u64| VarInt::new(x).unwrap();
         let settings = Settings::new()
-            .wt_enabled(max_sessions)
-            .wt_initial_max_streams_uni(max_streams_uni)
-            .wt_initial_max_streams_bidi(max_streams_bidi)
-            .wt_initial_max_data(max_data);
+            .wt_enabled(v(max_sessions))
+            .wt_initial_max_streams_uni(v(max_streams_uni))
+            .wt_initial_max_streams_bidi(v(max_streams_bidi))
+            .wt_initial_max_data(v(max_data));
 
-        let entries: Vec<(u64, u64)> = settings.iter().collect();
+        let entries: Vec<Setting> = settings.iter().collect();
 
-        // 0 の値は含まれない
-        for &(_, v) in &entries {
-            prop_assert!(v > 0, "iter() should not include zero values");
+        // 0 の値は含まれない (`iter` は 0 をスキップする)
+        for e in &entries {
+            let (_, val) = e.as_wire();
+            prop_assert!(val.get() > 0);
         }
 
         // 0 でない値は全て含まれる
         if max_sessions > 0 {
-            prop_assert!(entries.contains(&(SettingsId::WtEnabled as u64, max_sessions)));
+            prop_assert!(entries.contains(&Setting::WtEnabled(v(max_sessions))));
         }
         if max_streams_uni > 0 {
-            prop_assert!(entries.contains(&(SettingsId::WtInitialMaxStreamsUni as u64, max_streams_uni)));
+            prop_assert!(entries.contains(&Setting::WtInitialMaxStreamsUni(v(max_streams_uni))));
         }
         if max_streams_bidi > 0 {
-            prop_assert!(entries.contains(&(SettingsId::WtInitialMaxStreamsBidi as u64, max_streams_bidi)));
+            prop_assert!(entries.contains(&Setting::WtInitialMaxStreamsBidi(v(max_streams_bidi))));
         }
         if max_data > 0 {
-            prop_assert!(entries.contains(&(SettingsId::WtInitialMaxData as u64, max_data)));
+            prop_assert!(entries.contains(&Setting::WtInitialMaxData(v(max_data))));
         }
 
         // エントリ数は 0 でないフィールド数と一致

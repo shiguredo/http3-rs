@@ -13,6 +13,7 @@
 use core::fmt;
 
 use crate::qpack::Header;
+use crate::varint::VarInt;
 
 /// `:protocol` 疑似ヘッダーの値 (draft-ietf-webtrans-http3-15 Section 3.2)
 ///
@@ -54,25 +55,27 @@ pub enum DraftVersion {
 /// `DraftVersion::build_server_settings()` および
 /// `DraftVersion::build_client_settings()` で使用する。
 /// ドラフトバージョンに応じて必要なパラメータのみが反映される。
+///
+/// 各フィールドは VarInt (RFC 9000 §16) に制約される。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServerSettingsParams {
     /// 最大セッション数 (draft-07/14 で使用)
-    pub max_sessions: u64,
+    pub max_sessions: VarInt,
     /// 初期単方向ストリーム上限 (draft-14/15 で使用)
-    pub initial_max_streams_uni: u64,
+    pub initial_max_streams_uni: VarInt,
     /// 初期双方向ストリーム上限 (draft-14/15 で使用)
-    pub initial_max_streams_bidi: u64,
+    pub initial_max_streams_bidi: VarInt,
     /// 初期データ上限 (draft-14/15 で使用)
-    pub initial_max_data: u64,
+    pub initial_max_data: VarInt,
 }
 
 impl Default for ServerSettingsParams {
     fn default() -> Self {
         Self {
-            max_sessions: 1,
-            initial_max_streams_uni: 100,
-            initial_max_streams_bidi: 100,
-            initial_max_data: 8 * 1024 * 1024,
+            max_sessions: VarInt::from_static(1),
+            initial_max_streams_uni: VarInt::from_static(100),
+            initial_max_streams_bidi: VarInt::from_static(100),
+            initial_max_data: VarInt::from_static(8 * 1024 * 1024),
         }
     }
 }
@@ -106,7 +109,7 @@ impl DraftVersion {
     ) -> super::settings::Settings {
         match self {
             Self::Draft15 => super::settings::Settings::new()
-                .wt_enabled(1)
+                .wt_enabled(VarInt::from_static(1))
                 .wt_initial_max_streams_uni(params.initial_max_streams_uni)
                 .wt_initial_max_streams_bidi(params.initial_max_streams_bidi)
                 .wt_initial_max_data(params.initial_max_data),
@@ -206,7 +209,7 @@ impl DraftVersion {
     ) -> super::settings::Settings {
         match self {
             Self::Draft15 => super::settings::Settings::new()
-                .wt_enabled(1)
+                .wt_enabled(VarInt::from_static(1))
                 .wt_initial_max_streams_uni(params.initial_max_streams_uni)
                 .wt_initial_max_streams_bidi(params.initial_max_streams_bidi)
                 .wt_initial_max_data(params.initial_max_data),
@@ -1106,17 +1109,21 @@ mod tests {
         );
     }
 
+    fn vi(value: u64) -> VarInt {
+        VarInt::new(value).unwrap()
+    }
+
     #[test]
     fn test_build_server_settings_draft15() {
         let params = ServerSettingsParams {
-            initial_max_streams_uni: 500,
-            initial_max_streams_bidi: 300,
+            initial_max_streams_uni: vi(500),
+            initial_max_streams_bidi: vi(300),
             ..Default::default()
         };
         let s = DraftVersion::Draft15.build_server_settings(&params);
-        assert_eq!(s.wt_enabled, 1);
-        assert_eq!(s.wt_initial_max_streams_uni, 500);
-        assert_eq!(s.wt_initial_max_streams_bidi, 300);
+        assert_eq!(s.wt_enabled, vi(1));
+        assert_eq!(s.wt_initial_max_streams_uni, vi(500));
+        assert_eq!(s.wt_initial_max_streams_bidi, vi(300));
         // draft-15 でも wt_initial_max_data を反映する (Section 5.5.3)
         assert_eq!(
             s.wt_initial_max_data,
@@ -1129,27 +1136,27 @@ mod tests {
     #[test]
     fn test_build_server_settings_draft14() {
         let params = ServerSettingsParams {
-            max_sessions: 100,
-            initial_max_streams_uni: 1000,
-            initial_max_streams_bidi: 1000,
-            initial_max_data: 8 * 1024 * 1024,
+            max_sessions: vi(100),
+            initial_max_streams_uni: vi(1000),
+            initial_max_streams_bidi: vi(1000),
+            initial_max_data: vi(8 * 1024 * 1024),
         };
         let s = DraftVersion::Draft14.build_server_settings(&params);
         // Safari 互換: draft-07 と draft-14 の両方の max_sessions を設定し、
         // 初期フロー制御値はカプセルで通知するため SETTINGS には含めない。
-        assert_eq!(s.wt_max_sessions_draft14, Some(100));
-        assert_eq!(s.webtransport_max_sessions_draft07, Some(100));
-        assert_eq!(s.wt_initial_max_streams_uni, 0);
-        assert_eq!(s.wt_initial_max_streams_bidi, 0);
-        assert_eq!(s.wt_initial_max_data, 0);
+        assert_eq!(s.wt_max_sessions_draft14, Some(vi(100)));
+        assert_eq!(s.webtransport_max_sessions_draft07, Some(vi(100)));
+        assert_eq!(s.wt_initial_max_streams_uni, VarInt::ZERO);
+        assert_eq!(s.wt_initial_max_streams_bidi, VarInt::ZERO);
+        assert_eq!(s.wt_initial_max_data, VarInt::ZERO);
     }
 
     #[test]
     fn test_build_server_settings_draft07() {
         let params = ServerSettingsParams::default();
         let s = DraftVersion::Draft07.build_server_settings(&params);
-        assert_eq!(s.webtransport_max_sessions_draft07, Some(1));
-        assert_eq!(s.wt_enabled, 0);
+        assert_eq!(s.webtransport_max_sessions_draft07, Some(vi(1)));
+        assert_eq!(s.wt_enabled, VarInt::ZERO);
         assert_eq!(s.wt_max_sessions_draft14, None);
         assert_eq!(s.enable_webtransport_draft02, None);
     }
@@ -1159,7 +1166,7 @@ mod tests {
         let params = ServerSettingsParams::default();
         let s = DraftVersion::Draft02.build_server_settings(&params);
         assert_eq!(s.enable_webtransport_draft02, Some(true));
-        assert_eq!(s.wt_enabled, 0);
+        assert_eq!(s.wt_enabled, VarInt::ZERO);
         assert_eq!(s.webtransport_max_sessions_draft07, None);
     }
 
@@ -1207,7 +1214,7 @@ mod tests {
     fn test_build_client_settings_draft15() {
         let params = ServerSettingsParams::default();
         let s = DraftVersion::Draft15.build_client_settings(&params);
-        assert_eq!(s.wt_enabled, 1);
+        assert_eq!(s.wt_enabled, vi(1));
         assert_eq!(s.wt_initial_max_streams_uni, params.initial_max_streams_uni);
         assert_eq!(
             s.wt_initial_max_streams_bidi,
@@ -1232,7 +1239,7 @@ mod tests {
             params.initial_max_streams_bidi
         );
         assert_eq!(s.wt_initial_max_data, params.initial_max_data);
-        assert_eq!(s.wt_enabled, 0);
+        assert_eq!(s.wt_enabled, VarInt::ZERO);
         assert_eq!(s.detect_draft_pattern(), Some(DraftVersion::Draft14));
     }
 
@@ -1245,7 +1252,7 @@ mod tests {
             Some(params.max_sessions)
         );
         assert_eq!(s.wt_max_sessions_draft14, None);
-        assert_eq!(s.wt_enabled, 0);
+        assert_eq!(s.wt_enabled, VarInt::ZERO);
         assert_eq!(s.enable_webtransport_draft02, None);
         assert_eq!(s.detect_draft_pattern(), Some(DraftVersion::Draft07));
     }
@@ -1255,7 +1262,7 @@ mod tests {
         let params = ServerSettingsParams::default();
         let s = DraftVersion::Draft02.build_client_settings(&params);
         assert_eq!(s.enable_webtransport_draft02, Some(true));
-        assert_eq!(s.wt_enabled, 0);
+        assert_eq!(s.wt_enabled, VarInt::ZERO);
         assert_eq!(s.webtransport_max_sessions_draft07, None);
         assert_eq!(s.wt_max_sessions_draft14, None);
         assert_eq!(s.detect_draft_pattern(), Some(DraftVersion::Draft02));

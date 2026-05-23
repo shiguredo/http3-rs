@@ -1,7 +1,9 @@
 # 0086: Setting / SettingsPayload を構築時検査型に変更する
 
 Created: 2026-05-23
+Completed: 2026-05-23
 Model: Opus 4.7
+Branch: feature/change-settings-construct-time-validation
 
 ## 概要
 
@@ -307,27 +309,53 @@ const BAD: Setting = Setting::QpackMaxTableCapacity(
 
 ## 受け入れ条件
 
-- `Setting` enum が既知パラメータ + `Unknown` variant で定義され、
+注: 設計の初期案から実装段階で変更された項目は「(実装時に変更)」と併記する。
+最終仕様は「## 解決方法」を参照。
+
+- `Setting` enum が既知パラメータ + `Unknown(UnknownSetting)` variant で定義され、
   WebTransport の全 7 コードポイントをカバーしている
+  (実装時に変更: `Unknown` を newtype `UnknownSetting` でラップし、フィールドを
+   private 化することで HTTP/2 専用 / 予約 ID の混入を構造的に防ぐ)
 - `Setting::from_wire` が既知 ID かつ値範囲内で `Ok`、HTTP/2 専用 / 予約済み /
   bool 値範囲外で `Err(SettingError)` を返す
 - `SettingError` のフィールド型が `VarInt` になっている
+- `SettingError` に `DuplicateId { id: VarInt }` を追加し、SETTINGS フレーム内の
+  重複 ID 検出も `SettingError` で表現する
+  (実装時に変更: 当初は `FrameDecodeError::DuplicateSettingsId` を予定したが、
+   `SettingsPayload::add` で重複を構築時に弾くため `SettingError::DuplicateId` に統合)
 - `Setting::as_wire` が wire 表現 `(VarInt, VarInt)` を返す
 - `SettingsId` enum (src/settings.rs) が削除されている
 - `webtransport::SettingsId` enum も `Setting` enum に統合され削除されている
 - `MaxFieldSectionSize` 型は導入せず `VarInt` を直接使用している
-- `FrameDecodeError::InvalidSettingsId` が削除され、
-  代わりに `DuplicateSettingsId { id: VarInt }` が追加されている
-- decoder の `seen_ids` 重複チェックが維持され、`DuplicateSettingsId` を返す
+- `FrameDecodeError::InvalidSettingsId` が削除され、`InvalidSetting(SettingError)`
+  で HTTP/2 専用 / 予約 / bool 値域外 / 重複 ID の全 SETTINGS 検査エラーを伝播する
+- decoder は重複 ID を `SettingsPayload::add(setting)` で弾き、エラーは
+  `SettingError::DuplicateId { id }` 経由で報告する
 - `SettingError` が `Display` + `std::error::Error` を実装している
 - `SettingsPayload.entries` が `Vec<Setting>` 型で private 化されている
-- `SettingsPayload::add` が `(setting: Setting)` を受け取るシグネチャになっている
-- `Settings::from_payload` で重複パラメータが `H3_SETTINGS_ERROR` を返す
+- `SettingsPayload::add` が `(setting: Setting) -> Result<(), SettingError>` の
+  シグネチャになっている (重複検出を内部で行う)
+  (実装時に変更: 当初は `add(setting: Setting)` (戻り値なし) を予定したが、
+   構築時に重複を弾くため `Result` 化)
+- `Settings::from_payload` は失敗しない (`Self` を返す)。重複検出は
+  `SettingsPayload::add` 側に集約済み
 - `webtransport::Settings::from_payload` が `&[Setting]` を受け取る形に変更されている
-- `Settings::iter()` が `impl Iterator<Item = Setting> + '_` を返す
-- `Settings::from_limits` が `VarInt::new().unwrap()` 経由で変換している
+  (`pub` → `pub(crate)`、戻り値 `Result<Option<Self>, Error>` → `Option<Self>`)
+- `Settings::iter()` および `webtransport::Settings::iter()` が
+  `impl Iterator<Item = Setting> + '_` を返す
+- `Settings::from_limits` が `Result<Self, VarIntError>` を返し、`Limits` の値が
+  VarInt 範囲外でも panic しない
+  (実装時に変更: 当初は `VarInt::new().unwrap()` で済ます予定だったが、堅牢性を
+   優先して `Result` 化)
+- `webtransport::ServerSettingsParams` のフィールド型を `u64` から `VarInt` に
+  変更し、ビルダーで `expect` で panic する経路を解消する (実装時に追加)
+- `Error` および `FrameDecodeError` に `#[non_exhaustive]` を付与し、将来の
+  バリアント追加を後方互換に保つ (実装時に追加)
+- `webtransport::Settings::flow_control_enabled` および
+  `allows_multiple_sessions_with_peer` を削除する (実装時に追加、死にコード)
 - 既存の全テスト・PBT・fuzz が通る
-- PBT の不正値注入テストが `Setting::from_wire` の単体テストへ移行されている
+- PBT の不正値注入テスト (HTTP/2 専用 ID / bool 不正値) は単体テストと役割重複
+  していたため削除し、`SettingsPayload::add` の重複検出 PBT (variant 横断) に置換
 
 ## 依存
 
@@ -339,3 +367,81 @@ const BAD: Setting = Setting::QpackMaxTableCapacity(
 - [[0085-change-header-construct-time-validation]]
 - [[0087-change-frame-construct-time-validation]] (SettingsPayload を共有)
 - [[0088-add-trybuild-and-pbt-construct-time-validation]] (`from_static` の compile_fail テスト)
+
+## 解決方法
+
+### `Setting` enum / `SettingError` の新設 (`src/settings.rs`)
+
+- `Setting` enum (`#[non_exhaustive]`) に 12 個の既知 variant と `Unknown(UnknownSetting)` を追加し、ID と型安全な値 (`VarInt` または `bool`) を一体で保持する形にした
+- `UnknownSetting` 構造体を private フィールド (`id: VarInt`, `value: VarInt`) + アクセサで定義し、`Setting::Unknown` への直接構築経路を `Setting::from_wire` の検査済みパスに限定。HTTP/2 専用 ID / 予約 ID が `Unknown` 経由で混入できない不変条件を保証
+- `SettingError` (`#[non_exhaustive]`) に `Http2OnlyId { id }` / `ReservedId { id }` / `InvalidBooleanValue { id, value }` / `DuplicateId { id }` を定義し、`Display` + `core::error::Error` を実装した
+- `Setting::from_wire(VarInt, VarInt) -> Result<Self, SettingError>` で HTTP/2 専用 ID (0x02-0x05, RFC 9114 §7.2.4.1 + §11.2.2 Table 3) / 予約済み ID (0x00, §11.2.2 Table 3) / bool 値域外を構築時に弾く。未知 ID は `Setting::Unknown(UnknownSetting)` として受理する (RFC 9114 §7.2.4 末尾: MUST ignore)
+- `Setting::as_wire(self) -> (VarInt, VarInt)` と `Setting::id(self) -> VarInt` を提供。bool 値 → VarInt 変換は `as_wire` 内のローカル `const` (`V_ZERO`/`V_ONE`) で行うよう簡素化
+- `is_http2_only_id(u64) -> bool` を `const fn` で公開し、外部からの ID 判定にも利用できるようにした
+
+### `settings::SettingsId` / `webtransport::SettingsId` の削除
+
+- `src/settings.rs` の `SettingsId` enum を完全に削除し、`Setting` enum に統合
+- `src/webtransport/settings.rs` の `SettingsId` enum と `is_webtransport` 関数を削除し、ID 識別を `Setting` enum の variant に置き換え
+- `src/lib.rs` の `pub use settings::SettingsId` を削除して `Setting` / `SettingError` を公開
+- `src/webtransport/mod.rs` の `pub use settings::SettingsId` を削除
+
+### `Settings` / `webtransport::Settings` の VarInt 化
+
+- 値フィールドを `Option<u64>` → `Option<VarInt>` (H3) / `u64` → `VarInt` (WT) に変更
+- ビルダーメソッド (`qpack_max_table_capacity` / `max_field_section_size` / `qpack_blocked_streams` / `wt_enabled` / `wt_initial_max_*` / `wt_max_sessions_draft14` / `webtransport_max_sessions_draft07`) のシグネチャを `VarInt` 受けに変更
+- `Settings::from_limits` を `Result<Self, VarIntError>` に変更し、`Limits` の値が VarInt 範囲外でも panic しないようにした
+- `Settings::iter()` / `webtransport::Settings::iter()` の戻り値型を `(u64, u64)` → `Setting` に変更
+- `webtransport::Settings::from_payload(&[Setting]) -> Option<Self>` を `pub(crate)` で追加し、WebTransport 関連 variant を 1 箇所でマッピングする責務分離を回復
+- `webtransport::Settings::flow_control_enabled` (互換性偽装の単純委譲) と `allows_multiple_sessions_with_peer` (未使用) を削除
+- `webtransport::Settings::iter()` のゼロ判定を `.get() > 0` から `!= VarInt::ZERO` に変更し VarInt 型抽象を保つ
+
+### `SettingsPayload` のフィールド private 化 + 重複検出を構築時に集約
+
+- `entries: Vec<(u64, u64)>` (`pub`) を削除し、`settings: Vec<Setting>` + `seen_ids: HashSet<VarInt>` (private) に置き換え
+- `add(id: u64, value: u64)` → `add(setting: Setting) -> Result<(), SettingError>`。`SettingError::DuplicateId { id }` で同一フレーム内の重複 ID を構築時に弾く (RFC 9114 Section 7.2.4 MUST NOT)
+- `settings()` / `len()` / `is_empty()` アクセサを追加
+- `from_settings(&Settings)` は `add` 経由で組み立てるよう変更 (内部 invariant が常に `add` を通る)
+- 重複検出を `SettingsPayload::add` に集約したことで、decoder 側の `seen_ids` 管理と `Settings::from_payload` 側の重複検出が冗長化していた問題を解消
+
+### `Settings::from_payload` の整理
+
+- `SettingsPayload` 内の各 `Setting` は構築時検査済みかつ ID 重複なしのため、`from_payload` は H3 フィールドへのマッピングと WT 設定の委譲のみに専念
+- WebTransport 関連 variant は `webtransport::Settings::from_payload(&[Setting])` に委譲し、責務を 1 モジュールに集約
+- `Setting::Unknown` は `from_payload` 側で無視 (MUST ignore, RFC 9114 §7.2.4 末尾)
+
+### decoder / encoder の追従
+
+- `src/frame/decoder.rs::decode_settings_frame` から HTTP/2 専用 ID チェック / bool 値検査 / 重複検査を全て削除し、`Setting::from_wire(id, value)?` と `SettingsPayload::add(setting)?` の組合せに集約
+- `src/frame/encoder.rs::encoded_settings_payload_len` と `encode_settings_frame` を `Setting::as_wire()` 経由に書き換え。各 VarInt は `encoded_len()` を直接使えるため `VarInt::new` での再ラップ不要
+- `src/error.rs::FrameDecodeError::InvalidSettingsId(u64)` を削除し、`InvalidSetting(SettingError)` 単一バリアントで HTTP/2 専用 / 予約 / bool 値域外 / 重複 ID の全ての SETTINGS 検査エラーを伝播。`From<SettingError> for FrameDecodeError` および `FrameDecodeError::source()` 実装で `SettingError` を辿れるようにした
+- SETTINGS 検査エラーは `FrameDecodeError::InvalidSetting(SettingError)` 経由でのみ伝播する設計に統一。`From<SettingError> for crate::error::Error` および `Error::Settings(SettingError)` バリアントは dead code (decoder 経路は必ず `FrameDecodeError` を通る) のため新設せず、2 周目のレビューを経て初期案から削除した
+- `src/error.rs::Error` および `FrameDecodeError` に `#[non_exhaustive]` を付与し、本 PR を含めた将来のバリアント追加を後方互換に保つ
+- `src/stream/control.rs` の SETTINGS フレームデコードエラーの分岐を `InvalidSetting` のみで `H3_SETTINGS_ERROR` に変換する形に統一
+
+### connection / WebTransport の追従
+
+- `src/connection/mod.rs` 内の `Settings` フィールド参照 (`qpack_max_table_capacity` / `qpack_blocked_streams` / `max_field_section_size`) と WT 設定 (`wt_initial_max_streams_*` / `wt_initial_max_data` / `wt_enabled`) を `VarInt::get()` 経由で `u64` 取り出しに変更
+- `Connection::new` 内の `Settings::from_limits(&limits)` は `Limits::default()` のフィールドが静的に VarInt 範囲内のため `.expect("Limits::default() values must fit VarInt (RFC 9000 Section 16)")` で受ける
+- `src/webtransport/connect.rs` の `ServerSettingsParams` のフィールド型を `u64` から `VarInt` に変更し、`Default` 実装も `VarInt::from_static(...)` で構築。`DraftVersion::build_server_settings` / `build_client_settings` の panic 経路 (`params_varint` ヘルパー経由の `expect`) を完全に解消
+
+### テスト整備
+
+- `src/settings.rs` の `#[cfg(test)] mod tests` に `Setting::from_wire` / `as_wire` / 各 variant の境界 / HTTP/2 専用 / 予約 / bool 不正値 / 未知 ID (`UnknownSetting` アクセサ経由) / `SettingError::Display` / `SettingsPayload::add` の重複検出 / `Setting::Unknown` の無視 / `from_limits` の VarInt 範囲外エラーを網羅
+- `src/webtransport/settings.rs` の `#[cfg(test)] mod tests` を VarInt 化し、`from_payload(&[Setting])` の WT variant 反映 / 非 WT variant 無視 / Unknown 無視 / WT エントリ無し時 `None` 返却を検証
+- `src/frame/decoder.rs::tests` に `ReservedId` / `InvalidBooleanValue(0x08)` / `InvalidBooleanValue(0x33)` の decoder エラーパス単体テストを追加
+- `pbt/tests/prop_settings.rs` を全面的に書き直し、Strategy で生成する VarInt 中規模域 (`0..2^30`) でラウンドトリップ / iter 合計 / `enable_webtransport_server` の自動設定 / `webtransport_draft_pattern` 一貫性を検証。`Setting::from_wire` の wire ↔ Setting ラウンドトリップは VarInt 全域 (`arbitrary_varint_full`) で叩き、`encoded_settings_payload_len` の合算境界もカバー。`SettingsPayload::add` の重複検出を PBT で検証
+- HTTP/2 専用 ID / bool 不正値の PBT は単体テストと重複していたため削除 (CLAUDE.md「PBT で実現できるものを単体テストで書かない / 単体テストで十分なものを PBT に書かない」の役割分担遵守)
+- `pbt/tests/prop_frame.rs::valid_settings_entries` の ID プールに WebTransport 系 ID (0x2b61 / 0x2b64 / 0x2b65 / 0x14e9cd29 / 0x2c7cf000 / 0x2b603742 / 0xc671706a) を追加し、bool 値正規化対象に draft-02 (0x2b603742) を含める
+- `pbt/tests/prop_webtransport.rs` の `SettingsId` 参照を削除し、`Setting` variant ベースの比較に書き換え。`flow_control_enabled` 呼び出しを `declares_flow_control` に置換
+- `fuzz/fuzz_targets/fuzz_settings.rs` を改善し、`Setting::from_wire` 拒否ケースも `Err` パスを意図的に叩いて `SettingError::Display` の panic 安全性まで検証。`Settings::from_payload` 経路への伝播も維持
+- `tests/integration.rs` / `tests/test_webtransport_draft_connect.rs` を VarInt 化 (`vi(u64) -> VarInt` ヘルパー導入)
+
+### サンプル / 相互運用クレートの追従
+
+- `examples/wt_server` (`main.rs` / `webtransport.rs`) / `crates/tokio-s2n-quic/examples/wt_echo_*.rs` / `interop/wt/src/lib.rs` の `webtransport::Settings` ビルダー呼び出しを `VarInt::from_static` / `VarInt::new(_).expect(_)` 経由に書き換え
+- `examples/wt_server/src/webtransport.rs` の SETTINGS パース箇所は `SettingsPayload::add(id, value)` から `Setting::from_wire(id, value)?` + `payload.add(setting)?` の組合せに変更
+
+### CHANGES.md 更新
+
+- `## develop` に `[ADD]` 3 件 (`Setting` / `UnknownSetting` / `SettingError`) と `[CHANGE]` 11 件 (`SettingsId` 削除 / VarInt 化 / `iter()` 戻り値 / `from_payload` 再設計 / `from_limits` Result 化 / `SettingsPayload` private 化 + `add` Result 化 / `ServerSettingsParams` VarInt 化 / `FrameDecodeError` 整理 / `webtransport::Settings::from_payload` の `pub` → `pub(crate)` 化 / `Error` / `FrameDecodeError` `#[non_exhaustive]` 付与 / `flow_control_enabled` / `allows_multiple_sessions_with_peer` 削除) を追記

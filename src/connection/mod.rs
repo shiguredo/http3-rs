@@ -53,6 +53,7 @@ use crate::qpack::{
 use crate::settings::Settings;
 use crate::stream::request::{RawReceivedData, RequestStream};
 use crate::stream::{ControlStreamRecv, ControlStreamSend, StreamKind, StreamState};
+use crate::varint::VarInt;
 use crate::webtransport::error::ErrorCode as WtErrorCode;
 use crate::webtransport::session::{DataFlowControl, DirectionalStreamFlowControl};
 
@@ -221,34 +222,34 @@ impl WtSession {
             return;
         }
         self.recv_stream_fc_uni = Some(DirectionalStreamFlowControl::new(
-            local_wt.wt_initial_max_streams_uni,
+            local_wt.wt_initial_max_streams_uni.get(),
         ));
         self.recv_stream_fc_bidi = Some(DirectionalStreamFlowControl::new(
-            local_wt.wt_initial_max_streams_bidi,
+            local_wt.wt_initial_max_streams_bidi.get(),
         ));
-        self.recv_data_fc = Some(DataFlowControl::new(local_wt.wt_initial_max_data));
+        self.recv_data_fc = Some(DataFlowControl::new(local_wt.wt_initial_max_data.get()));
 
         if !queue_initial_capsules {
             return;
         }
-        if local_wt.wt_initial_max_streams_bidi > 0 {
+        if local_wt.wt_initial_max_streams_bidi.get() > 0 {
             self.pending_capsules
                 .push(crate::webtransport::Capsule::MaxStreams {
                     bidirectional: true,
-                    maximum: local_wt.wt_initial_max_streams_bidi,
+                    maximum: local_wt.wt_initial_max_streams_bidi.get(),
                 });
         }
-        if local_wt.wt_initial_max_streams_uni > 0 {
+        if local_wt.wt_initial_max_streams_uni.get() > 0 {
             self.pending_capsules
                 .push(crate::webtransport::Capsule::MaxStreams {
                     bidirectional: false,
-                    maximum: local_wt.wt_initial_max_streams_uni,
+                    maximum: local_wt.wt_initial_max_streams_uni.get(),
                 });
         }
-        if local_wt.wt_initial_max_data > 0 {
+        if local_wt.wt_initial_max_data.get() > 0 {
             self.pending_capsules
                 .push(crate::webtransport::Capsule::MaxData {
-                    maximum: local_wt.wt_initial_max_data,
+                    maximum: local_wt.wt_initial_max_data.get(),
                 });
         }
     }
@@ -621,8 +622,10 @@ impl Connection {
         let mut limits = Limits::default();
 
         // 引数の settings を使用して SETTINGS を送信
-        // デフォルトの QPACK 設定と引数の WebTransport 設定をマージ
-        let mut local_settings = Settings::from_limits(&limits);
+        // デフォルトの QPACK 設定と引数の WebTransport 設定をマージ。
+        // `Limits::default()` のフィールドは静的に VarInt 範囲内のため `expect`。
+        let mut local_settings = Settings::from_limits(&limits)
+            .expect("Limits::default() values must fit VarInt (RFC 9000 Section 16)");
         if let Some(v) = settings.enable_connect_protocol {
             local_settings.enable_connect_protocol = Some(v);
         }
@@ -645,13 +648,13 @@ impl Connection {
 
         // limits を local_settings と同期 (検証で使用する値が SETTINGS 送信値と一致するようにする)
         if let Some(v) = local_settings.qpack_max_table_capacity {
-            limits.qpack_max_table_capacity = v;
+            limits.qpack_max_table_capacity = v.get();
         }
         if let Some(v) = local_settings.qpack_blocked_streams {
-            limits.qpack_blocked_streams = v;
+            limits.qpack_blocked_streams = v.get();
         }
         if let Some(v) = local_settings.max_field_section_size {
-            limits.max_field_section_size = v;
+            limits.max_field_section_size = v.get();
         }
 
         let mut control_send = ControlStreamSend::new();
@@ -664,14 +667,17 @@ impl Connection {
         };
 
         // QPACK 最大テーブル容量を設定 (local_settings から取得)
-        let max_table_capacity = local_settings.qpack_max_table_capacity.unwrap_or(0);
+        let max_table_capacity = local_settings
+            .qpack_max_table_capacity
+            .map(VarInt::get)
+            .unwrap_or(0);
         let mut encoder_stream_recv = EncoderStreamReceiver::new();
         encoder_stream_recv.set_max_table_capacity(max_table_capacity);
         let mut qpack_dynamic_decoder = DynamicDecoder::new();
         qpack_dynamic_decoder.set_max_table_capacity(max_table_capacity);
         // ローカル設定の max_field_section_size をデコーダーに反映 (RFC 9114 Section 4.2.2)
         if let Some(max_size) = local_settings.max_field_section_size {
-            qpack_dynamic_decoder.set_max_field_section_size(max_size);
+            qpack_dynamic_decoder.set_max_field_section_size(max_size.get());
         }
 
         Self {
@@ -1874,9 +1880,11 @@ impl Connection {
         };
         let advertises = |s: &crate::webtransport::Settings, d: DraftVersion| -> bool {
             match d {
-                DraftVersion::Draft15 => s.wt_enabled > 0,
-                DraftVersion::Draft14 => s.wt_max_sessions_draft14.is_some_and(|v| v > 0),
-                DraftVersion::Draft07 => s.webtransport_max_sessions_draft07.is_some_and(|v| v > 0),
+                DraftVersion::Draft15 => s.wt_enabled.get() > 0,
+                DraftVersion::Draft14 => s.wt_max_sessions_draft14.is_some_and(|v| v.get() > 0),
+                DraftVersion::Draft07 => s
+                    .webtransport_max_sessions_draft07
+                    .is_some_and(|v| v.get() > 0),
                 DraftVersion::Draft02 => s.enable_webtransport_draft02 == Some(true),
             }
         };
@@ -2470,10 +2478,11 @@ impl Connection {
         while let Some(frame) = self.control_recv.process()? {
             match frame {
                 crate::frame::Frame::Settings(payload) => {
-                    let settings = Settings::from_payload(&payload)?;
+                    let settings = Settings::from_payload(&payload);
 
                     // ピアの QPACK 設定をエンコーダーに適用
                     if let Some(capacity) = settings.qpack_max_table_capacity {
+                        let capacity = capacity.get();
                         self.qpack_encoder.set_max_table_capacity(capacity);
                         self.encoder_stream.set_max_table_capacity(capacity);
                         // 実際に使用するテーブル容量を設定
@@ -2499,7 +2508,8 @@ impl Connection {
                     // ピアの QPACK blocked streams 設定をエンコーダーに適用
                     // (RFC 9204 Section 2.1.2)
                     if let Some(blocked) = settings.qpack_blocked_streams {
-                        self.qpack_encoder.set_peer_max_blocked_streams(blocked);
+                        self.qpack_encoder
+                            .set_peer_max_blocked_streams(blocked.get());
                     }
 
                     let wt_settings = settings.wt_settings;
@@ -3355,7 +3365,9 @@ impl Connection {
         crate::validation::validate_request_headers(headers)?;
 
         // peer の SETTINGS_MAX_FIELD_SECTION_SIZE を超えていないかチェック (RFC 9114 Section 4.2.2)
-        let peer_max = self.peer_settings.and_then(|s| s.max_field_section_size);
+        let peer_max = self
+            .peer_settings
+            .and_then(|s| s.max_field_section_size.map(VarInt::get));
         crate::validation::check_field_section_size(headers, peer_max)?;
 
         // WebTransport CONNECT の場合、peer の WebTransport サポートを確認する
@@ -3499,7 +3511,9 @@ impl Connection {
         crate::validation::validate_response_headers(headers)?;
 
         // peer の SETTINGS_MAX_FIELD_SECTION_SIZE を超えていないかチェック (RFC 9114 Section 4.2.2)
-        let peer_max = self.peer_settings.and_then(|s| s.max_field_section_size);
+        let peer_max = self
+            .peer_settings
+            .and_then(|s| s.max_field_section_size.map(VarInt::get));
         crate::validation::check_field_section_size(headers, peer_max)?;
 
         // WebTransport: 2xx レスポンスの WT-Protocol がクライアントの WT-Available-Protocols に
@@ -3881,7 +3895,11 @@ impl Connection {
     ///
     /// 動的テーブル容量が 0 の場合は送信不要。
     fn send_stream_cancellation_if_needed(&mut self, stream_id: u64) {
-        let max_capacity = self.local_settings.qpack_max_table_capacity.unwrap_or(0);
+        let max_capacity = self
+            .local_settings
+            .qpack_max_table_capacity
+            .map(VarInt::get)
+            .unwrap_or(0);
         if max_capacity == 0 {
             return;
         }
@@ -4229,21 +4247,26 @@ mod tests {
     // (draft-ietf-webtrans-http3-15 Section 4.2)
     // =========================================================================
 
+    /// テスト用の VarInt 構築ショートカット
+    fn vi(value: u64) -> VarInt {
+        VarInt::new(value).unwrap()
+    }
+
     /// WebTransport 有効な Settings を作成するヘルパー
     fn wt_enabled_settings() -> Settings {
-        let wt = crate::webtransport::Settings::new().wt_enabled(1);
+        let wt = crate::webtransport::Settings::new().wt_enabled(vi(1));
         Settings::new().enable_webtransport_server(wt)
     }
 
     fn wt_multi_draft_settings_with_flow_control() -> Settings {
         let wt = crate::webtransport::Settings::new()
-            .wt_enabled(1)
+            .wt_enabled(vi(1))
             .enable_webtransport_draft02(true)
-            .webtransport_max_sessions_draft07(100)
-            .wt_max_sessions_draft14(100)
-            .wt_initial_max_streams_uni(100)
-            .wt_initial_max_streams_bidi(100)
-            .wt_initial_max_data(8 * 1024 * 1024);
+            .webtransport_max_sessions_draft07(vi(100))
+            .wt_max_sessions_draft14(vi(100))
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(100))
+            .wt_initial_max_data(vi(8 * 1024 * 1024));
         Settings::new().enable_webtransport_server(wt)
     }
 
@@ -4876,7 +4899,8 @@ mod tests {
         // サーバーはこれを受理しなければならない
 
         // サーバー: draft-07 対応
-        let server_wt = crate::webtransport::Settings::new().webtransport_max_sessions_draft07(1);
+        let server_wt =
+            crate::webtransport::Settings::new().webtransport_max_sessions_draft07(vi(1));
         let server_settings = Settings::new().enable_webtransport_server(server_wt);
         let mut server = Connection::server(server_settings);
         server.set_control_stream_id(3).unwrap();
@@ -4886,7 +4910,8 @@ mod tests {
 
         // draft-07 クライアントの SETTINGS: H3_DATAGRAM=1 + WEBTRANSPORT_MAX_SESSIONS=1
         // ENABLE_CONNECT_PROTOCOL は含めない (Safari と同じパターン)
-        let client_wt = crate::webtransport::Settings::new().webtransport_max_sessions_draft07(1);
+        let client_wt =
+            crate::webtransport::Settings::new().webtransport_max_sessions_draft07(vi(1));
         // enable_webtransport は enable_connect_protocol を自動設定するので、
         // 手動で None に戻して Safari のパターンを再現する
         let client_settings = Settings {
@@ -4947,7 +4972,7 @@ mod tests {
             .unwrap();
 
         // draft-15 クライアント: ENABLE_CONNECT_PROTOCOL なし (正当)
-        let client_wt = crate::webtransport::Settings::new().wt_enabled(1);
+        let client_wt = crate::webtransport::Settings::new().wt_enabled(vi(1));
         let client_settings = Settings {
             enable_connect_protocol: None,
             ..Settings::new()
@@ -5114,10 +5139,10 @@ mod tests {
     #[test]
     fn test_server_queues_initial_flow_control_capsules_for_safari_observed_pattern() {
         let client_wt = crate::webtransport::Settings::new()
-            .webtransport_max_sessions_draft07(1)
-            .wt_initial_max_streams_uni(100)
-            .wt_initial_max_streams_bidi(100)
-            .wt_initial_max_data(8 * 1024 * 1024);
+            .webtransport_max_sessions_draft07(vi(1))
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(100))
+            .wt_initial_max_data(vi(8 * 1024 * 1024));
         let client_settings = Settings::new().enable_webtransport_client(client_wt);
         let mut client = Connection::client(client_settings);
         client.set_control_stream_id(2).unwrap();
@@ -5172,7 +5197,8 @@ mod tests {
 
     #[test]
     fn test_server_does_not_queue_initial_flow_control_capsules_for_plain_draft07() {
-        let client_wt = crate::webtransport::Settings::new().webtransport_max_sessions_draft07(1);
+        let client_wt =
+            crate::webtransport::Settings::new().webtransport_max_sessions_draft07(vi(1));
         let client_settings = Settings::new().enable_webtransport_client(client_wt);
         let mut client = Connection::client(client_settings);
         client.set_control_stream_id(2).unwrap();

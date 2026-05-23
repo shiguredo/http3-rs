@@ -31,6 +31,15 @@
   - @voluntas
 - [ADD] `internal-test` フィーチャーを追加し、PBT / fuzz / 統合テストから検査バイパス API (`Header::from_validated_parts`) を利用できるようにする (通常のアプリケーションでは有効化しない)
   - @voluntas
+- [ADD] `Setting` enum を新設し、SETTINGS パラメータの ID と型安全な値 (`VarInt` または `bool`) を一体で表現する (`#[non_exhaustive]`)
+  - @voluntas
+- [ADD] `UnknownSetting` 構造体を新設し、`Setting::Unknown(UnknownSetting)` のフィールドを
+  private 化することで HTTP/2 専用 ID / 予約 ID が `Setting::Unknown` 経由で構築できない
+  不変条件を保証する
+  - @voluntas
+- [ADD] `SettingError` を新設し、`Setting::from_wire` / `SettingsPayload::add` の検査エラー
+  (HTTP/2 専用 ID / 予約 ID / bool 値域外 / 重複 ID) を構造化エラーで通知する (`#[non_exhaustive]`)
+  - @voluntas
 - [CHANGE] `varint::encode` / `varint::encode_into_vec` / `varint::decode` のシグネチャを `VarInt` を扱う形に変更する
   - @voluntas
 - [CHANGE] `varint::MAX_VALUE` / `varint::encoded_len(u64)` / `varint::try_encoded_len` / `varint::try_encode_into_vec` / `varint::EncodeError::ValueTooLarge` を削除する (`VarInt` 型が値域を保証するため)
@@ -51,6 +60,47 @@
   を `&[Header]` 直受けに変更する
   - @voluntas
 - [CHANGE] `webtransport::ConnectRequest::to_headers` / `webtransport::ConnectResponse::to_headers` の戻り値型を `Result<Vec<Header>, HeaderError>` に変更し、フィールド値の RFC 違反を構造化エラーで通知する
+  - @voluntas
+- [CHANGE] `settings::SettingsId` enum と `webtransport::SettingsId` enum を削除し、`Setting` enum に統合する
+  - @voluntas
+- [CHANGE] `Settings` / `webtransport::Settings` の値フィールドの型を `u64` から `VarInt` に
+  変更し、ビルダーメソッドのシグネチャを `VarInt` 受けに変更する
+  - @voluntas
+- [CHANGE] `Settings::iter()` および `webtransport::Settings::iter()` の戻り値型を
+  `impl Iterator<Item = (u64, u64)>` から `impl Iterator<Item = Setting>` に変更する
+  - @voluntas
+- [CHANGE] `Settings::from_payload` を `&[Setting]` 経由のマッピングに書き換え、bool 値検査と
+  HTTP/2 専用 / 予約 ID 検査を `Setting::from_wire` に集約する。WebTransport 設定は
+  `webtransport::Settings::from_payload(&[Setting])` 経由で組み立てる。重複検出を
+  `SettingsPayload::add` に移したことで失敗経路が無くなり、戻り値型を
+  `Result<Self, Error>` から `Self` に変更する
+  - @voluntas
+- [CHANGE] `webtransport::Settings::from_payload` を `pub fn from_payload(&SettingsPayload) -> Result<Option<Self>, Error>`
+  から `pub(crate) fn from_payload(&[Setting]) -> Option<Self>` に変更する (外部 API から削除)
+  - @voluntas
+- [CHANGE] `Settings::from_limits` のシグネチャを `Result<Self, VarIntError>` に変更し、
+  `Limits` の値が VarInt 範囲外でも panic しないようにする
+  - @voluntas
+- [CHANGE] `frame::SettingsPayload.entries: Vec<(u64, u64)>` (pub フィールド) を private 化し、
+  `settings: Vec<Setting>` + 重複検出用 `HashSet<VarInt>` を内部に保持する。
+  `add(id: u64, value: u64)` のシグネチャを `add(setting: Setting) -> Result<(), SettingError>`
+  に変更し、SETTINGS フレーム内の重複 ID を構築時に弾く (RFC 9114 Section 7.2.4 MUST NOT)。
+  `settings()` / `len()` / `is_empty()` アクセサを提供する
+  - @voluntas
+- [CHANGE] `webtransport::ServerSettingsParams` の各フィールド型を `u64` から `VarInt` に
+  変更し、`DraftVersion::build_*_settings` の panic 経路を解消する
+  - @voluntas
+- [CHANGE] `error::FrameDecodeError::InvalidSettingsId(u64)` を削除し、
+  `InvalidSetting(SettingError)` で HTTP/2 専用 / 予約 / bool 値域外 / 重複 ID の各 SETTINGS
+  検査エラーを単一バリアントで伝播する形に変更する。`core::error::Error::source()` 経由で
+  `SettingError` を辿れるようにする
+  - @voluntas
+- [CHANGE] `error::Error` および `error::FrameDecodeError` に `#[non_exhaustive]` を付与し、
+  将来のバリアント追加を後方互換に保つ
+  - @voluntas
+- [CHANGE] `webtransport::Settings::flow_control_enabled` と
+  `webtransport::Settings::allows_multiple_sessions_with_peer` を削除する
+  (それぞれ `declares_flow_control` / `flow_control_enabled_with_peer` への単純委譲だった)
   - @voluntas
 
 ### misc

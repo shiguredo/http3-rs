@@ -1,7 +1,7 @@
 //! HTTP/3 フレームデコーダー
 
 use crate::error::FrameDecodeError;
-use crate::settings::SettingsId;
+use crate::settings::Setting;
 use crate::varint;
 
 use super::{DataPayload, Frame, FrameType, GoawayPayload, HeadersPayload, SettingsPayload};
@@ -106,7 +106,6 @@ fn decode_headers_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
 fn decode_settings_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
     let mut settings = SettingsPayload::new();
     let mut offset = 0;
-    let mut seen_ids = std::collections::HashSet::new();
 
     while offset < payload.len() {
         // payload は完全に受信済みなので、途中切れは H3_FRAME_ERROR (RFC 9114 Section 7.1)
@@ -118,20 +117,9 @@ fn decode_settings_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
             varint::decode(&payload[offset..]).map_err(|_| FrameDecodeError::InvalidLength)?;
         offset += value_len;
 
-        let id_raw = id.get();
-        let value_raw = value.get();
-
-        // HTTP/2 専用設定のチェック (RFC 9114 Section 7.2.4)
-        if SettingsId::is_http2_only(id_raw) {
-            return Err(FrameDecodeError::InvalidSettingsId(id_raw));
-        }
-
-        // 同一フレーム内の重複 ID チェック (RFC 9114 Section 7.2.4)
-        if !seen_ids.insert(id_raw) {
-            return Err(FrameDecodeError::InvalidSettingsId(id_raw));
-        }
-
-        settings.add(id_raw, value_raw);
+        // 値域 / HTTP2 専用 / 予約 / bool / 重複は全て SettingsPayload::add 経路で検査
+        let setting = Setting::from_wire(id, value)?;
+        settings.add(setting)?;
     }
 
     Ok(Frame::Settings(settings))
@@ -190,10 +178,20 @@ mod tests {
 
     #[test]
     fn test_decode_settings_frame_http2_setting() {
+        use crate::settings::SettingError;
+        use crate::varint::VarInt;
+
         // SETTINGS frame with HTTP/2-only setting (ENABLE_PUSH=0x02)
         let buf = [0x04, 0x02, 0x02, 0x01];
         let result = decode_frame(&buf);
-        assert_eq!(result, Err(FrameDecodeError::InvalidSettingsId(0x02)));
+        assert_eq!(
+            result,
+            Err(FrameDecodeError::InvalidSetting(
+                SettingError::Http2OnlyId {
+                    id: VarInt::new(0x02).unwrap()
+                }
+            ))
+        );
     }
 
     #[test]
@@ -217,12 +215,74 @@ mod tests {
 
     #[test]
     fn test_decode_settings_frame_duplicate_id() {
-        // SETTINGS フレームに同一 ID が 2 回含まれる場合 (RFC 9114 Section 7.2.4)
-        // QPACK_MAX_TABLE_CAPACITY (0x01) = 4, QPACK_MAX_TABLE_CAPACITY (0x01) = 8
-        // Frame: type=0x04, len=4, payload=[0x01, 0x04, 0x01, 0x08]
+        use crate::settings::SettingError;
+        use crate::varint::VarInt;
+
+        // SETTINGS フレームに同一 ID が 2 回含まれる場合 (RFC 9114 §7.2.4 MUST NOT)
         let buf = [0x04, 0x04, 0x01, 0x04, 0x01, 0x08];
         let result = decode_frame(&buf);
-        assert_eq!(result, Err(FrameDecodeError::InvalidSettingsId(0x01)));
+        assert_eq!(
+            result,
+            Err(FrameDecodeError::InvalidSetting(
+                SettingError::DuplicateId {
+                    id: VarInt::new(0x01).unwrap()
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn test_decode_settings_frame_reserved_id() {
+        use crate::settings::SettingError;
+        use crate::varint::VarInt;
+
+        // SETTINGS フレームに予約 ID 0x00 が含まれる場合 (RFC 9114 §11.2.2 Table 3)
+        let buf = [0x04, 0x02, 0x00, 0x00];
+        let result = decode_frame(&buf);
+        assert_eq!(
+            result,
+            Err(FrameDecodeError::InvalidSetting(SettingError::ReservedId {
+                id: VarInt::ZERO
+            }))
+        );
+    }
+
+    #[test]
+    fn test_decode_settings_frame_invalid_boolean_ecp() {
+        use crate::settings::SettingError;
+        use crate::varint::VarInt;
+
+        // SETTINGS_ENABLE_CONNECT_PROTOCOL (0x08) に 2 を設定する (RFC 8441 §3 違反)
+        let buf = [0x04, 0x02, 0x08, 0x02];
+        let result = decode_frame(&buf);
+        assert_eq!(
+            result,
+            Err(FrameDecodeError::InvalidSetting(
+                SettingError::InvalidBooleanValue {
+                    id: VarInt::new(0x08).unwrap(),
+                    value: VarInt::new(0x02).unwrap(),
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn test_decode_settings_frame_invalid_boolean_h3_datagram() {
+        use crate::settings::SettingError;
+        use crate::varint::VarInt;
+
+        // SETTINGS_H3_DATAGRAM (0x33) に 5 を設定する (RFC 9297 §2.1.1 違反)
+        let buf = [0x04, 0x02, 0x33, 0x05];
+        let result = decode_frame(&buf);
+        assert_eq!(
+            result,
+            Err(FrameDecodeError::InvalidSetting(
+                SettingError::InvalidBooleanValue {
+                    id: VarInt::new(0x33).unwrap(),
+                    value: VarInt::new(0x05).unwrap(),
+                }
+            ))
+        );
     }
 
     #[test]
