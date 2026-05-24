@@ -492,6 +492,27 @@ impl Header {
     /// use shiguredo_http3::Header;
     /// const _BAD: Header = Header::from_static(b":bogus", b"value");
     /// ```
+    ///
+    /// token 外の文字を含む field name はコンパイル時に弾かれる:
+    ///
+    /// ```compile_fail
+    /// use shiguredo_http3::Header;
+    /// const _BAD: Header = Header::from_static(b"x-hdr with space", b"v");
+    /// ```
+    ///
+    /// 先頭または末尾に空白を含む field value はコンパイル時に弾かれる:
+    ///
+    /// ```compile_fail
+    /// use shiguredo_http3::Header;
+    /// const _BAD: Header = Header::from_static(b"x-h", b" leading");
+    /// ```
+    ///
+    /// 疑似ヘッダーの値が構文に違反する場合はコンパイル時に弾かれる:
+    ///
+    /// ```compile_fail
+    /// use shiguredo_http3::Header;
+    /// const _BAD: Header = Header::from_static(b":status", b"20");
+    /// ```
     #[track_caller]
     pub const fn from_static(name: &'static [u8], value: &'static [u8]) -> Self {
         match check_header(name, value) {

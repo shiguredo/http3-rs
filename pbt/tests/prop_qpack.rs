@@ -26,20 +26,6 @@ const DYNAMIC_TABLE_CAPACITY: u64 = 4096;
 const ENTRY_OVERHEAD: u64 = 32;
 
 prop_compose! {
-    /// 有効なテーブル容量を生成
-    fn valid_capacity()(capacity in 0u64..65536) -> u64 {
-        capacity
-    }
-}
-
-prop_compose! {
-    /// 有効な相対インデックスを生成
-    fn valid_relative_index()(index in 0u64..100) -> u64 {
-        index
-    }
-}
-
-prop_compose! {
     /// 有効なストリーム ID を生成
     fn valid_stream_id()(id in 0u64..1000) -> u64 {
         id
@@ -455,13 +441,6 @@ proptest! {
         prop_assert_eq!(predicted_len, actual_len);
     }
 
-    /// Property: Huffman エンコードは元データより長くなることがある
-    #[test]
-    fn prop_huffman_length_varies(data in printable_ascii()) {
-        let encoded_len = huffman::encoded_len(&data);
-        // Huffman エンコードは常に有効な長さを返す
-        prop_assert!(encoded_len > 0);
-    }
 }
 
 // =============================================================================

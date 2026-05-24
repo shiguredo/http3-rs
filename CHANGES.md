@@ -157,6 +157,10 @@
 
 ### misc
 
+- [UPDATE] `Header::from_static` の `compile_fail` doctest を 3 件追加し、`check_header` の全 7 検査経路をカバーする (token 外 / 先頭末尾空白 / 疑似ヘッダー値構文)
+  - @voluntas
+- [UPDATE] `pbt/tests/prop_qpack.rs` の未使用 strategy (`valid_capacity` / `valid_relative_index`) と空虚なテスト (`prop_huffman_length_varies`) を削除する
+  - @voluntas
 - [UPDATE] 仕様引用の節番号を一次資料 (`refs/`) に合わせてコメントを修正する
   - @voluntas
 - [UPDATE] 相互運用テスト用クレートの配置を `interop_h3` / `interop_wt` から `interop/h3` / `interop/wt` に移す
