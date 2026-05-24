@@ -1,7 +1,9 @@
 # 0090: Connection::peer_goaway_request_boundary を Option<VarInt> 化する
 
 Created: 2026-05-24
+Completed: 2026-05-24
 Model: Opus 4.7
+Branch: feature/change-peer-goaway-boundary-varint
 
 ## 概要
 
@@ -120,3 +122,14 @@ stream_id 側が `u64` で持っているなら境界値を `.get()` で降ろ�
 ## 関連
 
 - [[0087-change-frame-construct-time-validation]] の 2 周目レビュー指摘 I2 由来
+
+## 解決方法
+
+`src/connection/mod.rs` の `peer_goaway_request_boundary` シグネチャを
+`Option<u64>` → `Option<VarInt>` に変更。内部実装は `self.peer_goaway_last_id`
+(既に `Option<VarInt>`) をそのまま返す形に簡略化 (`.map(|v| v.get())` を削除)。
+
+呼び出し元 (`src/connection/mod.rs:3432`) は `goaway_id.get()` で `u64` に降ろして
+`next_stream_id` (`u64`) と比較する形に修正。
+
+変更は `connection/mod.rs` に閉じる小規模な変更。review-diff-code はスキップし CI に委ねた。
