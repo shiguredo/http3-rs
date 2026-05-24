@@ -183,5 +183,7 @@
   - @voluntas
 - [FIX] `fuzz/fuzz_targets/fuzz_settings.rs` が `Settings::from_payload` の `Result` 戻り値に追従しておらず fuzz crate がコンパイルできなかった問題を修正する
   - @voluntas
+- [FIX] Huffman デコードで EOS シンボル検出時に `Ok` を返していた RFC 7541 Section 5.2 違反を修正し `Err(QpackError::InvalidHuffman)` を返すようにする
+  - @voluntas
 - [FIX] CI の共通 workspace job から `interop/h3` / `interop/wt` を除外し、相互運用テストは macOS 専用 step でのみ実行する
   - @voluntas

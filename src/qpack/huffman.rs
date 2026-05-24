@@ -1127,8 +1127,8 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, QpackError> {
                     // 符号が一致するかチェック
                     if (current & mask) == sym.code {
                         if sym_idx == 256 {
-                            // EOS symbol - should not appear in valid data
-                            return Ok(result);
+                            // EOS シンボルはデコードエラーとして扱う (RFC 7541 Section 5.2)
+                            return Err(QpackError::InvalidHuffman);
                         }
                         result.push(sym_idx as u8);
                         acc_bits -= sym.bits as u32;

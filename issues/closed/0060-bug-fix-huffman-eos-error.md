@@ -1,6 +1,7 @@
 # Huffman デコードで EOS シンボルをエラーではなく Ok で返している
 
 Created: 2026-05-14
+Completed: 2026-05-24
 Model: deepseek-v4-pro
 
 ## 概要
@@ -56,3 +57,7 @@ EOS シンボルの Huffman 符号 (RFC 7541 Appendix B: 30 ビット, 値 `0x3f
 
 - [FIX] Huffman デコードで EOS シンボル検出時に `Ok` を返していた RFC 7541 Section 5.2 違反を修正し `Err(QpackError::InvalidHuffman)` を返すようにする
   - @voluntas
+
+## 解決方法
+
+`src/qpack/huffman.rs:1131` の `return Ok(result)` を `return Err(QpackError::InvalidHuffman)` に変更した。英語コメントも日本語に変更した。`tests/test_qpack.rs` を新規作成し、EOS のみ・有効シンボル+EOS の 2 ケースの単体テストを追加した。
