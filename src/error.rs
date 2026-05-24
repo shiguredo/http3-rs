@@ -5,6 +5,7 @@
 use core::fmt;
 
 use crate::settings::SettingError;
+use crate::varint::VarInt;
 // `Error::Settings(SettingError)` は dead code であったため削除した。
 // SETTINGS 検査エラーは `FrameDecodeError::InvalidSetting(SettingError)` 経由で伝播する。
 
@@ -199,9 +200,9 @@ pub enum FrameDecodeError {
     /// (RFC 9114 §7.2.4 / §7.2.4.1)。
     InvalidSetting(SettingError),
     /// HTTP/2 専用フレームの検出
-    Http2Frame(u64),
+    Http2Frame(VarInt),
     /// サーバープッシュはサポートしない (CANCEL_PUSH, PUSH_PROMISE, MAX_PUSH_ID)
-    ServerPushNotSupported(u64),
+    ServerPushNotSupported(VarInt),
 }
 
 impl fmt::Display for FrameDecodeError {
@@ -211,9 +212,9 @@ impl fmt::Display for FrameDecodeError {
             Self::UnknownFrameType(t) => write!(f, "unknown frame type: {t:#x}"),
             Self::InvalidLength => write!(f, "invalid frame length"),
             Self::InvalidSetting(e) => write!(f, "invalid settings parameter: {e}"),
-            Self::Http2Frame(t) => write!(f, "http/2 frame not allowed: {t:#x}"),
+            Self::Http2Frame(t) => write!(f, "http/2 frame not allowed: {:#x}", t.get()),
             Self::ServerPushNotSupported(t) => {
-                write!(f, "server push not supported: {t:#x}")
+                write!(f, "server push not supported: {:#x}", t.get())
             }
         }
     }

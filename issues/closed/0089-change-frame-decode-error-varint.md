@@ -1,7 +1,9 @@
 # 0089: FrameDecodeError の Http2Frame / ServerPushNotSupported を VarInt 化する
 
 Created: 2026-05-24
+Completed: 2026-05-24
 Model: Opus 4.7
+Branch: feature/change-frame-decode-error-varint
 
 ## 概要
 
@@ -134,3 +136,29 @@ return Err(FrameDecodeError::Http2Frame(frame_type));
 ## 関連
 
 - [[0087-change-frame-construct-time-validation]] の 3 周目レビュー指摘 I5 由来
+
+## 解決方法
+
+### `FrameDecodeError` の変更
+
+`src/error.rs` の `FrameDecodeError::Http2Frame` / `ServerPushNotSupported` のフィールド
+型を `u64` から `VarInt` に変更。`Display` 実装は `t.get()` 経由で `{:#x}` 表示する。
+
+### decoder 側の生成
+
+- `src/frame/decoder.rs:97`: `FrameDecodeError::Http2Frame(frame_type)` (VarInt を直接渡す)
+- `src/frame/decoder.rs:141`: `FrameDecodeError::ServerPushNotSupported(header.frame_type())`
+
+### テスト
+
+`src/frame/decoder.rs` の 4 件の `assert_eq!` を `VarInt::from_static(...)` に更新。
+
+### 呼び出し元
+
+`src/stream/request.rs` / `src/stream/control.rs` の `match` arm は `_` で受けている
+ため動作変更なし。
+
+### review-diff-code
+
+変更が型置換中心で小規模 (1 ファイル + 1 ファイル + 4 件のテスト更新) のため、
+review-diff-code はスキップして CI に委ねた。

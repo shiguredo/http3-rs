@@ -11,6 +11,8 @@
 
 ## develop
 
+- [CHANGE] `FrameDecodeError::Http2Frame` / `FrameDecodeError::ServerPushNotSupported` のフィールド型を `u64` から `VarInt` に変更し、HTTP/3 frame type の値域 (RFC 9000 Section 16) を型で保証する
+  - @voluntas
 - [ADD] `VarInt::from_static` / `qpack::Header::from_static` / `frame::GoawayPayload::from_static` の doc に `compile_fail` ブロックを追加し、`const fn` 検査のリグレッションを CI (`cargo test --doc`) で防止する
   - @voluntas
 - [ADD] 構築時検査の `from_static` ↔ `new` 一貫性、`from_validated_parts` ↔ `new` 整合性、`Header::new` ↔ QPACK ラウンドトリップ完全性を検証する PBT を追加する
