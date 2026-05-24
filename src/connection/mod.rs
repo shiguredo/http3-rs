@@ -734,9 +734,9 @@ impl Connection {
     /// push ID を運ぶものであり、request stream や WebTransport セッションの
     /// 新規拒否判定には使えない。
     /// (RFC 9114 Section 5.2 / 7.2.6, draft-ietf-webtrans-http3-15 Section 4.7)
-    fn peer_goaway_request_boundary(&self) -> Option<u64> {
+    fn peer_goaway_request_boundary(&self) -> Option<VarInt> {
         if self.role == Role::Client {
-            self.peer_goaway_last_id.map(|v| v.get())
+            self.peer_goaway_last_id
         } else {
             None
         }
@@ -3429,7 +3429,7 @@ impl Connection {
         // サーバーが受信する GOAWAY は push ID を運ぶものであり、request stream
         // 境界値としては使えない (RFC 9114 Section 7.2.6)
         if let Some(goaway_id) = self.peer_goaway_request_boundary()
-            && self.next_stream_id >= goaway_id
+            && self.next_stream_id >= goaway_id.get()
         {
             return Err(Error::ConnectionError(ErrorCode::RequestRejected));
         }

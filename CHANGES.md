@@ -11,6 +11,8 @@
 
 ## develop
 
+- [CHANGE] `Connection::peer_goaway_request_boundary` の戻り値型を `Option<u64>` から `Option<VarInt>` に変更し、GOAWAY ID の値域を型で保証する
+  - @voluntas
 - [CHANGE] `FrameDecodeError::Http2Frame` / `FrameDecodeError::ServerPushNotSupported` のフィールド型を `u64` から `VarInt` に変更し、HTTP/3 frame type の値域 (RFC 9000 Section 16) を型で保証する
   - @voluntas
 - [ADD] `VarInt::from_static` / `qpack::Header::from_static` / `frame::GoawayPayload::from_static` の doc に `compile_fail` ブロックを追加し、`const fn` 検査のリグレッションを CI (`cargo test --doc`) で防止する
