@@ -3,6 +3,59 @@
 //! 各構築時検査型の `valid_*` 戦略を集約する。
 //! 個別の `pbt/tests/prop_*.rs` から `use pbt::strategies::*;` で再利用する。
 
+use shiguredo_http3::qpack::{Decoder, Header};
+
+/// 検査なしの name/value を QPACK Literal Field Line with Literal Name
+/// (RFC 9204 Section 4.5.6) として符号化し、Decoder でデコードして
+/// Header を返す (wire 模擬)。
+pub fn wire_header(name: &[u8], value: &[u8]) -> Header {
+    let mut wire = Vec::new();
+    // Required Insert Count = 0
+    wire.push(0x00);
+    // Delta Base = 0
+    wire.push(0x00);
+    // Literal Field Line with Literal Name: 001N=0, H=0
+    encode_qpack_literal(&mut wire, name, 3, 0x20);
+    // Value: H=0, 7-bit prefix
+    encode_qpack_string(&mut wire, value);
+
+    let decoder = Decoder::new();
+    let headers = decoder
+        .decode(&wire)
+        .expect("infallible: wire_header produced invalid QPACK");
+    headers
+        .into_iter()
+        .next()
+        .expect("infallible: wire encoding produces exactly one header")
+}
+
+/// QPACK 整数 (RFC 7541 Section 5.1) を指定 prefix bits で符号化する。
+fn encode_qpack_integer(buf: &mut Vec<u8>, value: u64, prefix_bits: u8, prefix: u8) {
+    let max_prefix = (1u64 << prefix_bits) - 1;
+    if value < max_prefix {
+        buf.push(prefix | value as u8);
+    } else {
+        buf.push(prefix | max_prefix as u8);
+        let mut remaining = value - max_prefix;
+        while remaining >= 128 {
+            buf.push(0x80 | (remaining & 0x7f) as u8);
+            remaining >>= 7;
+        }
+        buf.push(remaining as u8);
+    }
+}
+
+/// QPACK string literal (H=0) を指定 prefix/prefix_bits で符号化する。
+fn encode_qpack_literal(buf: &mut Vec<u8>, data: &[u8], prefix_bits: u8, prefix: u8) {
+    encode_qpack_integer(buf, data.len() as u64, prefix_bits, prefix);
+    buf.extend_from_slice(data);
+}
+
+/// QPACK string literal (H=0, 7-bit prefix) を符号化する。
+fn encode_qpack_string(buf: &mut Vec<u8>, data: &[u8]) {
+    encode_qpack_literal(buf, data, 7, 0x00);
+}
+
 pub mod strategies {
     use proptest::prelude::*;
     use shiguredo_http3::VarInt;

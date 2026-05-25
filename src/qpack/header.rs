@@ -545,25 +545,7 @@ impl Header {
         }
     }
 
-    /// 検証済みバイト列から検査をスキップして構築する (`internal-test` 限定公開)
-    ///
-    /// 外部クレートからは `internal-test` フィーチャーを有効化したときだけ呼べる。
-    /// PBT / fuzz / 統合テストから wire 由来の不正バイト列を `Header` 型に
-    /// 注入するためのバックドア。通常のアプリケーションコードは絶対に
-    /// 利用してはならない。
-    ///
-    /// 不正データを渡すと送信時に RFC 9114 / RFC 9110 違反を生むため、
-    /// 呼び出し側で必ず構文を保証すること。
-    #[cfg(any(test, feature = "internal-test"))]
-    #[doc(hidden)]
-    pub fn from_validated_parts(name: Cow<'static, [u8]>, value: Cow<'static, [u8]>) -> Self {
-        Self::from_validated_parts_internal(name, value)
-    }
-
     /// 同 crate 内 (decoder / validation など) で検査をスキップして構築する
-    ///
-    /// 外部から見えない `pub(crate)` 版。decoder 経路は `internal-test`
-    /// フィーチャーに依存させず常に利用できるよう、独立に提供する。
     pub(crate) fn from_validated_parts_internal(
         name: Cow<'static, [u8]>,
         value: Cow<'static, [u8]>,
@@ -722,10 +704,13 @@ mod tests {
     }
 
     #[test]
-    fn test_from_validated_parts_skips_validation() {
-        // PBT / tests / fuzz が検査をスキップして不正データを Header に注入する経路。
+    fn test_from_validated_parts_internal_skips_validation() {
+        // デコーダー経路が検査をスキップして不正データを Header に注入できること。
         // 通常 API (`Header::new`) では大文字名で reject されることもあわせて確認。
-        let h = Header::from_validated_parts(Cow::Borrowed(b"Host"), Cow::Borrowed(b"example"));
+        let h = Header::from_validated_parts_internal(
+            Cow::Borrowed(b"Host"),
+            Cow::Borrowed(b"example"),
+        );
         assert_eq!(h.name(), b"Host");
         assert!(matches!(
             Header::new(h.name(), h.value()),

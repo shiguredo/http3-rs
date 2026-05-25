@@ -4221,7 +4221,7 @@ mod tests {
         use crate::qpack::Header;
 
         let make = |name: &[u8], value: &[u8]| {
-            Header::from_validated_parts(
+            Header::from_validated_parts_internal(
                 std::borrow::Cow::Owned(name.to_vec()),
                 std::borrow::Cow::Owned(value.to_vec()),
             )

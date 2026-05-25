@@ -1,5 +1,6 @@
 //! Property-Based Testing for HTTP/3 メッセージ検証 (RFC 9114 Section 4.1.2)
 
+use pbt::wire_header;
 use proptest::prelude::*;
 use shiguredo_http3::Header;
 use shiguredo_http3::validation::{
@@ -387,12 +388,9 @@ proptest! {
         //
         // `:status` の値 `"value"` は構築時検査 (3DIGIT) に違反するため
         // `Header::new` では構築できない。トレーラーで疑似ヘッダーが拒否される
-        // ことの確認が主目的なので、構築時検査を迂回して直接構築する。
+        // ことの確認が主目的なので、wire 模擬で直接構築する。
         let mut bad_trailer = filtered;
-        bad_trailer.push(Header::from_validated_parts(
-            std::borrow::Cow::Owned(pseudo.clone()),
-            std::borrow::Cow::Borrowed(b"value"),
-        ));
+        bad_trailer.push(wire_header(&pseudo, b"value"));
 
         let result = validate_trailer_headers(&bad_trailer);
         prop_assert!(
@@ -420,13 +418,10 @@ proptest! {
     ) {
         let build_ok = Header::new(b":protocol", &value).is_ok();
 
-        // バイパス経路で Header を組み立て、validation 側の判定だけを取り出す
+        // wire 模擬で Header を組み立て、validation 側の判定だけを取り出す
         let headers = vec![
             Header::new(b":method", b"CONNECT").unwrap(),
-            Header::from_validated_parts(
-                std::borrow::Cow::Borrowed(b":protocol"),
-                std::borrow::Cow::Owned(value.clone()),
-            ),
+            wire_header(b":protocol", &value),
             Header::new(b":scheme", b"https").unwrap(),
             Header::new(b":path", b"/wt").unwrap(),
             Header::new(b":authority", b"example.com").unwrap(),

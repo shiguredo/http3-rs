@@ -199,15 +199,6 @@ proptest! {
         prop_assert_eq!(via_new, via_static);
     }
 
-    /// Property: `from_validated_parts` と `new` が同じ値を返す (内部バックドアと
-    /// 公開 API のロジック一致)
-    #[test]
-    fn prop_from_validated_parts_matches_new(value in 0u64..=VarInt::MAX.get()) {
-        let via_new = VarInt::new(value).unwrap();
-        let via_validated = VarInt::from_validated_parts(value);
-        prop_assert_eq!(via_new, via_validated);
-    }
-
     /// Property: VarInt 範囲外の `u64` は `new` で必ず Err、`TryFrom<u64>` でも必ず Err
     /// (構築 API の値域判定が一貫している)
     #[test]

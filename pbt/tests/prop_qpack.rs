@@ -1,23 +1,13 @@
 //! Property-Based Testing for QPACK (RFC 9204)
 
-use std::borrow::Cow;
-
 use pbt::strategies::{valid_header_name, valid_header_value};
+use pbt::wire_header;
 use proptest::prelude::*;
 use shiguredo_http3::qpack::{
     DecodeOutput, Decoder, DecoderInstruction, DecoderStream, DecoderStreamReceiver,
     DynamicDecoder, DynamicEncoder, DynamicEntry, DynamicTable, Encoder, EncoderInstruction,
     EncoderStream, EncoderStreamReceiver, Header, STATIC_TABLE_LEN, find_static_entry, huffman,
 };
-
-/// PBT 用のテストヘルパー: 検査をスキップして `Header` を構築する
-///
-/// strategy が生成するバイト列は `Header::new` の構築時検査を必ずしも通らないため、
-/// QPACK encoder の入力構築には検査バイパス経路を使う。
-/// (`Header::from_validated_parts` は `internal-test` フィーチャー経由で利用)
-fn unchecked_header(name: &[u8], value: &[u8]) -> Header {
-    Header::from_validated_parts(Cow::Owned(name.to_vec()), Cow::Owned(value.to_vec()))
-}
 
 /// 動的テーブル容量 (RFC 9204 Section 3.2)
 const DYNAMIC_TABLE_CAPACITY: u64 = 4096;
@@ -467,8 +457,8 @@ proptest! {
         let decoder = Decoder::new();
 
         let headers = vec![
-            unchecked_header(b":method", b"GET"),
-            unchecked_header(b":path", &value),
+            wire_header(b":method", b"GET"),
+            wire_header(b":path", &value),
         ];
 
         let mut buf = vec![0u8; 1024];
@@ -492,7 +482,7 @@ proptest! {
         let encoder = Encoder::new();
         let decoder = Decoder::new();
 
-        let headers = vec![unchecked_header(&name, &value)];
+        let headers = vec![wire_header(&name, &value)];
 
         let mut buf = vec![0u8; 1024];
         let encoded_len = encoder.encode(&mut buf, &headers).unwrap();
@@ -517,7 +507,7 @@ proptest! {
 
         let headers: Vec<Header> = headers_data
             .iter()
-            .map(|(n, v)| unchecked_header(n, v))
+            .map(|(n, v)| wire_header(n, v))
             .collect();
 
         let mut buf = vec![0u8; 4096];
@@ -839,7 +829,7 @@ prop_compose! {
         name in valid_header_name(),
         value in valid_header_value(),
     ) -> Header {
-        unchecked_header(&name, &value)
+        wire_header(&name, &value)
     }
 }
 
@@ -900,7 +890,7 @@ proptest! {
         encoder.set_table_capacity(DYNAMIC_TABLE_CAPACITY);
         encoder.insert(entry_name.clone(), entry_value.clone());
 
-        let headers = vec![unchecked_header(&entry_name, &entry_value)];
+        let headers = vec![wire_header(&entry_name, &entry_value)];
         let mut buf = vec![0u8; 64 * 1024];
         let Some(encoded_len) = encoder.encode(&mut buf, &headers, 0) else {
             return Ok(());
@@ -968,20 +958,16 @@ proptest! {
 }
 
 proptest! {
-    /// Property: `Header::from_validated_parts` と `Header::new` が同じ値を返す
-    /// (内部バックドアと公開 API のロジック一致。Box::leak を使わないので
-    /// デフォルトのケース数で網羅する)
+    /// Property: `wire_header` と `Header::new` が同じ値を返す
+    /// (wire 模擬経路と公開 API のロジック一致)
     #[test]
-    fn prop_header_from_validated_parts_matches_new(
+    fn prop_wire_header_matches_new(
         name in valid_header_name(),
         value in valid_header_value(),
     ) {
         let via_new = Header::new(&name, &value).unwrap();
-        let via_validated = Header::from_validated_parts(
-            Cow::Owned(name.clone()),
-            Cow::Owned(value.clone()),
-        );
-        prop_assert_eq!(via_new, via_validated);
+        let via_wire = wire_header(&name, &value);
+        prop_assert_eq!(via_new, via_wire);
     }
 
     /// Property (完全性): `Header::new` が受理する任意 (name, value) は、

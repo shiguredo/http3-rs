@@ -30,9 +30,6 @@ exclude = [
 edition = "2024"
 rust-version = "1.88"
 
-[features]
-# PBT / fuzz / 内部テストから `Header::from_validated_parts` などの検査バイパス API
-# を利用するためのフィーチャー。通常のアプリケーションでは有効化しない。
-internal-test = []
-
 [dependencies]
+
+[features]

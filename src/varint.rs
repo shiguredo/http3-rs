@@ -125,18 +125,6 @@ impl VarInt {
         );
         Self(value)
     }
-
-    /// 検証済みの `u64` から検査をスキップして構築する (`internal-test` 限定公開)
-    ///
-    /// 外部クレートからは `internal-test` フィーチャーを有効化したときだけ呼べる。
-    /// PBT / fuzz / 統合テストから wire 由来の不正値ではなく構築済み値を
-    /// `VarInt` 型に注入するためのバックドア。通常のアプリケーションコードは
-    /// 絶対に使ってはいけない。
-    #[cfg(any(test, feature = "internal-test"))]
-    #[doc(hidden)]
-    pub const fn from_validated_parts(value: u64) -> Self {
-        Self::from_validated_parts_internal(value)
-    }
 }
 
 impl fmt::Display for VarInt {
@@ -299,7 +287,7 @@ mod tests {
     // `pbt/tests/prop_varint.rs` 側で PBT 化している (CLAUDE.md: PBT で実現できる
     // ものを単体テストで書かない)。
     // 本モジュールには PBT で表現しにくいケース (const 文脈の正常系、エラー詳細の
-    // 文面検査、`from_validated_parts` の境界、`u64::MAX` のエラー) のみ残す。
+    // 文面検査、`from_validated_parts_internal` の境界、`u64::MAX` のエラー) のみ残す。
 
     #[test]
     fn test_new_rejects_out_of_range() {
@@ -358,10 +346,13 @@ mod tests {
     }
 
     #[test]
-    fn test_from_validated_parts_boundaries() {
+    fn test_from_validated_parts_internal_boundaries() {
         // crate 内部からのみ呼ばれるが、境界値で正しく組み立てられることを確認
-        assert_eq!(VarInt::from_validated_parts(0).get(), 0);
-        assert_eq!(VarInt::from_validated_parts(VarInt::MAX.get()), VarInt::MAX);
+        assert_eq!(VarInt::from_validated_parts_internal(0).get(), 0);
+        assert_eq!(
+            VarInt::from_validated_parts_internal(VarInt::MAX.get()),
+            VarInt::MAX,
+        );
     }
 
     #[test]
