@@ -1096,8 +1096,8 @@ impl Connection {
 
     /// QUIC からストリームデータを受信
     pub fn feed_stream(&mut self, stream_id: u64, data: &[u8], fin: bool) -> Result<(), Error> {
-        if self.error.is_some() {
-            return Err(Error::ConnectionError(ErrorCode::InternalError));
+        if let Some(ref err) = self.error {
+            return Err(err.clone());
         }
 
         let kind = StreamKind::from_stream_id(stream_id);
@@ -5766,5 +5766,39 @@ mod tests {
         // send_datagram も拒否される (datagram の前提として Established だが、
         // 念のため Draining で WtSessionDraining を返す経路を確認する)
         // ※ Pending → Draining でも内部状態として Draining になることを確認する
+    }
+
+    #[test]
+    fn test_feed_stream_propagates_original_error() {
+        // エラー状態の接続に対して feed_stream を呼んだ場合、
+        // InternalError ではなく元のエラーが返ることを検証する
+        let mut conn = Connection::client(Settings::default());
+        conn.set_control_stream_id(2).unwrap();
+
+        // 接続エラー状態を直接設定する
+        conn.error = Some(Error::ConnectionError(ErrorCode::ClosedCriticalStream));
+
+        let err = conn.feed_stream(0, &[0x01], false).unwrap_err();
+        assert_eq!(
+            err,
+            Error::ConnectionError(ErrorCode::ClosedCriticalStream),
+            "feed_stream は InternalError ではなく元のエラーを返すこと"
+        );
+    }
+
+    #[test]
+    fn test_feed_stream_propagates_frame_error() {
+        // 別のエラー種別でも正しく伝播されることを検証する
+        let mut conn = Connection::client(Settings::default());
+        conn.set_control_stream_id(2).unwrap();
+
+        conn.error = Some(Error::ConnectionError(ErrorCode::FrameError));
+
+        let err = conn.feed_stream(4, &[0x01, 0x00], false).unwrap_err();
+        assert_eq!(
+            err,
+            Error::ConnectionError(ErrorCode::FrameError),
+            "feed_stream は元の FrameError を返すこと"
+        );
     }
 }
