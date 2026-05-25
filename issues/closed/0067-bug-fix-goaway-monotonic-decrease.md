@@ -44,3 +44,13 @@ match self.role {
 
 - `src/connection/mod.rs:3727-3732`
 - RFC 9114 Section 5.2
+
+## 解決方法
+
+polish-issue 時に前提の RFC 解釈が誤っていることを確認したためクローズする。
+
+RFC 9114 Section 5.2 (line 1111-1112): "the identifier in each frame MUST NOT be greater than the identifier in any previous frame" — サーバー・クライアント共通で「非増加」（equality を許可）と規定されている。現在の実装 `id > last_id` → reject はこの要件を正しく実装しており、修正は不要。
+
+issue が主張していた「サーバーは strictly lower（厳密減少）」という区別は RFC に存在しない。
+
+Completed: 2026-05-26

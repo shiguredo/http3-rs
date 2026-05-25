@@ -36,3 +36,13 @@ Model: deepseek-v4-pro
 ## 影響範囲
 
 - 新規ファイル: `pbt/tests/prop_webtransport/` (main.rs + サブモジュール)
+
+## 解決方法
+
+polish-issue 時に `pbt/tests/prop_webtransport.rs` (1802行) が既に存在し、issue が要求する全項目をカバーしていることを確認したためクローズする。初回コミット 2026-04-07（issue 作成日 2026-05-14 より前）。
+
+- `ConnectRequest`, `ConnectResponse`, `DraftVersion`, `TransportCapabilities` のラウンドトリップテスト: 実装済み
+- `ApplicationErrorCode::to_http3_code` / `from_http3_code` のラウンドトリップテスト: 実装済み
+- `Session` の状態遷移、`process_capsule`、フロー制御: 実装済み
+
+Completed: 2026-05-26

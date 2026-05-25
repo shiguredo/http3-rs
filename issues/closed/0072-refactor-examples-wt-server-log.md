@@ -28,3 +28,11 @@ CLAUDE.md L151 の「使う場合は log を使うこと」に従い、`tracing`
 - `examples/wt_server/src/main.rs`
 - `examples/wt_server/src/webtransport.rs`
 - `examples/wt_server/src/tls.rs`
+
+## 解決方法
+
+polish-issue 時に issue の前提が誤っていることを確認したためクローズする。
+
+AGENTS.md (148-149行) は「ログは tracing を使うこと / ログのフィルタリングは tracing-subscriber を使うこと」と規定しており、`examples/wt_server` が tracing を使用しているのは AGENTS.md の規定に**準拠**している。issue は旧 CLAUDE.md の文言を誤って引用したものと推測される。
+
+Completed: 2026-05-26

@@ -1,44 +1,84 @@
 # 0076: close_with_error がクローズ済みセッションでカプセル未送信状態を作る
 
-Created: 2026-05-14
-Model: deepseek-v4-pro
+- Priority: Medium
+- Created: 2026-05-14
+- Model: deepseek-v4-pro
+- Branch: feature/fix-close-with-error-session-closed
 
-## 概要
+## 目的
 
-`src/webtransport/session.rs:763-783` の `close_with_error` は:
+`src/webtransport/session.rs` の `close_with_error` (763行) で:
 
-1. `queue_capsule(CloseSession)` → クローズ済みチェックにより早期リターン
-2. `close_session_sent = true` → フラグは設定される
+1. `queue_capsule(CloseSession {...})` がクローズ済みセッションでは `is_closed()` チェックにより早期リターン（738-741行）
+2. `close_session_sent = true` が無条件に設定される（781行）
 
-という順序で実行される。`close()` が先行して呼ばれセッションが既に `Closed` の場合、
-`queue_capsule` は `is_closed()` で早期リターンし `CLOSE_SESSION` カプセルが
-キューされないが、`close_session_sent = true` は設定される。
-結果として「カプセル未送信なのに送信済みフラグが立つ」状態になる。
+結果として「CLOSE_SESSION カプセルが実際にはキューされていないのに、送信済みフラグが立つ」という不整合が発生する。
+
+## 優先度根拠
+
+Medium: セッション状態の不整合を引き起こすが、クローズ済みセッションに対する操作であるため実害は限定的。ただしデバッグ時の混乱や、`is_close_session_sent()` に依存するロジックに将来的に影響する可能性がある。
+
+## 現状
+
+```rust
+// session.rs:780-782
+self.queue_capsule(capsule);        // クローズ済みなら何もしない
+self.close_session_sent = true;      // 無条件に true
+self.close(Some(application_error)); // セッションを閉じる
+```
+
+`queue_capsule` (738-742行):
+```rust
+pub fn queue_capsule(&mut self, capsule: Capsule) {
+    if self.is_closed() {
+        return;
+    }
+    self.pending_capsules.push(capsule);
+}
+```
 
 ## 再現手順
 
 1. ピアが先に `WT_CLOSE_SESSION` を送信
-2. `process_capsule(CloseSession)` が `close()` を呼び出しセッションが `Closed` になる
-3. 応答としてアプリが `close_with_error` を呼び出す
+2. `process_capsule(CloseSession)` がセッションを `Closed` 状態に遷移させる
+3. アプリケーションが応答として `close_with_error` を呼び出す
 4. `queue_capsule` は `is_closed()` でスキップされるが `close_session_sent = true` になる
+5. `is_close_session_sent()` が `true` を返すが、送信キューにカプセルは存在しない
 
-## 修正方針
+## 設計方針
 
-`close_session_sent` をカプセルが実際にキューされた場合のみ true にする。
+`close_session_sent` をカプセルが実際にキューされた場合のみ設定する。`queue_capsule` の返り値を利用するか、キュー前に `is_closed()` チェックを行う。
 
 ```rust
-// 修正前
-session.queue_capsule(Capsule::CloseSession { ... })?;
-session.close_session_sent = true;
-session.close();
-
-// 修正後 (カプセルキュー成功時のみフラグを立てる)
-if session.queue_capsule(Capsule::CloseSession { ... }).is_ok() {
-    session.close_session_sent = true;
+// 修正後: クローズ済みなら早期リターン
+pub fn close_with_error(&mut self, code: u32, message: impl Into<String>) {
+    if self.is_closed() {
+        return;
+    }
+    // ... (既存のメッセージ切り詰め処理)
+    self.queue_capsule(capsule);
+    self.close_session_sent = true;
+    self.close(Some(application_error));
 }
-session.close();
 ```
+
+## テスト戦略
+
+単体テスト: クローズ済みセッションに対して `close_with_error` を呼んだ際に `is_close_session_sent()` が `false` のまま（または事前に close した側のフラグ状態が維持される）ことを確認。
+
+## 完了条件
+
+- クローズ済みセッションで `close_with_error` を呼んだ際に不整合が発生しないこと
+- 単体テストが pass すること
+- 既存テスト (`cargo test`) が全て pass すること
 
 ## 影響範囲
 
-- `src/webtransport/session.rs:763-783`
+- `src/webtransport/session.rs`: `close_with_error` 関数 (763行)
+
+## CHANGES.md エントリ案
+
+```
+- [FIX] close_with_error がクローズ済みセッションで close_session_sent フラグを誤設定する問題を修正する
+  - @担当者
+```

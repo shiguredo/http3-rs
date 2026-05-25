@@ -1,27 +1,53 @@
-# 0078: src/validation.rs が約 1845 行で過大 — モジュール分割が必要
+# 0078: src/validation.rs が過大 — モジュール分割が必要
 
-Created: 2026-05-14
-Model: deepseek-v4-pro
+- Priority: Low
+- Created: 2026-05-14
+- Model: deepseek-v4-pro
+- Branch: feature/refactor-split-validation-module
 
-## 概要
+## 目的
 
-`src/validation.rs` が約 1845 行に肥大化している。
+`src/validation.rs` が約 1845 行に肥大化している。リクエスト検証、レスポンス検証、トレーラー検証、content-length 整合性検証、authority 検証が同一ファイルに混在しており保守性が低い。
 
+## 優先度根拠
+
+Low: 機能的な問題はない。コードの見通し改善と保守性向上が目的。
+
+## 現状
+
+- `src/validation.rs`: 約 1845 行
 - `validate_request_headers`: 約 550 行の単一関数
-- レスポンス検証、トレーラー検証、content-length 整合性検証、authority 検証が同ファイルに混在
-- テストも 1100 行以上ありファイルが過大
+- レスポンス/トレーラー/content-length/authority 検証が混在
+- インラインテスト約 1100 行（issue 0074 で分離予定）
 
-## 修正方針
+## 設計方針
 
-以下のように分割を検討する:
-1. `src/validation/mod.rs` — 共通部分、`HeaderField` trait、`is_valid_*` ヘルパー
+`src/validation/` ディレクトリモジュールに分割する:
+
+1. `src/validation/mod.rs` — 共通ヘルパー (`is_valid_*` 関数群)、公開 API の re-export
 2. `src/validation/request.rs` — `validate_request_headers`
 3. `src/validation/response.rs` — `validate_response_headers`
 4. `src/validation/trailer.rs` — `validate_trailer_headers`
 5. `src/validation/content_length.rs` — `validate_content_length`
-6. `src/validation/authority.rs` — `is_valid_authority` 等
+
+注: issue 0074（インラインテスト分離）を先に実施すること。テスト分離後にモジュール分割を行う方が安全。
+
+## 完了条件
+
+- `src/validation.rs` が `src/validation/` ディレクトリモジュールに変換されていること
+- 公開 API に変更がないこと（re-export で互換性維持）
+- `cargo test` が全て pass すること
 
 ## 影響範囲
 
-- `src/validation.rs` (1845 行 → 削除)
-- 新規: `src/validation/` ディレクトリ以下
+- `src/validation.rs` → `src/validation/` ディレクトリ（mod.rs + サブモジュール）
+- `src/lib.rs`: `mod validation` の参照パスは変更なし
+
+## CHANGES.md エントリ案
+
+```
+### misc
+
+- [UPDATE] validation.rs をディレクトリモジュールに分割する
+  - @担当者
+```
