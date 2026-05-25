@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/fix-send-request-error-level
 
@@ -83,9 +84,20 @@ return Err(Error::StreamError(ErrorCode::RequestRejected));
 - RFC 9114 Section 5.2: GOAWAY 受信後の新規リクエスト禁止規定。境界超過リクエストは処理されないが接続自体は維持される
 - draft-ietf-webtrans-http3-15 Section 5.1: フロー制御無効時の同時セッション制限。サーバーは過剰ストリームを `H3_REQUEST_REJECTED` で個別にリセットしなければならない (MUST)
 
+## 解決方法
+
+`src/connection/mod.rs` の `send_request` 関数内の 2 箇所で `Error::ConnectionError(ErrorCode::RequestRejected)` を `Error::StreamError(ErrorCode::RequestRejected)` に変更した:
+
+1. フロー制御なし WT セッション上限超過時 (line 3422)
+2. GOAWAY 境界超過時 (line 3434)
+
+テスト変更:
+- `tests/test_webtransport_draft_connect.rs`: 既存テストの期待値を `ConnectionError` から `StreamError` に修正
+- `tests/test_connection.rs`: 新規作成。GOAWAY 受信後の send_request 拒否、境界値テスト、接続維持確認の 3 テストを追加
+
 ## CHANGES.md エントリ案
 
 ```
 - [FIX] send_request で GOAWAY 境界超過およびフロー制御なし WT セッション上限超過時に ConnectionError ではなく StreamError を返すよう修正する
-  - @担当者
+  - @voluntas
 ```

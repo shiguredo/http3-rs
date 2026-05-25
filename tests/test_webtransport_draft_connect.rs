@@ -681,11 +681,11 @@ mod no_flow_control_single_session {
             .send_request(&headers, false)
             .expect("1 本目の WT CONNECT は送信できるべき");
 
-        // 2 本目: RequestRejected で拒否される
+        // 2 本目: RequestRejected で拒否される (接続は維持)
         let err = client.send_request(&headers, false).unwrap_err();
         assert!(
-            matches!(err, Error::ConnectionError(ErrorCode::RequestRejected)),
-            "FC 無効時の 2 本目は RequestRejected で拒否されるべき: {err:?}"
+            matches!(err, Error::StreamError(ErrorCode::RequestRejected)),
+            "FC 無効時の 2 本目は StreamError(RequestRejected) で拒否されるべき: {err:?}"
         );
     }
 }

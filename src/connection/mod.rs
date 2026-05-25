@@ -3419,7 +3419,7 @@ impl Connection {
             // (draft-ietf-webtrans-http3-15 Section 5.1)
             // 将来のドラフトで定義が変更される可能性がある。
             if !self.is_wt_flow_control_enabled() && self.count_active_wt_sessions() >= 1 {
-                return Err(Error::ConnectionError(ErrorCode::RequestRejected));
+                return Err(Error::StreamError(ErrorCode::RequestRejected));
             }
         }
 
@@ -3431,7 +3431,7 @@ impl Connection {
         if let Some(goaway_id) = self.peer_goaway_request_boundary()
             && self.next_stream_id >= goaway_id.get()
         {
-            return Err(Error::ConnectionError(ErrorCode::RequestRejected));
+            return Err(Error::StreamError(ErrorCode::RequestRejected));
         }
 
         let stream_id = self.next_stream_id;
