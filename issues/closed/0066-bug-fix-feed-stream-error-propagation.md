@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/fix-feed-stream-error-propagation
 
@@ -65,9 +66,27 @@ if let Some(ref err) = self.error {
 
 - `src/connection/mod.rs`: `feed_stream` 関数冒頭のエラーチェック（1099行付近）
 
+## 解決方法
+
+`src/connection/mod.rs` の `feed_stream` 関数冒頭のエラー状態チェックを `feed_datagram` と同一パターンに統一した:
+
+```rust
+// 修正前
+if self.error.is_some() {
+    return Err(Error::ConnectionError(ErrorCode::InternalError));
+}
+
+// 修正後
+if let Some(ref err) = self.error {
+    return Err(err.clone());
+}
+```
+
+インラインテスト 2 件を `connection/mod.rs` の `#[cfg(test)]` モジュールに追加し、`ClosedCriticalStream` と `FrameError` の 2 パターンで元のエラーが正しく伝播されることを検証した。
+
 ## CHANGES.md エントリ案
 
 ```
 - [FIX] feed_stream がエラー状態で本来のエラーではなく InternalError を返していた問題を修正する
-  - @担当者
+  - @voluntas
 ```
