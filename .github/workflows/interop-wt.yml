@@ -37,7 +37,7 @@ jobs:
         uses: shiguredo/github-actions/.github/actions/slack-notify@main
         with:
           status: ${{ job.status }}
-          slack_channel: sora-moqt
+          slack_channel: rust-oss
           slack_webhook: ${{ secrets.SLACK_WEBHOOK }}
           notify_mode: failure_and_fixed
         env:
