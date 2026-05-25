@@ -10,7 +10,7 @@ bytes = "1.11"
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
 http = "1.4"
-quiche = "0.28"
+quiche = "0.29"
 quinn = { version = "0.11", default-features = false, features = [
   "runtime-tokio",
   "rustls-aws-lc-rs"
@@ -26,7 +26,7 @@ shiguredo_ngtcp2 = { path = "../../crates/ngtcp2-rs" }
 tempfile = "3.27"
 tokio = { version = "1.52", features = ["full"] }
 tokio-ngtcp2 = { path = "../../crates/tokio-ngtcp2" }
-tokio-quiche = "0.18"
+tokio-quiche = "0.19"
 tokio-s2n-quic = { path = "../../crates/tokio-s2n-quic" }
 tquic = { version = "1.6", optional = true }
 

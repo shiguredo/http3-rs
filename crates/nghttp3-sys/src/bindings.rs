@@ -93,9 +93,9 @@ pub const NGHTTP3_VERSION_AGE: u32 = 1;
 pub type va_list = __builtin_va_list;
 #[doc = " @typedef\n\n :type:`nghttp3_ssize` is signed counterpart of size_t."]
 pub type nghttp3_ssize = isize;
-#[doc = " @typedef\n\n :type:`nghttp3_tstamp` is a timestamp with nanosecond resolution.\n ``UINT64_MAX`` is an invalid value, and it is often used to\n indicate that no value is set.  This type is available since\n v1.12.0."]
+#[doc = " @typedef\n\n :type:`nghttp3_tstamp` is a timestamp with nanosecond resolution.\n ``UINT64_MAX`` is an invalid value, and it is often used to\n indicate that no value is set.\n\n .. version-added:: 1.12.0"]
 pub type nghttp3_tstamp = u64;
-#[doc = " @typedef\n\n :type:`nghttp3_duration` is a period of time in nanosecond\n resolution.  ``UINT64_MAX`` is an invalid value, and it is often\n used to indicate that no value is set.  This type is available\n since v1.12.0."]
+#[doc = " @typedef\n\n :type:`nghttp3_duration` is a period of time in nanosecond\n resolution.  ``UINT64_MAX`` is an invalid value, and it is often\n used to indicate that no value is set.\n\n .. version-added:: 1.12.0."]
 pub type nghttp3_duration = u64;
 #[doc = " @functypedef\n\n :type:`nghttp3_malloc` is a custom memory allocator to replace\n :manpage:`malloc(3)`.  The |user_data| is the\n :member:`nghttp3_mem.user_data`."]
 pub type nghttp3_malloc = ::std::option::Option<
@@ -419,13 +419,13 @@ const _: () = {
     ["Offset of field: nghttp3_qpack_nv::flags"]
         [::std::mem::offset_of!(nghttp3_qpack_nv, flags) - 20usize];
 };
-#[doc = " :enum:`NGHTTP3_QPACK_INDEXING_STRAT_NONE` does not index any\n fields not defined in :type:`nghttp3_qpack_token`.  This is the\n default strategy.  You can still use\n :macro:`NGHTTP3_NV_FLAG_TRY_INDEX` to index a particular field.\n This enum is available since v1.13.0."]
+#[doc = " :enum:`NGHTTP3_QPACK_INDEXING_STRAT_NONE` does not index any\n fields not defined in :type:`nghttp3_qpack_token`.  This is the\n default strategy.  You can still use\n :macro:`NGHTTP3_NV_FLAG_TRY_INDEX` to index a particular field.\n\n .. version-added:: 1.13.0"]
 pub const nghttp3_qpack_indexing_strat_NGHTTP3_QPACK_INDEXING_STRAT_NONE:
     nghttp3_qpack_indexing_strat = 0;
-#[doc = " :enum:`NGHTTP3_QPACK_INDEXING_STRAT_EAGER` indexes all fields not\n defined in :type:`nghttp3_qpack_token`.  Please note that QPACK\n encoder might not index the field in various reasons.  This enum\n is available since v1.13.0."]
+#[doc = " :enum:`NGHTTP3_QPACK_INDEXING_STRAT_EAGER` indexes all fields not\n defined in :type:`nghttp3_qpack_token`.  Please note that QPACK\n encoder might not index the field in various reasons.\n\n .. version-added:: 1.13.0"]
 pub const nghttp3_qpack_indexing_strat_NGHTTP3_QPACK_INDEXING_STRAT_EAGER:
     nghttp3_qpack_indexing_strat = 1;
-#[doc = " @enum\n\n :type:`nghttp3_qpack_indexing_strat` defines the QPACK dynamic\n table indexing strategies for fields not defined in\n :type:`nghttp3_qpack_token`.  This type is available since v1.13.0.\n"]
+#[doc = " @enum\n\n :type:`nghttp3_qpack_indexing_strat` defines the QPACK dynamic\n table indexing strategies for fields not defined in\n :type:`nghttp3_qpack_token`.\n\n .. version-added:: 1.13.0"]
 pub type nghttp3_qpack_indexing_strat = ::std::os::raw::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -441,7 +441,7 @@ unsafe extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 unsafe extern "C" {
-    #[doc = " @function\n\n `nghttp3_qpack_encoder_new2` initializes QPACK encoder.  |pencoder|\n must be non-NULL pointer.  |hard_max_dtable_capacity| is the upper\n bound of the dynamic table capacity.  |seed| must be unpredictable\n value, and is used to seed the internal data structure.  |mem| is a\n memory allocator.  This function allocates memory for\n :type:`nghttp3_qpack_encoder` itself, and assigns its pointer to\n |*pencoder| if it succeeds.\n\n The maximum dynamic table capacity is still 0.  In order to change\n the maximum dynamic table capacity, call\n `nghttp3_qpack_encoder_set_max_dtable_capacity`.\n\n This function returns 0 if it succeeds, or one of the following\n negative error codes:\n\n :macro:`NGHTTP3_ERR_NOMEM`\n     Out of memory.\n\n This function is available since v1.11.0."]
+    #[doc = " @function\n\n `nghttp3_qpack_encoder_new2` initializes QPACK encoder.  |pencoder|\n must be non-NULL pointer.  |hard_max_dtable_capacity| is the upper\n bound of the dynamic table capacity.  |seed| must be unpredictable\n value, and is used to seed the internal data structure.  |mem| is a\n memory allocator.  This function allocates memory for\n :type:`nghttp3_qpack_encoder` itself, and assigns its pointer to\n |*pencoder| if it succeeds.\n\n The maximum dynamic table capacity is still 0.  In order to change\n the maximum dynamic table capacity, call\n `nghttp3_qpack_encoder_set_max_dtable_capacity`.\n\n This function returns 0 if it succeeds, or one of the following\n negative error codes:\n\n :macro:`NGHTTP3_ERR_NOMEM`\n     Out of memory.\n\n .. version-added:: 1.11.0"]
     pub fn nghttp3_qpack_encoder_new2(
         pencoder: *mut *mut nghttp3_qpack_encoder,
         hard_max_dtable_capacity: usize,
@@ -488,7 +488,7 @@ unsafe extern "C" {
     );
 }
 unsafe extern "C" {
-    #[doc = " @function\n\n `nghttp3_qpack_encoder_set_indexing_strat` sets the dynamic table\n indexing strategy |strat| to |encoder|.  This function is available\n since v1.13.0.\n"]
+    #[doc = " @function\n\n `nghttp3_qpack_encoder_set_indexing_strat` sets the dynamic table\n indexing strategy |strat| to |encoder|.\n\n .. version-added:: 1.13.0"]
     pub fn nghttp3_qpack_encoder_set_indexing_strat(
         encoder: *mut nghttp3_qpack_encoder,
         strat: nghttp3_qpack_indexing_strat,
@@ -499,9 +499,15 @@ unsafe extern "C" {
     pub fn nghttp3_qpack_encoder_ack_everything(encoder: *mut nghttp3_qpack_encoder);
 }
 unsafe extern "C" {
-    #[doc = " @function\n\n `nghttp3_qpack_encoder_get_num_blocked_streams` returns the number\n of streams which are potentially blocked at decoder side."]
+    #[doc = " @function\n\n .. warning::\n\n   .. version-deprecated:: 1.16.0\n     Use `nghttp3_qpack_encoder_get_num_blocked_streams2` instead.\n\n `nghttp3_qpack_encoder_get_num_blocked_streams` returns the number\n of streams which are potentially blocked at decoder side."]
     pub fn nghttp3_qpack_encoder_get_num_blocked_streams(
         encoder: *mut nghttp3_qpack_encoder,
+    ) -> usize;
+}
+unsafe extern "C" {
+    #[doc = " @function\n\n `nghttp3_qpack_encoder_get_num_blocked_streams2` returns the number\n of streams which are potentially blocked at decoder side.\n\n .. version-added:: 1.16.0"]
+    pub fn nghttp3_qpack_encoder_get_num_blocked_streams2(
+        encoder: *const nghttp3_qpack_encoder,
     ) -> usize;
 }
 #[repr(C)]
@@ -522,8 +528,14 @@ unsafe extern "C" {
     pub fn nghttp3_qpack_stream_context_del(sctx: *mut nghttp3_qpack_stream_context);
 }
 unsafe extern "C" {
-    #[doc = " @function\n\n `nghttp3_qpack_stream_context_get_ricnt` returns required insert\n count."]
+    #[doc = " @function\n\n .. warning::\n\n   .. version-deprecated:: 1.16.0\n     Use `nghttp3_qpack_stream_context_get_ricnt2` instead.\n\n `nghttp3_qpack_stream_context_get_ricnt` returns required insert\n count."]
     pub fn nghttp3_qpack_stream_context_get_ricnt(sctx: *mut nghttp3_qpack_stream_context) -> u64;
+}
+unsafe extern "C" {
+    #[doc = " @function\n\n `nghttp3_qpack_stream_context_get_ricnt2` returns required insert\n count."]
+    pub fn nghttp3_qpack_stream_context_get_ricnt2(
+        sctx: *const nghttp3_qpack_stream_context,
+    ) -> u64;
 }
 unsafe extern "C" {
     #[doc = " @function\n\n `nghttp3_qpack_stream_context_reset` resets the state of |sctx|.\n Then it can be reused for decoding an another HTTP field section in\n the same stream."]
@@ -572,16 +584,22 @@ unsafe extern "C" {
     ) -> nghttp3_ssize;
 }
 unsafe extern "C" {
-    #[doc = " @function\n\n `nghttp3_qpack_decoder_write_decoder` writes decoder stream into\n |dbuf|.\n\n The caller must ensure that `nghttp3_buf_left(dbuf)\n <nghttp3_buf_left>` >=\n `nghttp3_qpack_decoder_get_decoder_streamlen(decoder)\n <nghttp3_qpack_decoder_get_decoder_streamlen>`."]
+    #[doc = " @function\n\n `nghttp3_qpack_decoder_write_decoder` writes decoder stream into\n |dbuf|.\n\n The caller must ensure that `nghttp3_buf_left(dbuf)\n <nghttp3_buf_left>` >=\n `nghttp3_qpack_decoder_get_decoder_streamlen2(decoder)\n <nghttp3_qpack_decoder_get_decoder_streamlen2>`."]
     pub fn nghttp3_qpack_decoder_write_decoder(
         decoder: *mut nghttp3_qpack_decoder,
         dbuf: *mut nghttp3_buf,
     );
 }
 unsafe extern "C" {
-    #[doc = " @function\n\n `nghttp3_qpack_decoder_get_decoder_streamlen` returns the length of\n decoder stream that is currently pending."]
+    #[doc = " @function\n\n .. warning::\n\n   .. version-deprecated:: 1.16.0\n     Use `nghttp3_qpack_decoder_get_decoder_streamlen2` instead.\n\n `nghttp3_qpack_decoder_get_decoder_streamlen` returns the length of\n decoder stream that is currently pending."]
     pub fn nghttp3_qpack_decoder_get_decoder_streamlen(
         decoder: *mut nghttp3_qpack_decoder,
+    ) -> usize;
+}
+unsafe extern "C" {
+    #[doc = " @function\n\n `nghttp3_qpack_decoder_get_decoder_streamlen2` returns the length\n of decoder stream that is currently pending.\n\n .. version-added:: 1.16.0"]
+    pub fn nghttp3_qpack_decoder_get_decoder_streamlen2(
+        decoder: *const nghttp3_qpack_decoder,
     ) -> usize;
 }
 unsafe extern "C" {
@@ -644,13 +662,13 @@ pub struct nghttp3_settings {
     pub enable_connect_protocol: u8,
     #[doc = " :member:`h3_datagram`, if set to nonzero, enables HTTP/3\n Datagrams (see :rfc:`9297`)."]
     pub h3_datagram: u8,
-    #[doc = " :member:`origin_list`, if set, must contain a serialized HTTP/3\n ORIGIN frame (see :rfc:`9412`) payload.  The ORIGIN frame payload\n is a sequence of zero or more of a length prefixed byte string.\n The length is encoded in 2 bytes in network byte order.  If\n :member:`origin_list->len <nghttp3_vec.len>` is zero, an empty\n ORIGIN frame is sent.  An application must keep the buffer\n pointed by :member:`origin_list->base <nghttp3_vec.base>` alive\n until the :type:`nghttp3_conn` to which this field was passed is\n freed by `nghttp3_conn_del`.  The object pointed to by this field\n is copied internally, and does not need to be kept alive.  Only\n server uses this field.  This field is available since v1.11.0."]
+    #[doc = " :member:`origin_list`, if set, must contain a serialized HTTP/3\n ORIGIN frame (see :rfc:`9412`) payload.  The ORIGIN frame payload\n is a sequence of zero or more of a length prefixed byte string.\n The length is encoded in 2 bytes in network byte order.  If\n :member:`origin_list->len <nghttp3_vec.len>` is zero, an empty\n ORIGIN frame is sent.  An application must keep the buffer\n pointed by :member:`origin_list->base <nghttp3_vec.base>` alive\n until the :type:`nghttp3_conn` to which this field was passed is\n freed by `nghttp3_conn_del`.  The object pointed to by this field\n is copied internally, and does not need to be kept alive.  Only\n server uses this field.\n\n .. version-added:: 1.11.0"]
     pub origin_list: *const nghttp3_vec,
-    #[doc = " :member:`glitch_ratelim_burst` is the maximum number of tokens\n available to \"glitch\" rate limiter.  \"glitch\" is a suspicious\n activity from a remote endpoint.  If detected, certain amount of\n tokens are consumed.  If no tokens are available to consume, the\n connection is closed.  The rate of token generation is specified\n by :member:`glitch_ratelim_rate`.  This feature is enabled only\n when `nghttp3_conn_read_stream2` is used.  This field has been\n available since v1.12.0."]
+    #[doc = " :member:`glitch_ratelim_burst` is the maximum number of tokens\n available to \"glitch\" rate limiter.  \"glitch\" is a suspicious\n activity from a remote endpoint.  If detected, certain amount of\n tokens are consumed.  If no tokens are available to consume, the\n connection is closed.  The rate of token generation is specified\n by :member:`glitch_ratelim_rate`.  This feature is enabled only\n when `nghttp3_conn_read_stream2` is used.\n\n .. version-added:: 1.12.0"]
     pub glitch_ratelim_burst: u64,
-    #[doc = " :member:`glitch_ratelim_rate` is the number of tokens generated\n per second.  See :member:`glitch_ratelim_burst` for \"glitch\" rate\n limiter.  This field has been available since v1.12.0."]
+    #[doc = " :member:`glitch_ratelim_rate` is the number of tokens generated\n per second.  See :member:`glitch_ratelim_burst` for \"glitch\" rate\n limiter.\n\n .. version-added:: 1.12.0"]
     pub glitch_ratelim_rate: u64,
-    #[doc = " :member:`qpack_indexing_strat` defines the QPACK dynamic table\n indexing strategy for those fields that are not defined in\n :type:`nghttp3_qpack_token`.  This field has been available since\n v1.13.0."]
+    #[doc = " :member:`qpack_indexing_strat` defines the QPACK dynamic table\n indexing strategy for those fields that are not defined in\n :type:`nghttp3_qpack_token`.\n\n .. version-added:: 1.13.0"]
     pub qpack_indexing_strat: nghttp3_qpack_indexing_strat,
     #[doc = " :member:`wt_enabled`, if set to nonzero, enables WebTransport.\n\n https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-15\n\n TODO For client, it might be better to always enable\n WebTransport.  Only draft version of client needs to send\n SETTINGS_WT_ENABLED."]
     pub wt_enabled: u8,
@@ -682,7 +700,7 @@ const _: () = {
     ["Offset of field: nghttp3_settings::wt_enabled"]
         [::std::mem::offset_of!(nghttp3_settings, wt_enabled) - 68usize];
 };
-#[doc = " @struct\n\n :type:`nghttp3_proto_settings` contains HTTP/3 settings that this\n library can recognize.  This field is available since v1.14.0."]
+#[doc = " @struct\n\n :type:`nghttp3_proto_settings` contains HTTP/3 settings that this\n library can recognize.\n\n .. version-added:: 1.14.0"]
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct nghttp3_proto_settings {
@@ -827,7 +845,7 @@ pub type nghttp3_shutdown = ::std::option::Option<
         conn_user_data: *mut ::std::os::raw::c_void,
     ) -> ::std::os::raw::c_int,
 >;
-#[doc = " @functypedef\n\n .. warning::\n\n   Deprecated since v1.14.0.  Use :type:`nghttp3_recv_settings2`\n   instead.  New settings will not be notified with this callback.\n\n :type:`nghttp3_recv_settings` is a callback function which is\n invoked when SETTINGS frame is received.  |settings| is a received\n remote HTTP/3 settings.\n\n The implementation of this callback must return 0 if it succeeds.\n Returning :macro:`NGHTTP3_ERR_CALLBACK_FAILURE` will return to the\n caller immediately.  Any values other than 0 is treated as\n :macro:`NGHTTP3_ERR_CALLBACK_FAILURE`."]
+#[doc = " @functypedef\n\n .. warning::\n\n   .. version-deprecated:: 1.14.0\n     Use :type:`nghttp3_recv_settings2` instead.  New settings will\n     not be notified with this callback.\n\n :type:`nghttp3_recv_settings` is a callback function which is\n invoked when SETTINGS frame is received.  |settings| is a received\n remote HTTP/3 settings.\n\n The implementation of this callback must return 0 if it succeeds.\n Returning :macro:`NGHTTP3_ERR_CALLBACK_FAILURE` will return to the\n caller immediately.  Any values other than 0 is treated as\n :macro:`NGHTTP3_ERR_CALLBACK_FAILURE`."]
 pub type nghttp3_recv_settings = ::std::option::Option<
     unsafe extern "C" fn(
         conn: *mut nghttp3_conn,
@@ -853,7 +871,7 @@ pub type nghttp3_end_origin = ::std::option::Option<
 >;
 #[doc = " @functypedef\n\n :type:`nghttp3_rand` is a callback function which is invoked when\n unpredictable data of |destlen| bytes are needed.  The\n implementation must write unpredictable data of |destlen| bytes\n into the buffer pointed by |dest|."]
 pub type nghttp3_rand = ::std::option::Option<unsafe extern "C" fn(dest: *mut u8, destlen: usize)>;
-#[doc = " @functypedef\n\n :type:`nghttp3_recv_settings2` is a callback function which is\n invoked when SETTINGS frame is received.  |settings| is a received\n remote HTTP/3 settings.\n\n The implementation of this callback must return 0 if it succeeds.\n Returning :macro:`NGHTTP3_ERR_CALLBACK_FAILURE` will return to the\n caller immediately.  Any values other than 0 is treated as\n :macro:`NGHTTP3_ERR_CALLBACK_FAILURE`.  This callback is available\n since v1.14.0."]
+#[doc = " @functypedef\n\n :type:`nghttp3_recv_settings2` is a callback function which is\n invoked when SETTINGS frame is received.  |settings| is a received\n remote HTTP/3 settings.\n\n The implementation of this callback must return 0 if it succeeds.\n Returning :macro:`NGHTTP3_ERR_CALLBACK_FAILURE` will return to the\n caller immediately.  Any values other than 0 is treated as\n :macro:`NGHTTP3_ERR_CALLBACK_FAILURE`.\n\n .. version-added:: 1.14.0"]
 pub type nghttp3_recv_settings2 = ::std::option::Option<
     unsafe extern "C" fn(
         conn: *mut nghttp3_conn,
@@ -905,15 +923,15 @@ pub struct nghttp3_callbacks {
     pub reset_stream: nghttp3_reset_stream,
     #[doc = " :member:`shutdown` is a callback function which is invoked when\n the remote endpoint has signalled initiation of connection\n shutdown."]
     pub shutdown: nghttp3_shutdown,
-    #[doc = " .. warning::\n\n   Deprecated since v1.14.0.  Use :member:`recv_settings2`\n   instead.\n\n :member:`recv_settings` is a callback function which is invoked\n when SETTINGS frame is received."]
+    #[doc = " .. warning::\n\n   .. version-deprecated:: 1.14.0\n     Use :member:`recv_settings2` instead.\n\n :member:`recv_settings` is a callback function which is invoked\n when SETTINGS frame is received."]
     pub recv_settings: nghttp3_recv_settings,
-    #[doc = " :member:`recv_origin` is a callback function which is invoked\n when a single origin in an ORIGIN frame is received.  This field\n is available since v1.11.0."]
+    #[doc = " :member:`recv_origin` is a callback function which is invoked\n when a single origin in an ORIGIN frame is received.\n\n .. version-added:: 1.11.0"]
     pub recv_origin: nghttp3_recv_origin,
-    #[doc = " :member:`end_origin` is a callback function which is invoked when\n an ORIGIN frame has been completely processed.  This field is\n available since v1.11.0."]
+    #[doc = " :member:`end_origin` is a callback function which is invoked when\n an ORIGIN frame has been completely processed.\n\n .. version-added:: 1.11.0"]
     pub end_origin: nghttp3_end_origin,
-    #[doc = " :member:`rand` is a callback function which is invoked when\n unpredictable data are needed.  Although this field is optional\n due to the backward compatibility, it is recommended to specify\n this field to harden the runtime behavior against suspicious\n activities of a remote endpoint.  This field is available since\n v1.11.0."]
+    #[doc = " :member:`rand` is a callback function which is invoked when\n unpredictable data are needed.  Although this field is optional\n due to the backward compatibility, it is recommended to specify\n this field to harden the runtime behavior against suspicious\n activities of a remote endpoint.\n\n .. version-added:: 1.11.0"]
     pub rand: nghttp3_rand,
-    #[doc = " :member:`recv_settings2` is a callback function which is invoked\n when SETTINGS frame is received.  This field is available since\n v1.14.0."]
+    #[doc = " :member:`recv_settings2` is a callback function which is invoked\n when SETTINGS frame is received.\n\n .. version-added:: 1.14.0"]
     pub recv_settings2: nghttp3_recv_settings2,
     #[doc = " :member:`recv_wt_data` is a callback function which is invoked\n when data on WebTransport data stream is received."]
     pub recv_wt_data: nghttp3_recv_wt_data,
@@ -1014,7 +1032,7 @@ unsafe extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 unsafe extern "C" {
-    #[doc = " @function\n\n .. warning::\n\n   Deprecated since v1.12.0.  Use `nghttp3_conn_read_stream2`\n   instead.\n\n `nghttp3_conn_read_stream` reads data |src| of length |srclen| on\n stream identified by |stream_id|.  It returns the number of bytes\n consumed.  The \"consumed\" means that application can increase flow\n control credit (both stream and connection) of underlying QUIC\n connection by that amount.  It does not include the amount of data\n carried by DATA frame which contains application data (excluding\n any control or QPACK unidirectional streams).  See\n :type:`nghttp3_recv_data` to handle those bytes.  If |fin| is\n nonzero, this is the last data from remote endpoint in this stream.\n\n This function returns the number of bytes consumed, or one of the\n following negative error codes:\n\n :macro:`NGHTTP3_ERR_NOMEM`\n     Out of memory.\n :macro:`NGHTTP3_ERR_CALLBACK_FAILURE`\n     User callback failed.\n\n It may return the other error codes.  The negative error code means\n that |conn| encountered a connection error, and the connection must\n be closed.  Calling nghttp3 API other than `nghttp3_conn_del`\n causes undefined behavior."]
+    #[doc = " @function\n\n .. warning::\n\n   .. version-deprecated:: 1.12.0\n     Use `nghttp3_conn_read_stream2` instead.\n\n `nghttp3_conn_read_stream` reads data |src| of length |srclen| on\n stream identified by |stream_id|.  It returns the number of bytes\n consumed.  The \"consumed\" means that application can increase flow\n control credit (both stream and connection) of underlying QUIC\n connection by that amount.  It does not include the amount of data\n carried by DATA frame which contains application data (excluding\n any control or QPACK unidirectional streams).  See\n :type:`nghttp3_recv_data` to handle those bytes.  If |fin| is\n nonzero, this is the last data from remote endpoint in this stream.\n\n This function returns the number of bytes consumed, or one of the\n following negative error codes:\n\n :macro:`NGHTTP3_ERR_NOMEM`\n     Out of memory.\n :macro:`NGHTTP3_ERR_CALLBACK_FAILURE`\n     User callback failed.\n\n It may return the other error codes.  The negative error code means\n that |conn| encountered a connection error, and the connection must\n be closed.  Calling nghttp3 API other than `nghttp3_conn_del`\n causes undefined behavior."]
     pub fn nghttp3_conn_read_stream(
         conn: *mut nghttp3_conn,
         stream_id: i64,
@@ -1024,7 +1042,7 @@ unsafe extern "C" {
     ) -> nghttp3_ssize;
 }
 unsafe extern "C" {
-    #[doc = " @function\n\n `nghttp3_conn_read_stream2` reads data |src| of length |srclen| on\n stream identified by |stream_id|.  It returns the number of bytes\n consumed.  The \"consumed\" means that application can increase flow\n control credit (both stream and connection) of underlying QUIC\n connection by that amount.  It does not include the amount of data\n carried by DATA frame which contains application data (excluding\n any control or QPACK unidirectional streams).  See\n :type:`nghttp3_recv_data` to handle those bytes.  If |fin| is\n nonzero, this is the last data from remote endpoint in this stream.\n |ts| is the current timestamp, and must be non-decreasing.  It\n should be obtained from the clock that is steadily increasing.\n\n This function returns the number of bytes consumed, or one of the\n following negative error codes:\n\n :macro:`NGHTTP3_ERR_NOMEM`\n     Out of memory.\n :macro:`NGHTTP3_ERR_CALLBACK_FAILURE`\n     User callback failed.\n\n It may return the other error codes.  The negative error code means\n that |conn| encountered a connection error, and the connection must\n be closed.  Calling nghttp3 API other than `nghttp3_conn_del`\n causes undefined behavior.\n\n This function is available since v1.12.0."]
+    #[doc = " @function\n\n `nghttp3_conn_read_stream2` reads data |src| of length |srclen| on\n stream identified by |stream_id|.  It returns the number of bytes\n consumed.  The \"consumed\" means that application can increase flow\n control credit (both stream and connection) of underlying QUIC\n connection by that amount.  It does not include the amount of data\n carried by DATA frame which contains application data (excluding\n any control or QPACK unidirectional streams).  See\n :type:`nghttp3_recv_data` to handle those bytes.  If |fin| is\n nonzero, this is the last data from remote endpoint in this stream.\n |ts| is the current timestamp, and must be non-decreasing.  It\n should be obtained from the clock that is steadily increasing.\n\n This function returns the number of bytes consumed, or one of the\n following negative error codes:\n\n :macro:`NGHTTP3_ERR_NOMEM`\n     Out of memory.\n :macro:`NGHTTP3_ERR_CALLBACK_FAILURE`\n     User callback failed.\n\n It may return the other error codes.  The negative error code means\n that |conn| encountered a connection error, and the connection must\n be closed.  Calling nghttp3 API other than `nghttp3_conn_del`\n causes undefined behavior.\n\n .. version-added:: 1.12.0"]
     pub fn nghttp3_conn_read_stream2(
         conn: *mut nghttp3_conn,
         stream_id: i64,
@@ -1080,9 +1098,16 @@ unsafe extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 unsafe extern "C" {
-    #[doc = " @function\n\n `nghttp3_conn_is_stream_writable` returns nonzero if a stream\n identified by |stream_id| is writable.  It is not writable if:\n\n - the stream does not exist; or,\n - the stream is closed (e.g., `nghttp3_conn_close_stream` is\n   called); or,\n - the stream is QUIC flow control blocked (e.g.,\n   `nghttp3_conn_block_stream` is called); or,\n - the stream is input data blocked (e.g.,\n   :macro:`NGHTTP3_ERR_WOULDBLOCK` is returned from\n   :type:`nghttp3_read_data_callback`); or,\n - the stream is half-closed local (e.g.,\n   `nghttp3_conn_shutdown_stream_write` is called)."]
+    #[doc = " @function\n\n .. warning::\n\n   .. version-deprecated:: 1.16.0\n     Use `nghttp3_conn_is_stream_writable2` instead.\n\n `nghttp3_conn_is_stream_writable` returns nonzero if a stream\n identified by |stream_id| is writable.  It is not writable if:\n\n - the stream does not exist; or,\n - the stream is closed (e.g., `nghttp3_conn_close_stream` is\n   called); or,\n - the stream is QUIC flow control blocked (e.g.,\n   `nghttp3_conn_block_stream` is called); or,\n - the stream is input data blocked (e.g.,\n   :macro:`NGHTTP3_ERR_WOULDBLOCK` is returned from\n   :type:`nghttp3_read_data_callback`); or,\n - the stream is half-closed local (e.g.,\n   `nghttp3_conn_shutdown_stream_write` is called)."]
     pub fn nghttp3_conn_is_stream_writable(
         conn: *mut nghttp3_conn,
+        stream_id: i64,
+    ) -> ::std::os::raw::c_int;
+}
+unsafe extern "C" {
+    #[doc = " @function\n\n `nghttp3_conn_is_stream_writable2` returns nonzero if a stream\n identified by |stream_id| is writable.  It is not writable if:\n\n - the stream does not exist; or,\n - the stream is closed (e.g., `nghttp3_conn_close_stream` is\n   called); or,\n - the stream is QUIC flow control blocked (e.g.,\n   `nghttp3_conn_block_stream` is called); or,\n - the stream is input data blocked (e.g.,\n   :macro:`NGHTTP3_ERR_WOULDBLOCK` is returned from\n   :type:`nghttp3_read_data_callback`); or,\n - the stream is half-closed local (e.g.,\n   `nghttp3_conn_shutdown_stream_write` is called).\n\n .. version-added:: 1.16.0"]
+    pub fn nghttp3_conn_is_stream_writable2(
+        conn: *const nghttp3_conn,
         stream_id: i64,
     ) -> ::std::os::raw::c_int;
 }
@@ -1205,8 +1230,19 @@ unsafe extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 unsafe extern "C" {
-    #[doc = " @function\n\n `nghttp3_conn_get_frame_payload_left` returns the number of bytes\n left to read current frame payload for a stream denoted by\n |stream_id|.  If no such stream is found, or |stream_id| identifies\n neither client bidirectional stream nor remote control stream, it\n returns 0."]
+    #[doc = " @function\n\n `nghttp3_conn_get_stream_user_data` returns the user data\n associated to the stream identified by |stream_id|.  If no data is\n associated or the stream is not found, this function returns NULL.\n\n The user data can be associated to the stream by the following\n functions:\n\n - `nghttp3_conn_set_stream_user_data`\n - `nghttp3_conn_submit_request`\n\n .. version-added:: 1.16.0"]
+    pub fn nghttp3_conn_get_stream_user_data(
+        conn: *const nghttp3_conn,
+        stream_id: i64,
+    ) -> *mut ::std::os::raw::c_void;
+}
+unsafe extern "C" {
+    #[doc = " @function\n\n .. warning::\n\n   .. version-deprecated:: 1.16.0\n     Use `nghttp3_conn_get_frame_payload_left2` instead.\n\n `nghttp3_conn_get_frame_payload_left` returns the number of bytes\n left to read current frame payload for a stream denoted by\n |stream_id|.  If no such stream is found, or |stream_id| identifies\n neither client bidirectional stream nor remote control stream, it\n returns 0."]
     pub fn nghttp3_conn_get_frame_payload_left(conn: *mut nghttp3_conn, stream_id: i64) -> u64;
+}
+unsafe extern "C" {
+    #[doc = " @function\n\n `nghttp3_conn_get_frame_payload_left2` returns the number of bytes\n left to read current frame payload for a stream denoted by\n |stream_id|.  If no such stream is found, or |stream_id| identifies\n neither client bidirectional stream nor remote control stream, it\n returns 0.\n\n .. version-added:: 1.16.0"]
+    pub fn nghttp3_conn_get_frame_payload_left2(conn: *const nghttp3_conn, stream_id: i64) -> u64;
 }
 #[doc = " @struct\n\n :type:`nghttp3_pri` represents HTTP priority."]
 #[repr(C)]
@@ -1227,9 +1263,18 @@ const _: () = {
     ["Offset of field: nghttp3_pri::inc"][::std::mem::offset_of!(nghttp3_pri, inc) - 4usize];
 };
 unsafe extern "C" {
-    #[doc = " @function\n\n `nghttp3_conn_get_stream_priority` stores stream priority of a\n stream denoted by |stream_id| into |*dest|.  |stream_id| must\n identify client initiated bidirectional stream.  Only server can\n use this function.\n\n This function must not be called if |conn| is initialized as\n client.\n\n This function returns 0 if it succeeds, or one of the following\n negative error codes:\n\n :macro:`NGHTTP3_ERR_INVALID_ARGUMENT`\n     |stream_id| is not a client initiated bidirectional stream ID.\n :macro:`NGHTTP3_ERR_STREAM_NOT_FOUND`\n     Stream not found."]
+    #[doc = " @function\n\n .. warning::\n\n   .. version-deprecated:: 1.16.0\n     Use `nghttp3_conn_get_stream_priority2` instead.\n\n `nghttp3_conn_get_stream_priority` stores stream priority of a\n stream denoted by |stream_id| into |*dest|.  |stream_id| must\n identify client initiated bidirectional stream.  Only server can\n use this function.\n\n This function must not be called if |conn| is initialized as\n client.\n\n This function returns 0 if it succeeds, or one of the following\n negative error codes:\n\n :macro:`NGHTTP3_ERR_INVALID_ARGUMENT`\n     |stream_id| is not a client initiated bidirectional stream ID.\n :macro:`NGHTTP3_ERR_STREAM_NOT_FOUND`\n     Stream not found."]
     pub fn nghttp3_conn_get_stream_priority_versioned(
         conn: *mut nghttp3_conn,
+        pri_version: ::std::os::raw::c_int,
+        dest: *mut nghttp3_pri,
+        stream_id: i64,
+    ) -> ::std::os::raw::c_int;
+}
+unsafe extern "C" {
+    #[doc = " @function\n\n `nghttp3_conn_get_stream_priority2` stores stream priority of a\n stream denoted by |stream_id| into |*dest|.  |stream_id| must\n identify client initiated bidirectional stream.  Only server can\n use this function.\n\n This function must not be called if |conn| is initialized as\n client.\n\n This function returns 0 if it succeeds, or one of the following\n negative error codes:\n\n :macro:`NGHTTP3_ERR_INVALID_ARGUMENT`\n     |stream_id| is not a client initiated bidirectional stream ID.\n :macro:`NGHTTP3_ERR_STREAM_NOT_FOUND`\n     Stream not found.\n\n .. version-added:: 1.16.0"]
+    pub fn nghttp3_conn_get_stream_priority2_versioned(
+        conn: *const nghttp3_conn,
         pri_version: ::std::os::raw::c_int,
         dest: *mut nghttp3_pri,
         stream_id: i64,
@@ -1266,8 +1311,12 @@ unsafe extern "C" {
     pub fn nghttp3_check_header_value(value: *const u8, len: usize) -> ::std::os::raw::c_int;
 }
 unsafe extern "C" {
-    #[doc = " @function\n\n `nghttp3_conn_is_drained` returns nonzero if\n `nghttp3_conn_shutdown` has been called, and there is no active\n remote streams.  This function is for server use only."]
+    #[doc = " @function\n\n .. warning::\n\n   .. version-deprecated:: 1.16.0\n     Use `nghttp3_conn_is_drained2` instead.\n\n `nghttp3_conn_is_drained` returns nonzero if\n `nghttp3_conn_shutdown` has been called, and there is no active\n remote streams.  This function is for server use only."]
     pub fn nghttp3_conn_is_drained(conn: *mut nghttp3_conn) -> ::std::os::raw::c_int;
+}
+unsafe extern "C" {
+    #[doc = " @function\n\n `nghttp3_conn_is_drained2` returns nonzero if\n `nghttp3_conn_shutdown` has been called, and there is no active\n remote streams.  This function is for server use only.\n\n .. version-added:: 1.16.0"]
+    pub fn nghttp3_conn_is_drained2(conn: *const nghttp3_conn) -> ::std::os::raw::c_int;
 }
 unsafe extern "C" {
     #[doc = " @function\n\n `nghttp3_conn_submit_wt_request` works like\n `nghttp3_conn_submit_request`, but it is specifically tailored for\n WebTransport session establishment.  |nva| of length |nvlen|\n specifies HTTP request header fields.  They must contain at least\n the following fields:\n\n - :method = \"CONNECT\"\n - :scheme = \"https\"\n - :protocol = \"webtransport\"\n - :authority\n - :path\n\n The application must also set the following settings:\n\n - :member:`nghttp3_settings.h3_datagram = 1\n - :member:`nghttp3_settings.wt_enabled = 1\n\n It also must send the following QUIC transport parameters:\n\n - max_datagram_frame_size > 0\n - reset_stream_at\n\n The application should wait for SETTINGS frame from server and make\n sure that it satisfies server-side requirements for WebTransport.\n\n After receiving 2xx response from server, WebTransport session is\n established.  `nghttp3_conn_open_wt_data_stream` is used to open\n WebTransport data streams.\n\n This function returns 0 if it succeeds, or one of the following\n negative error codes:\n\n TBD"]
@@ -1317,6 +1366,10 @@ unsafe extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 unsafe extern "C" {
+    #[doc = " @function\n\n `nghttp3_conn_get_stream_wt_session_id` returns the WebTransport\n session ID of a stream denoted by |stream_id| if it is WebTransport\n data stream.  If the stream is not found, it is not a WebTransport\n data stream, or it is unable to get session ID, this function\n returns -1."]
+    pub fn nghttp3_conn_get_stream_wt_session_id(conn: *const nghttp3_conn, stream_id: i64) -> i64;
+}
+unsafe extern "C" {
     #[doc = " @function\n\n `nghttp3_pri_parse_priority` parses Priority header field value\n pointed by |value| of length |len|, and stores the result in the\n object pointed by |dest|.  Priority header field is defined in\n :rfc:`9218`.\n\n This function does not initialize the object pointed by |dest|\n before storing the result.  It only assigns the values that the\n parser correctly extracted to fields.\n\n This function returns 0 if it succeeds, or one of the following\n negative error codes:\n\n :macro:`NGHTTP3_ERR_INVALID_ARGUMENT`\n     Failed to parse the header field value."]
     pub fn nghttp3_pri_parse_priority_versioned(
         pri_version: ::std::os::raw::c_int,
@@ -1355,15 +1408,18 @@ unsafe extern "C" {
     pub fn nghttp3_err_is_fatal(liberr: ::std::os::raw::c_int) -> ::std::os::raw::c_int;
 }
 unsafe extern "C" {
+    pub fn nghttp3_get_uvarint(dest: *mut u64, p: *const u8) -> *const u8;
+}
+unsafe extern "C" {
+    pub fn nghttp3_get_uvarintlen(p: *const u8) -> usize;
+}
+unsafe extern "C" {
     pub fn nghttp3_get_varint(dest: *mut i64, p: *const u8) -> *const u8;
 }
 unsafe extern "C" {
-    pub fn nghttp3_get_varintlen(p: *const u8) -> usize;
+    pub fn nghttp3_put_uvarint(p: *mut u8, n: u64) -> *mut u8;
 }
 unsafe extern "C" {
-    pub fn nghttp3_put_varint(p: *mut u8, n: i64) -> *mut u8;
-}
-unsafe extern "C" {
-    pub fn nghttp3_put_varintlen(n: i64) -> usize;
+    pub fn nghttp3_put_uvarintlen(n: u64) -> usize;
 }
 pub type __builtin_va_list = *mut ::std::os::raw::c_char;

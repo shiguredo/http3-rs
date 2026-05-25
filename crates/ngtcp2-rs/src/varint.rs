@@ -1,13 +1,13 @@
 //! QUIC 可変長整数 (RFC 9000 Section 16)
 //!
-//! nghttp3 の公開 API (nghttp3_put_varint / nghttp3_get_varint) を使った
+//! nghttp3 の公開 API (nghttp3_put_uvarint / nghttp3_get_uvarint) を使った
 //! varint エンコード・デコード。
 
 use nghttp3_sys;
 
 /// 値をエンコードするのに必要なバイト数を返す
 pub fn encoded_len(n: u64) -> usize {
-    unsafe { nghttp3_sys::nghttp3_put_varintlen(n as i64) }
+    unsafe { nghttp3_sys::nghttp3_put_uvarintlen(n) }
 }
 
 /// 可変長整数を `buf` にエンコードする
@@ -22,7 +22,7 @@ pub fn encode(buf: &mut [u8], n: u64) -> usize {
     let len = encoded_len(n);
     assert!(buf.len() >= len, "varint encode: buffer too short");
     unsafe {
-        nghttp3_sys::nghttp3_put_varint(buf.as_mut_ptr(), n as i64);
+        nghttp3_sys::nghttp3_put_uvarint(buf.as_mut_ptr(), n);
     }
     len
 }
@@ -43,15 +43,15 @@ pub fn decode(buf: &[u8]) -> Option<(u64, usize)> {
     if buf.is_empty() {
         return None;
     }
-    let len = unsafe { nghttp3_sys::nghttp3_get_varintlen(buf.as_ptr()) };
+    let len = unsafe { nghttp3_sys::nghttp3_get_uvarintlen(buf.as_ptr()) };
     if buf.len() < len {
         return None;
     }
-    let mut dest = 0i64;
+    let mut dest = 0u64;
     unsafe {
-        nghttp3_sys::nghttp3_get_varint(&mut dest, buf.as_ptr());
+        nghttp3_sys::nghttp3_get_uvarint(&mut dest, buf.as_ptr());
     }
-    Some((dest as u64, len))
+    Some((dest, len))
 }
 
 #[cfg(test)]

@@ -24,7 +24,7 @@ libc = "0.2"
 # overwrite feature でのみ使用 (通常ビルドでは libclang 不要)
 bindgen = { version = "0.72", optional = true }
 shiguredo_cmake = "4.3"
-shiguredo_toml = "2026.1"
+shiguredo_toml = "2026.2"
 
 [features]
 # bindings.rs を再生成するための feature

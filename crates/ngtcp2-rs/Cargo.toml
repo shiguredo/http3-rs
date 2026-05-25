@@ -9,8 +9,8 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
-aws-lc-rs = "1.16"
-aws-lc-sys = { version = "0.40", features = ["ssl"] }
+aws-lc-rs = "1.17"
+aws-lc-sys = { version = "0.41", features = ["ssl"] }
 libc = "0.2"
 nghttp3-sys = { path = "../nghttp3-sys" }
 ngtcp2-sys = { path = "../ngtcp2-sys" }
