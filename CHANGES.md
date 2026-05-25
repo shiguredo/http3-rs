@@ -177,6 +177,8 @@
   - @voluntas
 - [UPDATE] fuzz ターゲットからラウンドトリップ等のプロパティ検証を削除し、パニック安全性の検証だけに絞る
   - @voluntas
+- [UPDATE] interop/h3 と interop/wt の edition / rust-version を workspace 継承に変更する
+  - @voluntas
 - [ADD] `refs/` に RFC 7541, RFC 9110, RFC 9651 の一次資料を追加する
   - @voluntas
 - [ADD] ngtcp2/nghttp3 と s2n-quic の WebTransport 相互運用テストを平日 JST 11:00 に実行する GitHub Actions ワークフローを追加する

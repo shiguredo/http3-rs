@@ -1,8 +1,8 @@
 [package]
 name = "interop_h3"
 version = "0.0.0"
-edition = "2024"
-rust-version = "1.88"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]

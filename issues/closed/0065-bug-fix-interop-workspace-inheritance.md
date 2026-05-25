@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/fix-interop-workspace-inheritance
 
@@ -44,13 +45,15 @@ rust-version.workspace = true
 - `interop/h3/Cargo.toml`
 - `interop/wt/Cargo.toml`
 
-## CHANGES.md エントリ案
+## 解決方法
 
-既存エントリ「edition と rust-version を `[workspace.package]` で共通化...」の対象漏れの修正であり、新規エントリは不要（misc セクションに記載する場合のみ以下）:
+`interop/h3/Cargo.toml` と `interop/wt/Cargo.toml` の `edition = "2024"` / `rust-version = "1.88"` を `edition.workspace = true` / `rust-version.workspace = true` に変更した。
+
+## CHANGES.md エントリ案
 
 ```
 ### misc
 
 - [UPDATE] interop/h3 と interop/wt の edition / rust-version を workspace 継承に変更する
-  - @担当者
+  - @voluntas
 ```
