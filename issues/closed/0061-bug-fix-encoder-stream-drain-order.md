@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/fix-encoder-stream-drain-order
 
@@ -183,9 +184,25 @@ Fuzzing: 不要（意図的エラーパスは単体テストでカバー）。
 - RFC 9204 Section 3.2.2 (Dynamic Table Capacity and Eviction): 容量超過エントリの追加は QPACK_ENCODER_STREAM_ERROR で接続エラーとする MUST 規定
 - RFC 9204 Section 6 (Error Handling): QPACK_ENCODER_STREAM_ERROR (0x0201) の定義
 
+## 解決方法
+
+`src/qpack/encoder_stream.rs` の 3 メソッドで `self.recv_buffer.drain(..consumed)` をテーブル操作・テーブル参照の後に移動した:
+
+- `decode_insert_with_name_ref`: 静的/動的テーブル参照と insert の後に drain
+- `decode_insert_with_literal_name`: insert の後に drain
+- `decode_duplicate`: duplicate の後に drain
+
+`tests/test_qpack_encoder_stream.rs` を新規作成し、以下の 5 エラーパスについて「正しいエラーが返ること」および「バッファが drain されていないこと」を検証する単体テストを追加した:
+
+1. 静的テーブル不正インデックス (InvalidIndex)
+2. 動的テーブル不正相対インデックス (InvalidIndex)
+3. 名前参照挿入の容量超過 (DecodeFailed)
+4. リテラル名挿入の容量超過 (DecodeFailed)
+5. 複製の不正相対インデックス (InvalidIndex)
+
 ## CHANGES.md エントリ案
 
 ```
 - [FIX] QPACK エンコーダーストリームレシーバーでテーブル操作前にバッファを drain していた処理順序を修正する
-  - @担当者
+  - @voluntas
 ```

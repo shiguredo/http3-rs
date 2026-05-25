@@ -273,9 +273,7 @@ impl EncoderStreamReceiver {
         let (value, value_len) = decode_string(&self.recv_buffer[consumed..])?;
         consumed += value_len;
 
-        self.recv_buffer.drain(..consumed);
-
-        // 動的テーブルに挿入
+        // テーブル参照・テーブル操作を先に行い、成功後に drain
         let name = if is_static {
             STATIC_TABLE
                 .get(name_index as usize)
@@ -293,6 +291,8 @@ impl EncoderStreamReceiver {
         table
             .insert(name, value.clone())
             .ok_or(QpackError::DecodeFailed)?;
+
+        self.recv_buffer.drain(..consumed);
 
         Ok(Some(EncoderInstruction::InsertWithNameReference {
             is_static,
@@ -313,12 +313,12 @@ impl EncoderStreamReceiver {
         let (value, value_len) = decode_string(&self.recv_buffer[consumed..])?;
         consumed += value_len;
 
-        self.recv_buffer.drain(..consumed);
-
-        // 動的テーブルに挿入
+        // テーブル操作を先に行い、成功後に drain
         table
             .insert(name.clone(), value.clone())
             .ok_or(QpackError::DecodeFailed)?;
+
+        self.recv_buffer.drain(..consumed);
 
         Ok(Some(EncoderInstruction::InsertWithLiteralName {
             name,
@@ -333,12 +333,12 @@ impl EncoderStreamReceiver {
     ) -> Result<Option<EncoderInstruction>, QpackError> {
         let (relative_index, consumed) = decode_integer(&self.recv_buffer, 5)?;
 
-        self.recv_buffer.drain(..consumed);
-
-        // 動的テーブルで複製
+        // テーブル操作を先に行い、成功後に drain
         table
             .duplicate(relative_index)
             .ok_or(QpackError::InvalidIndex(relative_index))?;
+
+        self.recv_buffer.drain(..consumed);
 
         Ok(Some(EncoderInstruction::Duplicate { relative_index }))
     }

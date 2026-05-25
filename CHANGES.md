@@ -154,6 +154,8 @@
   `ServerConnection::send_goaway` の引数型を `u64` から `VarInt` に変更し、
   ローカル API 利用時の値域違反を型レベルで排除する
   - @voluntas
+- [FIX] QPACK エンコーダーストリームレシーバーでテーブル操作前にバッファを drain していた処理順序を修正する
+  - @voluntas
 
 ### misc
 
