@@ -156,6 +156,8 @@
   - @voluntas
 - [FIX] QPACK エンコーダーストリームレシーバーでテーブル操作前にバッファを drain していた処理順序を修正する
   - @voluntas
+- [FIX] send_request で GOAWAY 境界超過およびフロー制御なし WT セッション上限超過時に ConnectionError ではなく StreamError を返すよう修正する
+  - @voluntas
 
 ### misc
 
