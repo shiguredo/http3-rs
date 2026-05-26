@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/fix-connection-max-table-capacity
 
@@ -68,3 +69,13 @@ let max_table_capacity = local_settings
 - [FIX] Connection::new で QPACK max_table_capacity が未設定時に Limits のデフォルト値 (4096) にフォールバックするよう修正する
   - @担当者
 ```
+
+## 解決方法
+
+バグは存在しなかった。修正不要として close する。
+
+### 理由
+
+`Connection::new` (行 627) で `Settings::from_limits(&limits)` が呼ばれ、`local_settings.qpack_max_table_capacity` は常に `Some(VarInt(4096))` に設定される。ユーザーが `Settings::new()` (全フィールド `None`) を渡しても、行 639 の `if let Some(v) = settings.qpack_max_table_capacity` の条件に入らないだけで、`local_settings.qpack_max_table_capacity` は `Some(VarInt(4096))` のまま維持される。
+
+したがって、行 673 の `.unwrap_or(0)` のフォールバック値には到達せず、issue が主張する「QPACK 動的テーブルが無効化されるバグ」は存在しない。
