@@ -245,4 +245,18 @@ proptest! {
             "maximum < current_max なのに MaxDataDecreased でない: maximum={}, current_max={}", maximum, current_max
         );
     }
+
+    /// Property: maximum > MAX_VARINT なら MaxDataExceedsLimit
+    #[test]
+    fn prop_validate_max_data_exceeds_limit(
+        excess in 1u64..1000,
+    ) {
+        let maximum = MAX_VARINT + excess;
+        let result = Capsule::validate_max_data(maximum, 0);
+        prop_assert_eq!(
+            result,
+            Err(CapsuleValidationError::MaxDataExceedsLimit),
+            "maximum > MAX_VARINT なのに MaxDataExceedsLimit でない: maximum={}", maximum
+        );
+    }
 }
