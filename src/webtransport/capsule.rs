@@ -458,8 +458,15 @@ impl Capsule {
 
     /// WT_MAX_DATA の値を検証する
     ///
+    /// - `maximum` が VarInt 上限 (`2^62-1`) を超える場合: `MaxDataExceedsLimit` (H3_DATAGRAM_ERROR)
     /// - `maximum` が `current_max` より小さい場合: `MaxDataDecreased` (WT_FLOW_CONTROL_ERROR)
+    ///
+    /// draft-ietf-webtrans-http3-15 Section 5.6.4
+    /// 将来のドラフトで変更される可能性がある
     pub fn validate_max_data(maximum: u64, current_max: u64) -> Result<(), CapsuleValidationError> {
+        if maximum > crate::VarInt::MAX.get() {
+            return Err(CapsuleValidationError::MaxDataExceedsLimit);
+        }
         if maximum < current_max {
             return Err(CapsuleValidationError::MaxDataDecreased);
         }
@@ -574,10 +581,17 @@ mod tests {
         assert!(Capsule::validate_max_data(100, 50).is_ok());
         // 正常: 同じ値
         assert!(Capsule::validate_max_data(100, 100).is_ok());
+        // 正常: VarInt 上限値
+        assert!(Capsule::validate_max_data(crate::VarInt::MAX.get(), 0).is_ok());
         // エラー: 減少
         assert_eq!(
             Capsule::validate_max_data(50, 100),
             Err(CapsuleValidationError::MaxDataDecreased)
+        );
+        // エラー: VarInt 上限超過
+        assert_eq!(
+            Capsule::validate_max_data(crate::VarInt::MAX.get() + 1, 0),
+            Err(CapsuleValidationError::MaxDataExceedsLimit)
         );
     }
 

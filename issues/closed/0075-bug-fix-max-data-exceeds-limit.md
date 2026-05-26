@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/fix-max-data-exceeds-limit
 
@@ -62,9 +63,19 @@ pub fn validate_max_data(maximum: u64, current_max: u64) -> Result<(), CapsuleVa
 
 - draft-ietf-webtrans-http3-15 Section 5.6: フロー制御の MAX_DATA / MAX_STREAMS — VarInt 値域内であるべき
 
+## 解決方法
+
+`Capsule::validate_max_data` に VarInt 上限チェック (`maximum > VarInt::MAX.get()`) を追加した。
+
+### 変更内容
+
+- `src/webtransport/capsule.rs`: `validate_max_data` に `maximum > crate::VarInt::MAX.get()` のチェックを追加し、超過時に `MaxDataExceedsLimit` を返す
+- `src/webtransport/capsule.rs`: 単体テストに VarInt 上限値の正常テストと上限超過のエラーテストを追加
+- `pbt/tests/prop_capsule.rs`: `prop_validate_max_data_exceeds_limit` PBT を追加
+
 ## CHANGES.md エントリ案
 
 ```
 - [FIX] validate_max_data に VarInt 上限チェックを追加し MaxDataExceedsLimit エラーの発生経路を実装する
-  - @担当者
+  - @voluntas
 ```
