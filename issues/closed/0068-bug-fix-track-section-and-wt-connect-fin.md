@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/fix-track-section-and-wt-connect-fin
 
@@ -107,11 +108,27 @@ if is_connect {
 - RFC 9114 Section 4.4: CONNECT メソッド — ストリームは open のまま維持する必要がある
 - draft-ietf-webtrans-http3-15 Section 3: WebTransport セッションは CONNECT ストリーム上で確立され、双方向の Capsule 通信に使用される
 
+## 解決方法
+
+### 問題 1: track_section の順序修正
+
+`src/connection/mod.rs` の `send_request` と `send_response` で `qpack_encoder.track_section()` を `stream.send_encoded_headers()` の後に移動した。`send_encoded_headers` が失敗した場合に `track_section` へ到達しないため、未送出セクションがエンコーダーに登録されたままになる問題が解消される。
+
+### 問題 2: WebTransport CONNECT の FIN 拒否
+
+`send_request` の FIN チェックの条件を `is_connect && !has_protocol` から `is_connect` に拡張し、`stream.set_connect_request()` は `!has_protocol` の場合のみ実行するようにした。
+
+### テスト
+
+インラインテスト 2 件を追加:
+- `test_wt_connect_rejects_fin`: WebTransport CONNECT で fin=true → `StreamError(MessageError)`
+- `test_wt_connect_without_fin_succeeds`: WebTransport CONNECT で fin=false → 成功
+
 ## CHANGES.md エントリ案
 
 ```
 - [FIX] send_request / send_response で track_section が send_encoded_headers の前に呼ばれていた問題を修正する
-  - @担当者
+  - @voluntas
 - [FIX] WebTransport CONNECT リクエストで fin=true が拒否されない問題を修正する
-  - @担当者
+  - @voluntas
 ```

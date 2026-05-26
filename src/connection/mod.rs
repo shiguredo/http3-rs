@@ -3448,10 +3448,6 @@ impl Connection {
             .ok_or(Error::ConnectionError(ErrorCode::InternalError))?;
         qpack_buf.truncate(qpack_len);
 
-        // フィールドセクションの送信を記録 (RFC 9204 Section 2.1.1, 4.4.1)
-        let ric = self.qpack_encoder.last_required_insert_count();
-        self.qpack_encoder.track_section(stream_id, ric);
-
         let mut stream = RequestStream::new(stream_id);
         // HEAD リクエストの場合は Content-Length 検証でのレスポンス body チェックをスキップする
         if headers
@@ -3466,14 +3462,24 @@ impl Connection {
             .iter()
             .any(|h| h.name() == b":method" && h.value() == b"CONNECT");
         let has_protocol = headers.iter().any(|h| h.name() == b":protocol");
-        if is_connect && !has_protocol {
-            // plain CONNECT ではストリームを open のまま維持する必要がある (RFC 9114 Section 4.4)
+        if is_connect {
+            // CONNECT ストリームは open のまま維持する必要があるため FIN は禁止
+            // (RFC 9114 Section 4.4, draft-ietf-webtrans-http3-15 Section 3)
             if fin {
                 return Err(Error::StreamError(ErrorCode::MessageError));
             }
-            stream.set_connect_request();
+            if !has_protocol {
+                stream.set_connect_request();
+            }
         }
         stream.send_encoded_headers(&qpack_buf, fin, false)?;
+
+        // フィールドセクションの送信を記録 (RFC 9204 Section 2.1.1, 4.4.1)
+        // 送信成功後に行う: send_encoded_headers が失敗した場合に未送出セクションが
+        // エンコーダーに登録されたままになるのを防ぐ
+        let ric = self.qpack_encoder.last_required_insert_count();
+        self.qpack_encoder.track_section(stream_id, ric);
+
         self.streams.insert(stream_id, stream);
 
         // WebTransport CONNECT の場合、セッションを Pending 状態で登録
@@ -3572,10 +3578,6 @@ impl Connection {
             .get_mut(&stream_id)
             .ok_or(Error::StreamNotFound(stream_id))?;
 
-        // フィールドセクションの送信を記録 (RFC 9204 Section 2.1.1, 4.4.1)
-        let ric = self.qpack_encoder.last_required_insert_count();
-        self.qpack_encoder.track_section(stream_id, ric);
-
         // 1xx 中間レスポンスかどうかを判定 (RFC 9114 Section 4.1)
         // HTTP/3 は 101 (Switching Protocols) をサポートしない (RFC 9114 Section 4.5)
         let is_interim = headers.iter().any(|h| {
@@ -3588,6 +3590,12 @@ impl Connection {
         });
 
         stream.send_encoded_headers(&qpack_buf, fin, is_interim)?;
+
+        // フィールドセクションの送信を記録 (RFC 9204 Section 2.1.1, 4.4.1)
+        // 送信成功後に行う: send_encoded_headers が失敗した場合に未送出セクションが
+        // エンコーダーに登録されたままになるのを防ぐ
+        let ric = self.qpack_encoder.last_required_insert_count();
+        self.qpack_encoder.track_section(stream_id, ric);
 
         // サーバー側: WebTransport CONNECT に対する 2xx レスポンス送信時に
         // セッションを Established に遷移させる (draft-ietf-webtrans-http3-15 Section 3)
@@ -5799,6 +5807,46 @@ mod tests {
             err,
             Error::ConnectionError(ErrorCode::FrameError),
             "feed_stream は元の FrameError を返すこと"
+        );
+    }
+
+    #[test]
+    fn test_wt_connect_rejects_fin() {
+        // WebTransport CONNECT で fin=true を指定すると StreamError(MessageError) が返ることを検証
+        let (mut client, _server) = setup_wt_pair();
+
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport-h3").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
+        ];
+
+        let err = client.send_request(&headers, true).unwrap_err();
+        assert!(
+            matches!(err, Error::StreamError(ErrorCode::MessageError)),
+            "WebTransport CONNECT で fin=true は StreamError(MessageError) であること: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_wt_connect_without_fin_succeeds() {
+        // WebTransport CONNECT で fin=false なら成功することを検証
+        let (mut client, _server) = setup_wt_pair();
+
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").unwrap(),
+            Header::new(b":protocol", b"webtransport-h3").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":path", b"/wt").unwrap(),
+        ];
+
+        let stream_id = client.send_request(&headers, false).unwrap();
+        assert_eq!(
+            stream_id, 0,
+            "WebTransport CONNECT で fin=false は成功すること"
         );
     }
 }

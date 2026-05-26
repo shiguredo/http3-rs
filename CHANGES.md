@@ -160,6 +160,10 @@
   - @voluntas
 - [FIX] feed_stream がエラー状態で本来のエラーではなく InternalError を返していた問題を修正する
   - @voluntas
+- [FIX] send_request / send_response で track_section が send_encoded_headers の前に呼ばれていた問題を修正する
+  - @voluntas
+- [FIX] WebTransport CONNECT リクエストで fin=true が拒否されない問題を修正する
+  - @voluntas
 
 ### misc
 
