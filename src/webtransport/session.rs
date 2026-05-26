@@ -761,6 +761,9 @@ impl Session {
     ///
     /// WT_CLOSE_SESSION 送信後すぐに CONNECT ストリームへ FIN を送信すること (draft-ietf-webtrans-http3-15 Section 6)。
     pub fn close_with_error(&mut self, code: u32, message: impl Into<String>) {
+        if self.is_closed() {
+            return;
+        }
         let mut message = message.into();
         // エラーメッセージは 1024 バイトを超えてはならない
         // (draft-ietf-webtrans-http3-15 Section 6)
@@ -1103,6 +1106,32 @@ mod tests {
 
         assert!(session.is_closed());
         assert_eq!(session.pending_capsules().len(), 1);
+    }
+
+    #[test]
+    fn test_session_close_with_error_on_closed_session() {
+        // クローズ済みセッションで close_with_error を呼んでも
+        // close_session_sent フラグが誤設定されないことを確認する
+        let mut session = Session::new(0);
+        session.set_established();
+
+        // ピアからの CloseSession を先に処理してセッションをクローズする
+        session
+            .process_capsule(&Capsule::CloseSession {
+                error_code: 1,
+                message: "peer closed".to_string(),
+            })
+            .expect("CloseSession capsule should be accepted");
+        assert!(session.is_closed());
+        assert!(!session.is_close_session_sent());
+
+        // クローズ済みセッションに対して close_with_error を呼ぶ
+        session.close_with_error(42, "local close");
+
+        // close_session_sent が false のまま (カプセルは送信されていない)
+        assert!(!session.is_close_session_sent());
+        // 送信キューにカプセルが追加されていない
+        assert!(session.pending_capsules().is_empty());
     }
 
     #[test]

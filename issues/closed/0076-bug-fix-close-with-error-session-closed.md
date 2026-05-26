@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/fix-close-with-error-session-closed
 
@@ -76,9 +77,18 @@ pub fn close_with_error(&mut self, code: u32, message: impl Into<String>) {
 
 - `src/webtransport/session.rs`: `close_with_error` 関数 (763行)
 
+## 解決方法
+
+`close_with_error` の先頭に `is_closed()` チェックを追加し、クローズ済みセッションでは早期リターンするようにした。
+
+### 変更内容
+
+- `src/webtransport/session.rs`: `close_with_error` の先頭に `if self.is_closed() { return; }` を追加
+- `src/webtransport/session.rs`: クローズ済みセッションでの `close_with_error` 呼び出し時に `close_session_sent` が `false` のまま、送信キューが空であることを検証する単体テストを追加
+
 ## CHANGES.md エントリ案
 
 ```
 - [FIX] close_with_error がクローズ済みセッションで close_session_sent フラグを誤設定する問題を修正する
-  - @担当者
+  - @voluntas
 ```
