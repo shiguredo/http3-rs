@@ -71,12 +71,6 @@ enum AssocOutcome {
     BufferOverflow,
 }
 
-/// セッション確立前にバッファリングするストリームの上限 (draft-ietf-webtrans-http3-15 Section 4.6)
-const WT_MAX_BUFFERED_STREAMS: usize = 100;
-
-/// セッション確立前にバッファリングするデータグラムの上限 (draft-ietf-webtrans-http3-15 Section 4.6)
-const WT_MAX_BUFFERED_DATAGRAMS: usize = 100;
-
 /// サーバー側で許容する Pending WebTransport セッション数の上限
 ///
 /// クライアントは未知の `session_id` で先行ストリーム / データグラムを送ってくることが
@@ -353,7 +347,6 @@ impl WtSession {
     }
 
     /// ストリームの関連付けを解除する
-    #[allow(dead_code)]
     fn disassociate_stream(&mut self, stream_id: u64) {
         self.associated_streams.remove(&stream_id);
     }
@@ -363,7 +356,7 @@ impl WtSession {
     /// バッファ上限を超えた場合は `false` を返す。
     /// 呼び出し元は `WT_BUFFERED_STREAM_REJECTED` で RESET_STREAM を送信すること。
     fn buffer_stream(&mut self, stream_id: u64, is_bidi: bool) -> bool {
-        if self.buffered_streams.len() >= WT_MAX_BUFFERED_STREAMS {
+        if self.buffered_streams.len() >= crate::webtransport::session::MAX_BUFFERED_STREAMS {
             return false;
         }
         self.buffered_streams.push(stream_id);
@@ -410,7 +403,7 @@ impl WtSession {
     /// バッファ上限を超えた場合は `false` を返す。
     /// 呼び出し元はデータグラムを破棄すること。
     fn buffer_datagram(&mut self, data: Vec<u8>) -> bool {
-        if self.buffered_datagrams.len() >= WT_MAX_BUFFERED_DATAGRAMS {
+        if self.buffered_datagrams.len() >= crate::webtransport::session::MAX_BUFFERED_DATAGRAMS {
             return false;
         }
         self.buffered_datagrams.push(data);

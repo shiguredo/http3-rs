@@ -15,6 +15,8 @@
   - @voluntas
 - [CHANGE] `FrameDecodeError::Http2Frame` / `FrameDecodeError::ServerPushNotSupported` のフィールド型を `u64` から `VarInt` に変更し、HTTP/3 frame type の値域 (RFC 9000 Section 16) を型で保証する
   - @voluntas
+- [CHANGE] `stream::request::ReceivedData` enum を削除する (未使用の死にコード)
+  - @voluntas
 - [ADD] `VarInt::from_static` / `qpack::Header::from_static` / `frame::GoawayPayload::from_static` の doc に `compile_fail` ブロックを追加し、`const fn` 検査のリグレッションを CI (`cargo test --doc`) で防止する
   - @voluntas
 - [ADD] 構築時検査の `from_static` ↔ `new` 一貫性、`from_validated_parts` ↔ `new` 整合性、`Header::new` ↔ QPACK ラウンドトリップ完全性を検証する PBT を追加する
@@ -174,6 +176,10 @@
 ### misc
 
 - [UPDATE] QPACK 整数エンコード/デコードの重複実装を src/qpack/integer.rs に一本化する
+  - @voluntas
+- [UPDATE] disassociate_stream の不要な `#[allow(dead_code)]` を削除する
+  - @voluntas
+- [UPDATE] connection/mod.rs の重複定数を webtransport/session.rs に集約する
   - @voluntas
 - [UPDATE] prop_webtransport.rs をディレクトリモジュールに分割し PBT 間の重複テストを削除する
   - @voluntas

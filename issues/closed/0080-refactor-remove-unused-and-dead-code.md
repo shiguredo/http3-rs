@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Polished: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/refactor-remove-unused-and-dead-code
@@ -73,6 +74,23 @@ Low: コンパイルやテストに問題はないが、死にコードの放置
 - `src/stream/request.rs`: `ReceivedData` enum の削除
 - `src/connection/mod.rs`: `#[allow(dead_code)]` 削除、重複定数の削除と参照変更
 - `src/webtransport/session.rs`: 定数の可視性を `pub(crate)` に変更
+
+## 解決方法
+
+issue に記載された 3 項目を全て対応した。
+
+### 項目 1: `ReceivedData` enum の削除
+- `src/stream/request.rs` から `pub enum ReceivedData` を削除
+- `grep -rn 'ReceivedData'` でゼロヒットを確認済み
+
+### 項目 2: `#[allow(dead_code)]` の削除
+- `src/connection/mod.rs` の `disassociate_stream` メソッドから `#[allow(dead_code)]` 属性を削除
+- 実際に `mod.rs:3836` で呼び出されていることを確認済み
+
+### 項目 3: 重複定数の集約
+- `src/connection/mod.rs` の `WT_MAX_BUFFERED_STREAMS` / `WT_MAX_BUFFERED_DATAGRAMS` を削除
+- `src/webtransport/session.rs` の `MAX_BUFFERED_STREAMS` / `MAX_BUFFERED_DATAGRAMS` を `pub(crate)` に変更
+- `connection/mod.rs` 内の参照を `crate::webtransport::session::MAX_BUFFERED_STREAMS` / `MAX_BUFFERED_DATAGRAMS` に置換
 
 ## CHANGES.md エントリ案
 

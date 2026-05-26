@@ -9,10 +9,10 @@ use super::error::{Error, ErrorCode};
 use super::stream::Stream;
 
 /// セッション確立前にバッファリングするストリームの上限 (draft-ietf-webtrans-http3-15 Section 4.6)
-const MAX_BUFFERED_STREAMS: usize = 100;
+pub(crate) const MAX_BUFFERED_STREAMS: usize = 100;
 
 /// セッション確立前にバッファリングするデータグラムの上限 (draft-ietf-webtrans-http3-15 Section 4.6)
-const MAX_BUFFERED_DATAGRAMS: usize = 100;
+pub(crate) const MAX_BUFFERED_DATAGRAMS: usize = 100;
 
 /// バッファリングされたストリームの情報 (draft-ietf-webtrans-http3-15 Section 4.6)
 #[derive(Debug, Clone, PartialEq, Eq)]
