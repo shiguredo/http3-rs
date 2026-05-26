@@ -44,7 +44,7 @@ mod server;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::error::{Error, ErrorCode};
-use crate::event::{Event, WtStreamReset};
+use crate::event::{Event, WebTransportEvent, WtStreamReset};
 use crate::limits::Limits;
 use crate::qpack::{
     DecodeOutput, DecoderStream, DecoderStreamReceiver, DynamicDecoder, DynamicEncoder,
@@ -824,10 +824,11 @@ impl Connection {
                 WtSessionState::Established | WtSessionState::Draining => {
                     // Draining 状態でも既存セッションのデータグラム受信は許可する
                     // (draft-ietf-webtrans-http3-15 Section 6)
-                    self.events.push_back(Event::WebTransportDatagram {
-                        session_id,
-                        payload: datagram.payload,
-                    });
+                    self.events
+                        .push_back(Event::WebTransport(WebTransportEvent::Datagram {
+                            session_id,
+                            payload: datagram.payload,
+                        }));
                 }
                 WtSessionState::Pending => {
                     // セッション未確立: バッファリング (Section 4.6)
@@ -1180,11 +1181,12 @@ impl Connection {
                     {
                         self.wt_uni_streams.remove(&stream_id);
                         let _ = session.take_buffered_stream_entry(stream_id);
-                        self.events
-                            .push_back(Event::WebTransportBufferedStreamRejected {
+                        self.events.push_back(Event::WebTransport(
+                            WebTransportEvent::BufferedStreamRejected {
                                 stream_id,
                                 error_code: WtErrorCode::BufferedStreamRejected as u64,
-                            });
+                            },
+                        ));
                     }
                 } else {
                     // WebTransport 単方向ストリーム: データフロー制御 (Section 5.4)
@@ -1201,10 +1203,11 @@ impl Connection {
                         }
                         session.add_received_data(data_len);
                     }
-                    self.events.push_back(Event::WebTransportUniStreamData {
-                        stream_id,
-                        data: data.to_vec(),
-                    });
+                    self.events
+                        .push_back(Event::WebTransport(WebTransportEvent::UniStreamData {
+                            stream_id,
+                            data: data.to_vec(),
+                        }));
                 }
             } else if self.pending_wt_uni_streams.contains_key(&stream_id) {
                 // セッション ID 未確定の WT 単方向ストリーム
@@ -1253,7 +1256,9 @@ impl Connection {
                         session.on_remote_stream_closed(false);
                     }
                     self.events
-                        .push_back(Event::WebTransportUniStreamEnd { stream_id });
+                        .push_back(Event::WebTransport(WebTransportEvent::UniStreamEnd {
+                            stream_id,
+                        }));
                 }
             }
 
@@ -1398,7 +1403,9 @@ impl Connection {
             // WebTransport 単方向ストリームの FIN (初回チャンクに FIN が付いている場合)
             if self.wt_uni_streams.remove(&stream_id).is_some() {
                 self.events
-                    .push_back(Event::WebTransportUniStreamEnd { stream_id });
+                    .push_back(Event::WebTransport(WebTransportEvent::UniStreamEnd {
+                        stream_id,
+                    }));
             }
             self.pending_wt_uni_streams.remove(&stream_id);
         }
@@ -1447,21 +1454,23 @@ impl Connection {
                     Err(()) => {
                         // セッション終了済み: WT_SESSION_GONE で拒否 (Section 6)
                         self.wt_uni_streams.remove(&stream_id);
-                        self.events
-                            .push_back(Event::WebTransportBufferedStreamRejected {
+                        self.events.push_back(Event::WebTransport(
+                            WebTransportEvent::BufferedStreamRejected {
                                 stream_id,
                                 error_code: WtErrorCode::SessionGone as u64,
-                            });
+                            },
+                        ));
                         return Ok(());
                     }
                 };
                 if outcome == AssocOutcome::BufferOverflow {
                     self.wt_uni_streams.remove(&stream_id);
-                    self.events
-                        .push_back(Event::WebTransportBufferedStreamRejected {
+                    self.events.push_back(Event::WebTransport(
+                        WebTransportEvent::BufferedStreamRejected {
                             stream_id,
                             error_code: WtErrorCode::BufferedStreamRejected as u64,
-                        });
+                        },
+                    ));
                     return Ok(());
                 }
 
@@ -1477,11 +1486,12 @@ impl Connection {
                         // バッファ上限超過: WT_BUFFERED_STREAM_REJECTED 相当
                         self.wt_uni_streams.remove(&stream_id);
                         let _ = session.take_buffered_stream_entry(stream_id);
-                        self.events
-                            .push_back(Event::WebTransportBufferedStreamRejected {
+                        self.events.push_back(Event::WebTransport(
+                            WebTransportEvent::BufferedStreamRejected {
                                 stream_id,
                                 error_code: WtErrorCode::BufferedStreamRejected as u64,
-                            });
+                            },
+                        ));
                         return Ok(());
                     }
                     return Ok(());
@@ -1502,10 +1512,11 @@ impl Connection {
                     session.add_received_stream(false);
                 }
 
-                self.events.push_back(Event::WebTransportUniStreamOpen {
-                    stream_id,
-                    session_id,
-                });
+                self.events
+                    .push_back(Event::WebTransport(WebTransportEvent::UniStreamOpen {
+                        stream_id,
+                        session_id,
+                    }));
                 // セッション ID の後にデータがあればイベントで通知
                 if !remaining.is_empty() {
                     // データフロー制御 (Section 5.4)
@@ -1522,10 +1533,11 @@ impl Connection {
                         }
                         session.add_received_data(data_len);
                     }
-                    self.events.push_back(Event::WebTransportUniStreamData {
-                        stream_id,
-                        data: remaining.to_vec(),
-                    });
+                    self.events
+                        .push_back(Event::WebTransport(WebTransportEvent::UniStreamData {
+                            stream_id,
+                            data: remaining.to_vec(),
+                        }));
                 }
                 Ok(())
             }
@@ -1635,11 +1647,12 @@ impl Connection {
                 {
                     self.wt_bidi_streams.remove(&stream_id);
                     let _ = session.take_buffered_stream_entry(stream_id);
-                    self.events
-                        .push_back(Event::WebTransportBufferedStreamRejected {
+                    self.events.push_back(Event::WebTransport(
+                        WebTransportEvent::BufferedStreamRejected {
                             stream_id,
                             error_code: WtErrorCode::BufferedStreamRejected as u64,
-                        });
+                        },
+                    ));
                     return Ok(());
                 }
                 if fin && let Some(session) = self.wt_sessions.get_mut(&session_id) {
@@ -1662,10 +1675,11 @@ impl Connection {
                     }
                     session.add_received_data(data_len);
                 }
-                self.events.push_back(Event::WebTransportBidiStreamData {
-                    stream_id,
-                    data: data.to_vec(),
-                });
+                self.events
+                    .push_back(Event::WebTransport(WebTransportEvent::BidiStreamData {
+                        stream_id,
+                        data: data.to_vec(),
+                    }));
             }
             if fin {
                 self.wt_bidi_streams.remove(&stream_id);
@@ -1674,7 +1688,9 @@ impl Connection {
                     session.on_remote_stream_closed(true);
                 }
                 self.events
-                    .push_back(Event::WebTransportBidiStreamEnd { stream_id });
+                    .push_back(Event::WebTransport(WebTransportEvent::BidiStreamEnd {
+                        stream_id,
+                    }));
             }
             return Ok(());
         }
@@ -1700,7 +1716,9 @@ impl Connection {
                         session.on_remote_stream_closed(true);
                     }
                     self.events
-                        .push_back(Event::WebTransportBidiStreamEnd { stream_id });
+                        .push_back(Event::WebTransport(WebTransportEvent::BidiStreamEnd {
+                            stream_id,
+                        }));
                 }
             }
             self.pending_wt_bidi_streams.remove(&stream_id);
@@ -1800,8 +1818,9 @@ impl Connection {
                         || session.state == WtSessionState::Pending)
                 {
                     session.state = WtSessionState::Draining;
-                    self.events
-                        .push_back(Event::WebTransportSessionDraining { session_id });
+                    self.events.push_back(Event::WebTransport(
+                        WebTransportEvent::SessionDraining { session_id },
+                    ));
                 }
             }
             Capsule::MaxData { .. }
@@ -1816,10 +1835,11 @@ impl Connection {
 
                 if fc_enabled {
                     // フロー制御有効: 上位層に通知して Session::process_capsule で処理
-                    self.events.push_back(Event::WebTransportCapsule {
-                        session_id,
-                        capsule: capsule.clone(),
-                    });
+                    self.events
+                        .push_back(Event::WebTransport(WebTransportEvent::Capsule {
+                            session_id,
+                            capsule: capsule.clone(),
+                        }));
                 }
                 // フロー制御無効時は無視 (Section 5.1)
             }
@@ -2029,13 +2049,14 @@ impl Connection {
                 });
             }
 
-            self.events.push_back(Event::WebTransportSessionClosed {
-                session_id,
-                reset_streams,
-                error_code,
-                close_error_code,
-                close_message,
-            });
+            self.events
+                .push_back(Event::WebTransport(WebTransportEvent::SessionClosed {
+                    session_id,
+                    reset_streams,
+                    error_code,
+                    close_error_code,
+                    close_message,
+                }));
         }
     }
 
@@ -2243,21 +2264,23 @@ impl Connection {
                     Err(()) => {
                         // セッション終了済み: WT_SESSION_GONE で拒否 (Section 6)
                         self.wt_bidi_streams.remove(&stream_id);
-                        self.events
-                            .push_back(Event::WebTransportBufferedStreamRejected {
+                        self.events.push_back(Event::WebTransport(
+                            WebTransportEvent::BufferedStreamRejected {
                                 stream_id,
                                 error_code: WtErrorCode::SessionGone as u64,
-                            });
+                            },
+                        ));
                         return Ok(());
                     }
                 };
                 if outcome == AssocOutcome::BufferOverflow {
                     self.wt_bidi_streams.remove(&stream_id);
-                    self.events
-                        .push_back(Event::WebTransportBufferedStreamRejected {
+                    self.events.push_back(Event::WebTransport(
+                        WebTransportEvent::BufferedStreamRejected {
                             stream_id,
                             error_code: WtErrorCode::BufferedStreamRejected as u64,
-                        });
+                        },
+                    ));
                     return Ok(());
                 }
 
@@ -2272,11 +2295,12 @@ impl Connection {
                     {
                         self.wt_bidi_streams.remove(&stream_id);
                         let _ = session.take_buffered_stream_entry(stream_id);
-                        self.events
-                            .push_back(Event::WebTransportBufferedStreamRejected {
+                        self.events.push_back(Event::WebTransport(
+                            WebTransportEvent::BufferedStreamRejected {
                                 stream_id,
                                 error_code: WtErrorCode::BufferedStreamRejected as u64,
-                            });
+                            },
+                        ));
                         return Ok(());
                     }
                     return Ok(());
@@ -2297,10 +2321,11 @@ impl Connection {
                     session.add_received_stream(true);
                 }
 
-                self.events.push_back(Event::WebTransportBidiStreamOpen {
-                    stream_id,
-                    session_id,
-                });
+                self.events
+                    .push_back(Event::WebTransport(WebTransportEvent::BidiStreamOpen {
+                        stream_id,
+                        session_id,
+                    }));
                 // session_id の後にデータがあればイベントで通知
                 if !payload.is_empty() {
                     // データフロー制御 (Section 5.4)
@@ -2317,10 +2342,11 @@ impl Connection {
                         }
                         session.add_received_data(data_len);
                     }
-                    self.events.push_back(Event::WebTransportBidiStreamData {
-                        stream_id,
-                        data: payload.to_vec(),
-                    });
+                    self.events
+                        .push_back(Event::WebTransport(WebTransportEvent::BidiStreamData {
+                            stream_id,
+                            data: payload.to_vec(),
+                        }));
                 }
                 Ok(())
             }
@@ -2561,8 +2587,9 @@ impl Connection {
                             if let Some(session) = self.wt_sessions.get_mut(&sid) {
                                 session.state = WtSessionState::Draining;
                             }
-                            self.events
-                                .push_back(Event::WebTransportSessionDraining { session_id: sid });
+                            self.events.push_back(Event::WebTransport(
+                                WebTransportEvent::SessionDraining { session_id: sid },
+                            ));
                         }
                     }
                 }
@@ -3017,11 +3044,12 @@ impl Connection {
                         if let Some(stream) = self.streams.get_mut(&stream_id) {
                             stream.set_connect();
                         }
-                        self.events
-                            .push_back(Event::WebTransportSessionEstablished {
+                        self.events.push_back(Event::WebTransport(
+                            WebTransportEvent::SessionEstablished {
                                 session_id: stream_id,
                                 flow_control_enabled: fc_enabled,
-                            });
+                            },
+                        ));
                         // バッファリングされていたストリームの Open / Data / End を順序保って配送
                         // フロー制御チェック: ストリーム数 + データ量の両方を FC 対象とする
                         // (draft-ietf-webtrans-http3-15 Section 4.6, 5.4, 5.6)
@@ -3045,15 +3073,15 @@ impl Connection {
                             session.associate_stream(buffered_stream_id);
                             // Open
                             buffered_events.push(if is_bidi {
-                                Event::WebTransportBidiStreamOpen {
+                                Event::WebTransport(WebTransportEvent::BidiStreamOpen {
                                     stream_id: buffered_stream_id,
                                     session_id: stream_id,
-                                }
+                                })
                             } else {
-                                Event::WebTransportUniStreamOpen {
+                                Event::WebTransport(WebTransportEvent::UniStreamOpen {
                                     stream_id: buffered_stream_id,
                                     session_id: stream_id,
-                                }
+                                })
                             });
                             // Data
                             if !entry_data.is_empty() {
@@ -3064,15 +3092,15 @@ impl Connection {
                                 }
                                 session.add_received_data(data_len);
                                 buffered_events.push(if is_bidi {
-                                    Event::WebTransportBidiStreamData {
+                                    Event::WebTransport(WebTransportEvent::BidiStreamData {
                                         stream_id: buffered_stream_id,
                                         data: entry_data,
-                                    }
+                                    })
                                 } else {
-                                    Event::WebTransportUniStreamData {
+                                    Event::WebTransport(WebTransportEvent::UniStreamData {
                                         stream_id: buffered_stream_id,
                                         data: entry_data,
-                                    }
+                                    })
                                 });
                             }
                             // End
@@ -3080,13 +3108,13 @@ impl Connection {
                                 session.on_remote_stream_closed(is_bidi);
                                 closed_buffered.push((buffered_stream_id, is_bidi));
                                 buffered_events.push(if is_bidi {
-                                    Event::WebTransportBidiStreamEnd {
+                                    Event::WebTransport(WebTransportEvent::BidiStreamEnd {
                                         stream_id: buffered_stream_id,
-                                    }
+                                    })
                                 } else {
-                                    Event::WebTransportUniStreamEnd {
+                                    Event::WebTransport(WebTransportEvent::UniStreamEnd {
                                         stream_id: buffered_stream_id,
-                                    }
+                                    })
                                 });
                             }
                         }
@@ -3104,10 +3132,12 @@ impl Connection {
                             // バッファリングされていたデータグラムを配送 (Section 4.6)
                             let buffered_datagrams = session.take_buffered_datagrams();
                             for payload in buffered_datagrams {
-                                self.events.push_back(Event::WebTransportDatagram {
-                                    session_id: stream_id,
-                                    payload,
-                                });
+                                self.events.push_back(Event::WebTransport(
+                                    WebTransportEvent::Datagram {
+                                        session_id: stream_id,
+                                        payload,
+                                    },
+                                ));
                             }
                         }
                     }
@@ -3179,7 +3209,7 @@ impl Connection {
 
     /// WebTransport セッションの受信データ消費を通知する
     ///
-    /// アプリケーション層が `WebTransportBidiStreamData` / `WebTransportUniStreamData`
+    /// アプリケーション層が `WebTransportEvent::BidiStreamData` / `WebTransportEvent::UniStreamData`
     /// イベントのデータを処理した後に呼ぶ。消費量に基づいて WT_MAX_DATA の
     /// ウィンドウ更新を判定し、必要に応じてカプセルを生成する。
     /// (draft-ietf-webtrans-http3-15 Section 5.6)
@@ -3610,10 +3640,10 @@ impl Connection {
 
             session.state = WtSessionState::Established;
             self.events
-                .push_back(Event::WebTransportSessionEstablished {
+                .push_back(Event::WebTransport(WebTransportEvent::SessionEstablished {
                     session_id: stream_id,
                     flow_control_enabled: fc_enabled_server,
-                });
+                }));
             // バッファリングされていたストリームの Open / Data / End を順序保って配送
             // フロー制御チェック: ストリーム数 + データ量の両方を FC 対象とする
             // (draft-ietf-webtrans-http3-15 Section 4.6, 5.4, 5.6)
@@ -3634,15 +3664,15 @@ impl Connection {
                 session.add_received_stream(is_bidi);
                 session.associate_stream(buffered_stream_id);
                 buffered_events.push(if is_bidi {
-                    Event::WebTransportBidiStreamOpen {
+                    Event::WebTransport(WebTransportEvent::BidiStreamOpen {
                         stream_id: buffered_stream_id,
                         session_id: stream_id,
-                    }
+                    })
                 } else {
-                    Event::WebTransportUniStreamOpen {
+                    Event::WebTransport(WebTransportEvent::UniStreamOpen {
                         stream_id: buffered_stream_id,
                         session_id: stream_id,
-                    }
+                    })
                 });
                 if !entry_data.is_empty() {
                     let data_len = entry_data.len() as u64;
@@ -3652,28 +3682,28 @@ impl Connection {
                     }
                     session.add_received_data(data_len);
                     buffered_events.push(if is_bidi {
-                        Event::WebTransportBidiStreamData {
+                        Event::WebTransport(WebTransportEvent::BidiStreamData {
                             stream_id: buffered_stream_id,
                             data: entry_data,
-                        }
+                        })
                     } else {
-                        Event::WebTransportUniStreamData {
+                        Event::WebTransport(WebTransportEvent::UniStreamData {
                             stream_id: buffered_stream_id,
                             data: entry_data,
-                        }
+                        })
                     });
                 }
                 if entry_fin {
                     session.on_remote_stream_closed(is_bidi);
                     closed_buffered.push((buffered_stream_id, is_bidi));
                     buffered_events.push(if is_bidi {
-                        Event::WebTransportBidiStreamEnd {
+                        Event::WebTransport(WebTransportEvent::BidiStreamEnd {
                             stream_id: buffered_stream_id,
-                        }
+                        })
                     } else {
-                        Event::WebTransportUniStreamEnd {
+                        Event::WebTransport(WebTransportEvent::UniStreamEnd {
                             stream_id: buffered_stream_id,
-                        }
+                        })
                     });
                 }
             }
@@ -3691,10 +3721,11 @@ impl Connection {
                 // バッファリングされていたデータグラムを配送 (Section 4.6)
                 let buffered_datagrams = session.take_buffered_datagrams();
                 for payload in buffered_datagrams {
-                    self.events.push_back(Event::WebTransportDatagram {
-                        session_id: stream_id,
-                        payload,
-                    });
+                    self.events
+                        .push_back(Event::WebTransport(WebTransportEvent::Datagram {
+                            session_id: stream_id,
+                            payload,
+                        }));
                 }
             }
         }
@@ -3788,7 +3819,7 @@ impl Connection {
     /// `final_size` は RFC 9000 Section 19.4 で定義される RESET_STREAM の Final Size。
     /// `RESET_STREAM_AT` (draft-ietf-quic-reliable-stream-reset) で運ばれた reliable size
     /// 以上の値であり、QUIC 層から渡される。WebTransport データストリームについては
-    /// `Event::WebTransportStreamReset::final_size` として上位層へ伝達される。
+    /// `WebTransportEvent::StreamReset` の `final_size` として上位層へ伝達される。
     pub fn stream_reset(
         &mut self,
         stream_id: u64,
@@ -3835,12 +3866,13 @@ impl Connection {
             if let Some(session) = self.wt_sessions.get_mut(&session_id) {
                 session.disassociate_stream(stream_id);
             }
-            self.events.push_back(Event::WebTransportStreamReset {
-                session_id,
-                stream_id,
-                error_code,
-                final_size,
-            });
+            self.events
+                .push_back(Event::WebTransport(WebTransportEvent::StreamReset {
+                    session_id,
+                    stream_id,
+                    error_code,
+                    final_size,
+                }));
         } else {
             // 非 WebTransport ストリーム: 汎用イベントを発行
             self.events.push_back(Event::StreamReset {
@@ -3882,11 +3914,12 @@ impl Connection {
             .copied()
             .or_else(|| self.wt_bidi_streams.get(&stream_id).copied())
         {
-            self.events.push_back(Event::WebTransportStreamStopSending {
-                session_id,
-                stream_id,
-                error_code,
-            });
+            self.events
+                .push_back(Event::WebTransport(WebTransportEvent::StreamStopSending {
+                    session_id,
+                    stream_id,
+                    error_code,
+                }));
         } else {
             self.events.push_back(Event::StopSending {
                 stream_id,
@@ -4309,24 +4342,24 @@ mod tests {
         conn.feed_stream(2, &[0x40, 0x54, 0x04, 0xAA, 0xBB], false)
             .unwrap();
 
-        // WebTransportUniStreamOpen イベント
+        // WebTransportEvent::UniStreamOpen イベント
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportUniStreamOpen {
+            Event::WebTransport(WebTransportEvent::UniStreamOpen {
                 stream_id: 2,
                 session_id: 4,
-            }
+            })
         ));
 
-        // WebTransportUniStreamData イベント
+        // WebTransportEvent::UniStreamData イベント
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportUniStreamData {
+            Event::WebTransport(WebTransportEvent::UniStreamData {
                 stream_id: 2,
                 ref data,
-            } if data == &[0xAA, 0xBB]
+            }) if data == &[0xAA, 0xBB]
         ));
     }
 
@@ -4337,17 +4370,20 @@ mod tests {
         // 初回: ストリームタイプ + セッション ID のみ
         conn.feed_stream(2, &[0x40, 0x54, 0x04], false).unwrap();
         let event = conn.poll_event().unwrap().unwrap();
-        assert!(matches!(event, Event::WebTransportUniStreamOpen { .. }));
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::UniStreamOpen { .. })
+        ));
 
         // 後続データ
         conn.feed_stream(2, &[0xCC, 0xDD], false).unwrap();
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportUniStreamData {
+            Event::WebTransport(WebTransportEvent::UniStreamData {
                 stream_id: 2,
                 ref data,
-            } if data == &[0xCC, 0xDD]
+            }) if data == &[0xCC, 0xDD]
         ));
     }
 
@@ -4362,7 +4398,7 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportUniStreamEnd { stream_id: 2 }
+            Event::WebTransport(WebTransportEvent::UniStreamEnd { stream_id: 2 })
         ));
     }
 
@@ -4393,10 +4429,10 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportUniStreamOpen {
+            Event::WebTransport(WebTransportEvent::UniStreamOpen {
                 stream_id: 2,
                 session_id: 4,
-            }
+            })
         ));
     }
 
@@ -4413,10 +4449,10 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportUniStreamOpen {
+            Event::WebTransport(WebTransportEvent::UniStreamOpen {
                 stream_id: 2,
                 session_id: 4,
-            }
+            })
         ));
     }
 
@@ -4468,19 +4504,19 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportBidiStreamOpen {
+            Event::WebTransport(WebTransportEvent::BidiStreamOpen {
                 stream_id: 1,
                 session_id: 0,
-            }
+            })
         ));
 
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportBidiStreamData {
+            Event::WebTransport(WebTransportEvent::BidiStreamData {
                 stream_id: 1,
                 ref data,
-            } if data == &[0xAA, 0xBB]
+            }) if data == &[0xAA, 0xBB]
         ));
     }
 
@@ -4491,16 +4527,19 @@ mod tests {
 
         conn.feed_stream(1, &[0x40, 0x41, 0x00], false).unwrap();
         let event = conn.poll_event().unwrap().unwrap();
-        assert!(matches!(event, Event::WebTransportBidiStreamOpen { .. }));
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::BidiStreamOpen { .. })
+        ));
 
         conn.feed_stream(1, &[0xCC, 0xDD], false).unwrap();
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportBidiStreamData {
+            Event::WebTransport(WebTransportEvent::BidiStreamData {
                 stream_id: 1,
                 ref data,
-            } if data == &[0xCC, 0xDD]
+            }) if data == &[0xCC, 0xDD]
         ));
     }
 
@@ -4515,7 +4554,7 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportBidiStreamEnd { stream_id: 1 }
+            Event::WebTransport(WebTransportEvent::BidiStreamEnd { stream_id: 1 })
         ));
     }
 
@@ -4566,10 +4605,10 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportBidiStreamOpen {
+            Event::WebTransport(WebTransportEvent::BidiStreamOpen {
                 stream_id: 1,
                 session_id: 4,
-            }
+            })
         ));
     }
 
@@ -4587,10 +4626,10 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportBidiStreamOpen {
+            Event::WebTransport(WebTransportEvent::BidiStreamOpen {
                 stream_id: 1,
                 session_id: 4,
-            }
+            })
         ));
     }
 
@@ -4603,10 +4642,10 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportBidiStreamOpen {
+            Event::WebTransport(WebTransportEvent::BidiStreamOpen {
                 stream_id: 1,
                 session_id: 4,
-            }
+            })
         ));
     }
 
@@ -4629,19 +4668,19 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportBidiStreamOpen {
+            Event::WebTransport(WebTransportEvent::BidiStreamOpen {
                 stream_id: 0,
                 session_id: 0,
-            }
+            })
         ));
 
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportBidiStreamData {
+            Event::WebTransport(WebTransportEvent::BidiStreamData {
                 stream_id: 0,
                 ref data,
-            } if data == &[0xAA, 0xBB]
+            }) if data == &[0xAA, 0xBB]
         ));
     }
 
@@ -4674,10 +4713,10 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportBidiStreamOpen {
+            Event::WebTransport(WebTransportEvent::BidiStreamOpen {
                 stream_id: 0,
                 session_id: 0,
-            }
+            })
         ));
     }
 
@@ -4714,10 +4753,10 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportBidiStreamOpen {
+            Event::WebTransport(WebTransportEvent::BidiStreamOpen {
                 stream_id: 0,
                 session_id: 0,
-            }
+            })
         ));
     }
 
@@ -5127,11 +5166,11 @@ mod tests {
         // クライアントが 200 OK を受信
         client.feed_stream(stream_id, &resp_data, false).unwrap();
 
-        // WebTransportSessionEstablished イベントが発火すること
+        // WebTransportEvent::SessionEstablished イベントが発火すること
         let events = client.drain_events().unwrap();
         assert!(events.iter().any(|e| matches!(
             e,
-            Event::WebTransportSessionEstablished { session_id, .. } if *session_id == stream_id
+            Event::WebTransport(WebTransportEvent::SessionEstablished { session_id, .. }) if *session_id == stream_id
         )));
 
         // セッションが Established 状態であること
@@ -5269,10 +5308,10 @@ mod tests {
         // CONNECT stream を FIN で閉じる (セッション終了)
         client.feed_stream(stream_id, &[], true).unwrap();
 
-        // WebTransportSessionClosed イベントが発火すること
+        // WebTransportEvent::SessionClosed イベントが発火すること
         let events = client.drain_events().unwrap();
         let closed_event = events.iter().find(|e| {
-            matches!(e, Event::WebTransportSessionClosed { session_id: sid, .. } if *sid == session_id)
+            matches!(e, Event::WebTransport(WebTransportEvent::SessionClosed { session_id: sid, .. }) if *sid == session_id)
         });
         assert!(closed_event.is_some());
 
@@ -5309,11 +5348,11 @@ mod tests {
         // CONNECT stream を RESET_STREAM で閉じる
         client.stream_reset(stream_id, 0, 0).unwrap();
 
-        // WebTransportSessionClosed イベントが発火すること
+        // WebTransportEvent::SessionClosed イベントが発火すること
         let events = client.drain_events().unwrap();
         assert!(events.iter().any(|e| matches!(
             e,
-            Event::WebTransportSessionClosed { session_id: sid, .. } if *sid == stream_id
+            Event::WebTransport(WebTransportEvent::SessionClosed { session_id: sid, .. }) if *sid == stream_id
         )));
 
         assert_eq!(client.wt_sessions[&stream_id].state, WtSessionState::Closed);
@@ -5396,10 +5435,10 @@ mod tests {
         let event = client.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportBufferedStreamRejected {
+            Event::WebTransport(WebTransportEvent::BufferedStreamRejected {
                 stream_id: 3,
                 error_code,
-            } if error_code == WtErrorCode::SessionGone as u64
+            }) if error_code == WtErrorCode::SessionGone as u64
         ));
     }
 
@@ -5441,7 +5480,10 @@ mod tests {
             last = Some(ev);
         }
         match last {
-            Some(Event::WebTransportBufferedStreamRejected { stream_id, .. }) => {
+            Some(Event::WebTransport(WebTransportEvent::BufferedStreamRejected {
+                stream_id,
+                ..
+            })) => {
                 assert_eq!(stream_id, overflow_stream_id);
             }
             other => panic!("expected BufferedStreamRejected, got {other:?}"),
@@ -5484,7 +5526,7 @@ mod tests {
     #[test]
     fn test_stream_reset_propagates_to_wt_uni_data_stream() {
         // 既知 WebTransport セッションに属する単方向データストリームの RESET_STREAM は
-        // セッションを終了させず、WebTransportStreamReset イベントとして通知する
+        // セッションを終了させず、WebTransportEvent::StreamReset イベントとして通知する
         // (draft-ietf-webtrans-http3-15 Section 4.4)
         let mut conn = make_server_with_established_wt_session(4);
         // セッション 4 に紐づく WT uni stream 2 を作成
@@ -5498,12 +5540,12 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportStreamReset {
+            Event::WebTransport(WebTransportEvent::StreamReset {
                 session_id: 4,
                 stream_id: 2,
                 error_code: 0x42,
                 final_size: 3,
-            }
+            })
         ));
         // セッションは終了していないこと
         assert!(conn.wt_sessions.contains_key(&4));
@@ -5531,11 +5573,11 @@ mod tests {
 
         conn.stream_reset(0, 0x99, 0).unwrap();
 
-        // WebTransportSessionClosed が発行される
+        // WebTransportEvent::SessionClosed が発行される
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportSessionClosed { session_id: 0, .. }
+            Event::WebTransport(WebTransportEvent::SessionClosed { session_id: 0, .. })
         ));
         assert_eq!(
             conn.wt_sessions.get(&0).unwrap().state,
@@ -5546,7 +5588,7 @@ mod tests {
     #[test]
     fn test_stop_sending_propagates_to_wt_bidi_data_stream() {
         // 既知 WebTransport セッションに属する双方向データストリームの STOP_SENDING は
-        // セッションを終了させず WebTransportStreamStopSending として通知する
+        // セッションを終了させず WebTransportEvent::StreamStopSending として通知する
         let mut conn = make_server_with_established_wt_session(4);
         // signal value 0x41 + session_id = 4 で WT bidi stream 8 を作成
         conn.feed_stream(8, &[0x40, 0x41, 0x04], false).unwrap();
@@ -5557,11 +5599,11 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportStreamStopSending {
+            Event::WebTransport(WebTransportEvent::StreamStopSending {
                 session_id: 4,
                 stream_id: 8,
                 error_code: 0x55,
-            }
+            })
         ));
         assert!(matches!(
             conn.wt_sessions.get(&4).unwrap().state,
@@ -5626,13 +5668,13 @@ mod tests {
         conn.stream_reset(0, 0x99, 0).unwrap();
 
         let event = conn.poll_event().unwrap().unwrap();
-        let Event::WebTransportSessionClosed {
+        let Event::WebTransport(WebTransportEvent::SessionClosed {
             session_id,
             reset_streams,
             ..
-        } = event
+        }) = event
         else {
-            panic!("WebTransportSessionClosed が発火していない");
+            panic!("WebTransportEvent::SessionClosed が発火していない");
         };
         assert_eq!(session_id, 0);
         assert_eq!(reset_streams.len(), 2);
@@ -5648,7 +5690,7 @@ mod tests {
     #[test]
     fn test_wt_data_stream_reset_event_carries_final_size() {
         // WT データストリームの RESET_STREAM 受信時、final_size が
-        // WebTransportStreamReset イベントに反映される
+        // WebTransportEvent::StreamReset イベントに反映される
         let mut conn = make_server_with_established_wt_session(4);
         conn.feed_stream(2, &[0x40, 0x54, 0x04], false).unwrap();
         while conn.poll_event().unwrap().is_some() {}
@@ -5656,14 +5698,14 @@ mod tests {
         conn.stream_reset(2, 0xab, 42).unwrap();
 
         let event = conn.poll_event().unwrap().unwrap();
-        let Event::WebTransportStreamReset {
+        let Event::WebTransport(WebTransportEvent::StreamReset {
             session_id,
             stream_id,
             error_code,
             final_size,
-        } = event
+        }) = event
         else {
-            panic!("WebTransportStreamReset が発火していない: {event:?}");
+            panic!("WebTransportEvent::StreamReset が発火していない: {event:?}");
         };
         assert_eq!(session_id, 4);
         assert_eq!(stream_id, 2);
@@ -5705,7 +5747,7 @@ mod tests {
         let event = conn.poll_event().unwrap().unwrap();
         assert!(matches!(
             event,
-            Event::WebTransportSessionDraining { session_id: 0 }
+            Event::WebTransport(WebTransportEvent::SessionDraining { session_id: 0 })
         ));
         // send_datagram は WtSessionDraining を返す
         let err = conn.send_datagram(0, b"hello").unwrap_err();
