@@ -1,66 +1,89 @@
-# 0080: 未使用の公開 API と死にコードを削除する
+# 0080: 未使用コードと不要な lint 抑制を削除する
 
 - Priority: Low
 - Created: 2026-05-14
+- Polished: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/refactor-remove-unused-and-dead-code
 
 ## 目的
 
-未使用コード・死にコードを削除または非公開化し、API サーフェスを最小化する。
+未使用コード・不要な lint 抑制・重複定数を整理し、コードベースの衛生状態を改善する。
 
 ## 優先度根拠
 
-Low: コンパイルやテストに問題はないが、不要な公開 API は将来の semver 互換性維持コストを増大させる。
+Low: コンパイルやテストに問題はないが、死にコードの放置は CLAUDE.md の「Don't live with broken windows」に反する。
 
-## 現状
+## 依存関係
 
-### 死にコード
+- issue 0077 (connection モジュール分割) で `connection/mod.rs` の WT 定数を `wt_types.rs` に移動する計画がある。 0077 が先に実施された場合、項目 3 の定数集約先が変わる。 0080 を先に実施する場合は `webtransport/session.rs` に集約し、0077 はその結果を前提にする
 
-1. `src/stream/request.rs:471-478` — `pub enum ReceivedData`: コードベースのどこからもインポート・使用されていない
-2. `src/connection/mod.rs:354` — `#[allow(dead_code)]` on `disassociate_stream`: 実際に `mod.rs:3809` で呼び出されており dead code ではない。`#[allow(dead_code)]` を `#[expect(dead_code)]` に変更するか、不要なら削除
+## 対象項目
 
-### 未使用の公開 API (テスト専用なら `pub(crate)` + `#[cfg(test)]` に変更)
+### 項目 1: `ReceivedData` enum の削除
 
-3. `src/qpack/encoder_stream.rs:100-113` — `encode_insert_with_name_ref`
-4. `src/qpack/encoder_stream.rs:122-135` — `encode_insert_with_literal_name`
-5. `src/qpack/encoder_stream.rs:144-150` — `encode_duplicate`
-6. `src/qpack/encoder_stream.rs:347-349` — `EncoderStreamReceiver::buffer()`
-7. `src/qpack/decoder_stream.rs:78-80` — `encode_insert_count_increment`
-8. `src/qpack/decoder_stream.rs:222-224` — `DecoderStreamReceiver::buffer()`
+- **場所**: `src/stream/request.rs:488-495`
+- **理由**: `lib.rs` で re-export されておらず、`src/` / `tests/` / `pbt/` / `examples/` のいずれでも使用されていない完全な死にコード
+- **対応**: 削除
+- **後方互換**: `pub enum` として定義されているため `shiguredo_http3::stream::request::ReceivedData` としてパスでアクセスする外部コードが理論上存在しうるが、`lib.rs` で re-export されていないため影響は極めて小さい。 `[CHANGE]` として記録する
 
-### 重複定数
+### 項目 2: `#[allow(dead_code)]` の削除
 
-9. `src/connection/mod.rs:74,77` / `src/webtransport/session.rs:12,15` — `MAX_BUFFERED_STREAMS` / `MAX_BUFFERED_DATAGRAMS` (両方 100): 一方に集約
+- **場所**: `src/connection/mod.rs:356` (`disassociate_stream` メソッド)
+- **理由**: `mod.rs:3843` で `session.disassociate_stream(stream_id)` として呼び出されており dead code ではない。 `#[allow(dead_code)]` は不要
+- **対応**: `#[allow(dead_code)]` 属性を単純に削除する (`#[expect(dead_code)]` への変更は不適切 — dead code でないため unfulfilled_lint_expectations 警告が出る)
 
-## 設計方針
+### 項目 3: 重複定数の集約
 
-1. `ReceivedData` enum を削除
-2. `#[allow(dead_code)]` を削除（dead code でないため不要）、または `#[expect(dead_code)]` に変更
-3. テスト専用メソッドは `pub(crate)` に変更
-4. `buffer()` メソッドが本当に不要か確認し、不要なら削除
-5. 重複定数を `src/webtransport/session.rs` に集約し、`connection/mod.rs` 側は参照する
+- **場所**:
+  - `src/connection/mod.rs:75` — `WT_MAX_BUFFERED_STREAMS: usize = 100`
+  - `src/connection/mod.rs:78` — `WT_MAX_BUFFERED_DATAGRAMS: usize = 100`
+  - `src/webtransport/session.rs:12` — `MAX_BUFFERED_STREAMS: usize = 100`
+  - `src/webtransport/session.rs:15` — `MAX_BUFFERED_DATAGRAMS: usize = 100`
+- **理由**: 同じ値 (100) で同じ意味の定数が 2 箇所に存在する。変更時に片方を修正し忘れるリスクがある
+- **対応**: `webtransport/session.rs` 側の定数を `pub(crate)` に変更し、`connection/mod.rs` 側の重複定数を削除して `webtransport::session::MAX_BUFFERED_STREAMS` を参照する。 `connection/mod.rs` 側の `WT_` プレフィックス付き名前は廃止し、`session.rs` 側の名前 (`MAX_BUFFERED_STREAMS` / `MAX_BUFFERED_DATAGRAMS`) に統一する
+- **注意**: `connection/mod.rs` にのみ存在する `WT_MAX_PENDING_SESSIONS` (16) と `WT_MAX_BUFFERED_STREAM_BYTES` (64 * 1024) は重複していないため対象外
+
+## スコープ外
+
+以下の項目は当初の issue に含まれていたが、調査の結果スコープ外とする:
+
+- **`EncoderStream` の `encode_insert_with_name_ref` / `encode_insert_with_literal_name` / `encode_duplicate`**: `pbt/tests/prop_qpack.rs` (別クレート) から多数使用されている。RFC 9204 Section 4.3.2-4.3.4 のエンコーダ命令を送信する公開 API であり、非公開化はテストの破壊と API の意図的な機能縮小になる。 `pub` のまま維持する
+- **`DecoderStream` の `encode_insert_count_increment`**: 同様に `pbt/tests/prop_qpack.rs` から使用されている。 `pub` のまま維持する
+- **`EncoderStreamReceiver::buffer()` / `DecoderStreamReceiver::buffer()`**: `EncoderStreamReceiver::buffer()` は `tests/test_qpack_encoder_stream.rs` (別クレート) から 5 箇所で使用されている。 `DecoderStreamReceiver::buffer()` は現在未使用だが、API の対称性から維持する。 `pub` のまま維持する
+
+これらは「src/ 内部から呼ばれていない」だけであり、テストや外部利用者が使用する正当な公開 API である。 `internal-test` フィーチャーは排除済み (commit `ebb023c`) であり、フィーチャーゲート付き公開への変更も方針に反する。
+
+## テスト戦略
+
+- `cargo test --workspace` で全テスト (tests/ + pbt/) が pass すること
+- `cargo clippy --workspace` で新たな警告がないこと
+- `ReceivedData` 削除後に `grep -rn 'ReceivedData'` でゼロヒットを確認
 
 ## 完了条件
 
-- 未使用コードが削除または非公開化されていること
-- 重複定数が一箇所に集約されていること
-- `cargo test` が全て pass すること
-- `cargo clippy` で未使用警告がないこと
+- `ReceivedData` enum が削除されていること
+- `disassociate_stream` の `#[allow(dead_code)]` が削除されていること
+- 重複定数が `webtransport/session.rs` に集約されていること
+- `cargo test --workspace` が全て pass すること
+- `cargo clippy --workspace` で新たな警告がないこと
 
 ## 影響範囲
 
-- `src/stream/request.rs`
-- `src/connection/mod.rs`
-- `src/qpack/encoder_stream.rs`
-- `src/qpack/decoder_stream.rs`
-- `src/webtransport/session.rs`
+- `src/stream/request.rs`: `ReceivedData` enum の削除
+- `src/connection/mod.rs`: `#[allow(dead_code)]` 削除、重複定数の削除と参照変更
+- `src/webtransport/session.rs`: 定数の可視性を `pub(crate)` に変更
 
 ## CHANGES.md エントリ案
 
-```
+```markdown
+- [CHANGE] stream::request::ReceivedData enum を削除する (未使用の死にコード)
+  - @voluntas
+
 ### misc
 
-- [UPDATE] 未使用の公開 API を非公開化し死にコードを削除する
-  - @担当者
+- [UPDATE] disassociate_stream の不要な #[allow(dead_code)] を削除する
+  - @voluntas
+- [UPDATE] connection/mod.rs の重複定数を webtransport/session.rs に集約する
+  - @voluntas
 ```

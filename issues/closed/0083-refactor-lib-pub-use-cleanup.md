@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/refactor-lib-pub-use-cleanup
 
@@ -45,9 +46,10 @@ Low: 機能に影響しないが、API サーフェスの最小化と将来の s
 
 - `src/lib.rs`: `pub use` リストの整理
 
-## CHANGES.md エントリ案
+## 解決方法
 
-```
-- [CHANGE] lib.rs から内部実装詳細の pub use を削除し公開 API サーフェスを最小化する
-  - @担当者
-```
+以下の理由により本 issue はクローズする。
+
+1. issue の設計方針の核心「`internal-test` フィーチャー限定公開に変更」は、commit `ebb023c` で `internal-test` フィーチャーが排除済みのため実現不可能
+2. `DecodeOutput`, `EncoderInstruction`, `DynamicEntry` 等は `pbt/tests/prop_qpack.rs` (別クレート) から直接使用されている正当な公開 API であり、非公開化すると PBT テストが壊れる
+3. `lib.rs` で `pub mod qpack` が宣言されている限り、`pub use` を削除しても `shiguredo_http3::qpack::*` パスでアクセス可能であり、API サーフェスの実質的な縮小にならない

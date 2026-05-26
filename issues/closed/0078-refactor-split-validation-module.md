@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/refactor-split-validation-module
 
@@ -43,11 +44,6 @@ Low: 機能的な問題はない。コードの見通し改善と保守性向上
 - `src/validation.rs` → `src/validation/` ディレクトリ（mod.rs + サブモジュール）
 - `src/lib.rs`: `mod validation` の参照パスは変更なし
 
-## CHANGES.md エントリ案
+## 解決方法
 
-```
-### misc
-
-- [UPDATE] validation.rs をディレクトリモジュールに分割する
-  - @担当者
-```
+issue 0074 (validation.rs のインラインテスト分離、コミット `c0d540b`) の完了により、`src/validation.rs` は約 1845 行から **792 行** に縮小した。792 行・20 関数のファイルを 5 つのサブモジュールに分割する必要性は解消されたため、本 issue はクローズする。
