@@ -5,6 +5,7 @@
 - Completed: {YYYY-MM-DD} (例: 2024-07-01)
 - Model: {モデル名} {モデルバージョン} (例: Opus 4.7 / GPT 5.5 / Composer 2.5)
 - Branch: {Git-Flow のブランチ名} (例: feature/xxx-yyy)
+- Polished: {YYYY-MM-DD} (例: 2024-07-15)
 
 ## 目的
 

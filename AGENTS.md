@@ -54,6 +54,9 @@
 - Issue の優先度はファイルのタイトルの後に `Priority: <優先度>` という形で記載すること
   - 優先度は High / Medium / Low のいずれかをつけること
   - High は最優先で対応する issue、Medium は優先的に対応する issue、Low は時間があれば対応する issue という意味合いで使うこと
+- Issue の磨き上げはファイルのタイトルの後に `Polished: YYYY-MM-DD` として記載すること
+  - Issue を磨き上げた最終日を記載すること
+  - 最新の磨き上げた日で上書きすること
 - Issue を作成した LLM の Model と Version をファイルのタイトルの後に `Model: <model-name> <version>` として記載すること
   - Opus 4.7 や GPT-5.4 など
 - Issue はなぜこの対応が必要なのかの根拠を明確にすること
