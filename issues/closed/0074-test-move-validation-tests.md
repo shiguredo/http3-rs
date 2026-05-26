@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/refactor-move-validation-tests
 
@@ -35,11 +36,27 @@ Low: テストの動作自体に問題はない。AGENTS.md のファイル配�
 - `src/validation.rs`: `#[cfg(test)] mod tests` ブロックの削除
 - `tests/test_validation.rs`: 新規作成
 
+## 解決方法
+
+`src/validation.rs` の `#[cfg(test)] mod tests` ブロック（約 1100 行、112 テスト）を `tests/test_validation.rs` に移動した。
+
+### 変更内容
+
+- `src/validation.rs` から `#[cfg(test)] mod tests { ... }` ブロック（794-1926 行）を削除
+- `tests/test_validation.rs` を新規作成し、全 112 テストを移動
+- ヘルパー関数 `h()` を QPACK wire simulation パターンの `wire_header()` に置き換え（`Header::from_validated_parts_internal` は `pub(crate)` であり統合テストからアクセス不可のため）
+- `wire_header` ヘルパーと QPACK エンコード用関数（`encode_qpack_integer` / `encode_qpack_literal` / `encode_qpack_string`）をテストファイル内に定義
+
+### テスト結果
+
+- `cargo test --test test_validation`: 112 テスト全 pass
+- `cargo test --workspace`: 全 pass
+
 ## CHANGES.md エントリ案
 
 ```
 ### misc
 
 - [UPDATE] validation.rs のインラインテストを tests/test_validation.rs に分割する
-  - @担当者
+  - @voluntas
 ```
