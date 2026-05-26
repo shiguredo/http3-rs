@@ -36,6 +36,7 @@ mod encoder;
 pub mod encoder_stream;
 mod header;
 pub mod huffman;
+pub mod integer;
 pub mod table;
 
 pub use decoder::{DecodeOutput, Decoder, DynamicDecoder};

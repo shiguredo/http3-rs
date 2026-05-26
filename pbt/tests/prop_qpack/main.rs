@@ -1,5 +1,7 @@
 //! Property-Based Testing for QPACK (RFC 9204)
 
+mod integer;
+
 use pbt::strategies::{valid_header_name, valid_header_value};
 use pbt::wire_header;
 use proptest::prelude::*;
