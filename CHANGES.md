@@ -164,6 +164,8 @@
   - @voluntas
 - [FIX] WebTransport CONNECT リクエストで fin=true が拒否されない問題を修正する
   - @voluntas
+- [FIX] QPACK エンコーダーの ack_section を Result 化し、Post-Base 参照エンコードを実装し、RIC エンコードの max_entries=0 時のエッジケースを修正する
+  - @voluntas
 
 ### misc
 
