@@ -9,6 +9,8 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use crate::error::QpackError;
+
 use super::dynamic_table::DynamicTable;
 use super::header::Header;
 use super::huffman;
@@ -393,13 +395,18 @@ impl DynamicEncoder {
     /// 指定ストリームの最も古い未 ack フィールドセクションを解放し、
     /// ack された Required Insert Count で Known Received Count を更新する
     /// (RFC 9204 Section 2.1.4)。
-    /// 全て ack 済みの場合は false を返す。
-    pub fn ack_section(&mut self, stream_id: u64) -> bool {
+    ///
+    /// 全て ack 済みのストリームに対する Section Acknowledgment は
+    /// QPACK_DECODER_STREAM_ERROR として扱う (RFC 9204 Section 4.4.1)。
+    ///
+    /// エラー時は `QpackError::DecodeFailed` を返す。呼び出し元で
+    /// `ErrorCode::QpackDecoderStreamError` へマッピングすること。
+    pub fn ack_section(&mut self, stream_id: u64) -> Result<(), QpackError> {
         let Some(rics) = self.unacked_section_rics.get_mut(&stream_id) else {
-            return false;
+            return Err(QpackError::DecodeFailed);
         };
         let Some(ric) = rics.pop_front() else {
-            return false;
+            return Err(QpackError::DecodeFailed);
         };
         if rics.is_empty() {
             self.unacked_section_rics.remove(&stream_id);
@@ -410,7 +417,7 @@ impl DynamicEncoder {
             self.known_received_count = ric;
         }
         self.update_eviction_limit();
-        true
+        Ok(())
     }
 
     /// Stream Cancellation を処理する (RFC 9204 Section 4.4.2)
@@ -557,14 +564,22 @@ impl DynamicEncoder {
     }
 
     /// Required Insert Count をエンコード (RFC 9204 Section 4.5.1.1)
+    ///
+    /// max_entries == 0 かつ req_insert_count != 0 は不変条件違反。
+    /// 動的テーブルが無効 (max_table_capacity == 0) の場合に動的テーブル参照は発生しない。
     fn encode_required_insert_count(&self, req_insert_count: u64) -> u64 {
         if req_insert_count == 0 {
             return 0;
         }
 
         let max_entries = self.max_table_capacity / 32;
+        debug_assert!(
+            max_entries > 0,
+            "max_entries == 0 with non-zero req_insert_count is an invariant violation"
+        );
         if max_entries == 0 {
-            return 1;
+            // 防御的フォールバック: 動的テーブル無効時は RIC を 0 として扱う
+            return 0;
         }
 
         let full_range = 2 * max_entries;
@@ -627,10 +642,19 @@ impl DynamicEncoder {
         encode_integer_to_buf(buf, index as u64, 6, 0xc0)
     }
 
-    /// Indexed Field Line (動的テーブル) をエンコード
+    /// Indexed Field Line (動的テーブル) をエンコード (RFC 9204 Section 4.5.2, 4.5.3)
     ///
+    /// absolute_index < base の場合: 相対インデックス表現 (Section 4.5.2)
     /// Format: 1TNNNNNN (T=0 for dynamic)
-    /// 相対インデックスを使用: relative_index = base - absolute_index - 1
+    /// relative_index = base - absolute_index - 1
+    ///
+    /// absolute_index >= base の場合: Post-Base Index 表現 (Section 4.5.3)
+    /// Format: 0001NNNN
+    /// post_base_index = absolute_index - base
+    ///
+    /// 現在の `encode_with_dynamic` は base = required_insert_count とするため
+    /// Post-Base パスには到達しない (RFC 9204 Section 3.2.6)。
+    /// Base < Required Insert Count の戦略を導入した場合に有効になる。
     fn encode_indexed_field_dynamic(
         &self,
         buf: &mut [u8],
@@ -638,11 +662,15 @@ impl DynamicEncoder {
         base: u64,
     ) -> Option<usize> {
         if absolute_index >= base {
-            return None; // Post-Base indexing は未サポート
+            // Post-Base Indexed Field Line (RFC 9204 Section 4.5.3)
+            let post_base_index = absolute_index - base;
+            // 0x10 = 00010000
+            encode_integer_to_buf(buf, post_base_index, 4, 0x10)
+        } else {
+            let relative_index = base - absolute_index - 1;
+            // 0x80 = 10000000 (T=0)
+            encode_integer_to_buf(buf, relative_index, 6, 0x80)
         }
-        let relative_index = base - absolute_index - 1;
-        // 0x80 = 10000000 (T=0)
-        encode_integer_to_buf(buf, relative_index, 6, 0x80)
     }
 
     /// Literal with Name Reference (静的テーブル) をエンコード
@@ -664,10 +692,19 @@ impl DynamicEncoder {
         Some(offset)
     }
 
-    /// Literal with Name Reference (動的テーブル) をエンコード
+    /// Literal with Name Reference (動的テーブル) をエンコード (RFC 9204 Section 4.5.4, 4.5.5)
     ///
+    /// absolute_index < base の場合: 相対インデックス表現 (Section 4.5.4)
     /// Format: 01NTNNNN (N=never index, T=0 for dynamic)
-    /// 相対インデックスを使用
+    /// relative_index = base - absolute_index - 1
+    ///
+    /// absolute_index >= base の場合: Post-Base Name Reference (Section 4.5.5)
+    /// Format: 0000NMMM (N=never index)
+    /// post_base_index = absolute_index - base
+    ///
+    /// 現在の `encode_with_dynamic` は base = required_insert_count とするため
+    /// Post-Base パスには到達しない (RFC 9204 Section 3.2.6)。
+    /// Base < Required Insert Count の戦略を導入した場合に有効になる。
     fn encode_literal_with_name_ref_dynamic(
         &self,
         buf: &mut [u8],
@@ -675,12 +712,16 @@ impl DynamicEncoder {
         value: &[u8],
         base: u64,
     ) -> Option<usize> {
-        if absolute_index >= base {
-            return None; // Post-Base indexing は未サポート
-        }
-        let relative_index = base - absolute_index - 1;
-        // 0x40 = 01000000 (N=0, T=0)
-        let mut offset = encode_integer_to_buf(buf, relative_index, 4, 0x40)?;
+        let mut offset = if absolute_index >= base {
+            // Post-Base Name Reference (RFC 9204 Section 4.5.5)
+            let post_base_index = absolute_index - base;
+            // 0x00 = 00000000 (N=0)
+            encode_integer_to_buf(buf, post_base_index, 3, 0x00)?
+        } else {
+            let relative_index = base - absolute_index - 1;
+            // 0x40 = 01000000 (N=0, T=0)
+            encode_integer_to_buf(buf, relative_index, 4, 0x40)?
+        };
 
         // Value
         let value_len = self.encode_string(&mut buf[offset..], value)?;
@@ -1018,5 +1059,95 @@ mod tests {
         let entry = encoder.table().get_by_absolute_index(0).unwrap();
         assert_eq!(entry.name, b":authority");
         assert_eq!(entry.value, b"example.com");
+    }
+
+    #[test]
+    fn ack_section_は未追跡ストリームに対してエラーを返す() {
+        let mut encoder = DynamicEncoder::new();
+        // track_section していないストリーム ID に対する ack_section は
+        // QPACK_DECODER_STREAM_ERROR (RFC 9204 Section 4.4.1)
+        assert!(encoder.ack_section(42).is_err());
+    }
+
+    #[test]
+    fn ack_section_は全て_ack_済みのストリームに対してエラーを返す() {
+        let mut encoder = DynamicEncoder::new();
+        encoder.track_section(1, 5);
+        assert!(encoder.ack_section(1).is_ok());
+        // 2 回目の ack は全て ack 済みなのでエラー
+        assert!(encoder.ack_section(1).is_err());
+    }
+
+    #[test]
+    fn encode_required_insert_count_は_max_entries_が_0_かつ_ric_が_0_のとき_0_を返す() {
+        let encoder = DynamicEncoder::new();
+        assert_eq!(encoder.encode_required_insert_count(0), 0);
+    }
+
+    #[test]
+    #[cfg_attr(debug_assertions, should_panic(expected = "invariant violation"))]
+    fn encode_required_insert_count_は_max_entries_が_0_かつ_ric_が非ゼロのとき不変条件違反を検出する()
+     {
+        // debug ビルド: debug_assert! で panic する
+        // release ビルド: 防御的に 0 を返す
+        let encoder = DynamicEncoder::new();
+        let result = encoder.encode_required_insert_count(5);
+        // release ビルドで到達する場合
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn post_base_indexed_field_line_は正しいビットパターンを生成する() {
+        // RFC 9204 Section 4.5.3: 0001NNNN, 4-bit prefix
+        // absolute_index=5, base=3 → post_base_index=2
+        let encoder = DynamicEncoder::new();
+        let mut buf = vec![0u8; 16];
+        let len = encoder
+            .encode_indexed_field_dynamic(&mut buf, 5, 3)
+            .unwrap();
+        assert_eq!(len, 1);
+        // 0x10 | 2 = 0x12 (00010010)
+        assert_eq!(buf[0], 0x12);
+    }
+
+    #[test]
+    fn post_base_indexed_field_line_は_index_が_0_のとき正しく動作する() {
+        // absolute_index == base → post_base_index=0
+        let encoder = DynamicEncoder::new();
+        let mut buf = vec![0u8; 16];
+        let len = encoder
+            .encode_indexed_field_dynamic(&mut buf, 3, 3)
+            .unwrap();
+        assert_eq!(len, 1);
+        // 0x10 | 0 = 0x10 (00010000)
+        assert_eq!(buf[0], 0x10);
+    }
+
+    #[test]
+    fn post_base_name_reference_は正しいビットパターンを生成する() {
+        // RFC 9204 Section 4.5.5: 0000NMMM, N=0, 3-bit prefix
+        // absolute_index=5, base=3 → post_base_index=2
+        let encoder = DynamicEncoder::new().use_huffman(false);
+        let mut buf = vec![0u8; 64];
+        let len = encoder
+            .encode_literal_with_name_ref_dynamic(&mut buf, 5, b"value", 3)
+            .unwrap();
+        // 最初のバイト: 0x00 | 2 = 0x02 (00000010)
+        assert_eq!(buf[0], 0x02);
+        // 値のエンコード: 長さ 5 + "value" = 6 バイト
+        assert_eq!(len, 1 + 1 + 5); // prefix(1) + value_len(1) + value(5)
+    }
+
+    #[test]
+    fn 相対インデックス表現は引き続き正しく動作する() {
+        // absolute_index=1, base=3 → relative_index=1
+        let encoder = DynamicEncoder::new();
+        let mut buf = vec![0u8; 16];
+        let len = encoder
+            .encode_indexed_field_dynamic(&mut buf, 1, 3)
+            .unwrap();
+        assert_eq!(len, 1);
+        // 0x80 | 1 = 0x81 (10000001)
+        assert_eq!(buf[0], 0x81);
     }
 }

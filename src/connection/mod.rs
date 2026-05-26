@@ -2459,9 +2459,9 @@ impl Connection {
                 DecoderInstruction::SectionAcknowledgment { stream_id } => {
                     // 既に全て ack 済みのストリームに対する Section Acknowledgment は
                     // QPACK_DECODER_STREAM_ERROR (RFC 9204 Section 4.4.1)
-                    if !self.qpack_encoder.ack_section(stream_id) {
-                        return Err(Error::ConnectionError(ErrorCode::QpackDecoderStreamError));
-                    }
+                    self.qpack_encoder
+                        .ack_section(stream_id)
+                        .map_err(|_| Error::ConnectionError(ErrorCode::QpackDecoderStreamError))?;
                 }
                 DecoderInstruction::StreamCancellation { stream_id } => {
                     // ストリームキャンセル: 未 ack セクションを削除

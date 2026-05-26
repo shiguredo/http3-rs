@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/fix-qpack-encoder-issues
 
@@ -105,3 +106,30 @@ PBT: 動的テーブルにエントリを挿入後、base を適切に設定し�
 - [FIX] QPACK エンコーダーの ack_section を Result 化し、Post-Base 参照エンコードを実装し、RIC エンコードの max_entries=0 時のエッジケースを修正する
   - @担当者
 ```
+
+## 解決方法
+
+### 修正 1: ack_section の Result 化
+
+`src/qpack/encoder.rs` の `ack_section` の戻り値型を `bool` から `Result<(), QpackError>` に変更した。
+未追跡または全て ack 済みのストリームに対する Section Acknowledgment で `Err(QpackError::DecodeFailed)` を返す。
+呼び出し元 `src/connection/mod.rs` は `map_err` で `ErrorCode::QpackDecoderStreamError` に変換する。
+
+### 修正 2: Post-Base エンコードの実装
+
+`encode_indexed_field_dynamic` に Post-Base Indexed Field Line (RFC 9204 Section 4.5.3, `0001` prefix, 4-bit) を実装した。
+`encode_literal_with_name_ref_dynamic` に Post-Base Name Reference (RFC 9204 Section 4.5.5, `0000N` prefix, 3-bit) を実装した。
+現在の `encode_with_dynamic` は `base = required_insert_count` とするため Post-Base パスには到達しないが、
+Base < Required Insert Count の戦略を導入した場合に有効になる。
+
+### 修正 3: encode_required_insert_count のエッジケース修正
+
+`max_entries == 0` かつ `req_insert_count != 0` の場合に `return 1` としていたのを `debug_assert!` + `return 0` に変更した。
+debug ビルドで不変条件違反を検出し、release ビルドでは防御的に 0 にフォールバックする。
+
+### テスト
+
+- `ack_section` のエラーパス (未追跡・全 ack 済み) の単体テストを追加
+- `encode_required_insert_count` の max_entries=0 の単体テストを追加
+- Post-Base Indexed / Post-Base Name Reference のビットパターン検証テストを追加
+- 相対インデックス表現の既存動作が維持されることを確認するテストを追加
