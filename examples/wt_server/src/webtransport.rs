@@ -18,7 +18,7 @@ use shiguredo_http3::webtransport::stream::{
     ClassifiedUniStream, StreamHeader, StreamHeaderDecodeError, classify_uni_stream_checked,
 };
 use shiguredo_http3::{
-    Connection, Event, Setting, Settings as H3Settings, SettingsPayload, VarInt,
+    Event, ServerConnection, Setting, Settings as H3Settings, SettingsPayload, VarInt,
 };
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
@@ -96,14 +96,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 // ---------------------------------------------------------------------------
 
 struct ServerConnectionState {
-    h3_conn: Connection,
+    h3_conn: ServerConnection,
     control_stream_id: Option<u64>,
 }
 
 impl ServerConnectionState {
     fn new(settings: H3Settings) -> Self {
         Self {
-            h3_conn: Connection::server(settings),
+            h3_conn: ServerConnection::new(settings),
             control_stream_id: None,
         }
     }
