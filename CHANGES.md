@@ -169,6 +169,8 @@
 
 ### misc
 
+- [UPDATE] prop_webtransport.rs をディレクトリモジュールに分割し PBT 間の重複テストを削除する
+  - @voluntas
 - [UPDATE] `Header::from_static` の `compile_fail` doctest を 3 件追加し、`check_header` の全 7 検査経路をカバーする (token 外 / 先頭末尾空白 / 疑似ヘッダー値構文)
   - @voluntas
 - [UPDATE] `pbt/tests/prop_qpack.rs` の未使用 strategy (`valid_capacity` / `valid_relative_index`) と空虚なテスト (`prop_huffman_length_varies`) を削除する
