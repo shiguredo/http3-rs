@@ -12,7 +12,8 @@
 use shiguredo_http3::qpack::Encoder;
 use shiguredo_http3::webtransport::DraftVersion;
 use shiguredo_http3::{
-    Error, ErrorCode, Event, Header, ServerConnection, Settings, VarInt, webtransport,
+    Error, ErrorCode, Event, Header, ServerConnection, Settings, VarInt, WebTransportEvent,
+    webtransport,
 };
 
 fn vi(value: u64) -> VarInt {
@@ -780,12 +781,12 @@ mod wt_protocol_without_available_protocols {
         let frame = build_headers_frame(&response);
         client.feed_stream(stream_id, &frame, false).unwrap();
 
-        // セッションは Established に遷移せず、WebTransportSessionClosed が発火する
+        // セッションは Established に遷移せず、WebTransportEvent::SessionClosed が発火する
         let mut session_closed = false;
         let mut session_established = false;
         while let Some(ev) = client.poll_event().unwrap() {
             match ev {
-                Event::WebTransportSessionClosed { error_code, .. } => {
+                Event::WebTransport(WebTransportEvent::SessionClosed { error_code, .. }) => {
                     session_closed = true;
                     assert_eq!(
                         error_code,
@@ -793,7 +794,7 @@ mod wt_protocol_without_available_protocols {
                         "WT_ALPN_ERROR で閉じられるべき"
                     );
                 }
-                Event::WebTransportSessionEstablished { .. } => {
+                Event::WebTransport(WebTransportEvent::SessionEstablished { .. }) => {
                     session_established = true;
                 }
                 _ => {}

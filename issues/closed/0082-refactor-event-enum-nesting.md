@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Polished: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/change-event-enum-nesting
@@ -132,6 +133,15 @@ impl WebTransportEvent {
 - `tests/test_webtransport_draft_connect.rs`: 2 箇所の match パターン変更
 - 影響なし (確認済み): `examples/wt_server` (WebTransport Event を直接 match していない)
 - 影響なし (確認済み): `interop/` (本クレートの `Event` を使用していない)
+
+## 解決方法
+
+1. `src/event.rs` に `WebTransportEvent` enum を新設し、14 バリアントを `WebTransport` プレフィックスなしで移動
+2. `Event` enum に `WebTransport(WebTransportEvent)` バリアントを追加し、元の 14 バリアントを削除
+3. `WebTransportEvent::stream_id()` メソッドを追加し、`Event::stream_id()` から委譲
+4. `src/lib.rs` に `pub use event::WebTransportEvent` を追加
+5. `src/connection/mod.rs` の約 72 箇所のイベント生成・match パターンを全て更新
+6. `tests/test_webtransport_draft_connect.rs` の 2 箇所を更新
 
 ## CHANGES.md エントリ案
 
