@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Polished: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/refactor-client-server-wrapper
@@ -64,6 +65,14 @@ Low: 型安全性の改善であり、現状で誤使用はコンパイル時に
 - `src/connection/client.rs`: 変更なし (既に委譲している)
 - `src/connection/server.rs`: `ServerConnection` に未委譲メソッドの追加が必要な場合あり
 - `examples/wt_server/src/webtransport.rs`: `Connection` → `ServerConnection` に移行
+
+## 解決方法
+
+1. `src/connection/mod.rs` の `Connection::send_request` / `Connection::send_response` を `pub` → `pub(crate)` に変更
+2. `examples/wt_server/src/webtransport.rs` を `Connection::server()` → `ServerConnection::new()` に移行
+3. `crates/tokio-s2n-quic/src/internal/connection_state.rs` を `Connection::server()` / `Connection::client()` → `ServerConnection::new()` / `ClientConnection::new()` に移行
+
+issue の影響範囲には `tokio-s2n-quic` が未記載だったが、`pub(crate)` 化の必然的帰結として移行が必要だったため対応した。
 
 ## CHANGES.md エントリ案
 

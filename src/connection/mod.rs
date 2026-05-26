@@ -3343,7 +3343,7 @@ impl Connection {
     }
 
     /// リクエストを送信 (クライアント専用)
-    pub fn send_request(&mut self, headers: &[Header], fin: bool) -> Result<u64, Error> {
+    pub(crate) fn send_request(&mut self, headers: &[Header], fin: bool) -> Result<u64, Error> {
         if self.role != Role::Client {
             return Err(Error::ConnectionError(ErrorCode::InternalError));
         }
@@ -3496,7 +3496,7 @@ impl Connection {
     }
 
     /// レスポンスを送信 (サーバー専用)
-    pub fn send_response(
+    pub(crate) fn send_response(
         &mut self,
         stream_id: u64,
         headers: &[Header],

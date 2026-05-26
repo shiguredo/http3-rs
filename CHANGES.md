@@ -17,6 +17,8 @@
   - @voluntas
 - [CHANGE] `stream::request::ReceivedData` enum を削除する (未使用の死にコード)
   - @voluntas
+- [CHANGE] `Connection::send_request` / `Connection::send_response` を `pub(crate)` に変更し `ClientConnection` / `ServerConnection` 経由でのみ呼び出し可能にする
+  - @voluntas
 - [ADD] `VarInt::from_static` / `qpack::Header::from_static` / `frame::GoawayPayload::from_static` の doc に `compile_fail` ブロックを追加し、`const fn` 検査のリグレッションを CI (`cargo test --doc`) で防止する
   - @voluntas
 - [ADD] 構築時検査の `from_static` ↔ `new` 一貫性、`from_validated_parts` ↔ `new` 整合性、`Header::new` ↔ QPACK ラウンドトリップ完全性を検証する PBT を追加する

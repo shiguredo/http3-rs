@@ -2,12 +2,14 @@
 //!
 //! std::sync::Mutex で保護される。await を跨がない。
 
-use shiguredo_http3::{Connection, Event, H3InitData, Header, Settings as H3Settings};
+use shiguredo_http3::{
+    ClientConnection, Event, H3InitData, Header, ServerConnection, Settings as H3Settings,
+};
 
 /// サーバー側 HTTP/3 接続状態
 pub(crate) struct ServerConnectionState {
     /// HTTP/3 接続 (Sans I/O)
-    pub(crate) h3_conn: Connection,
+    pub(crate) h3_conn: ServerConnection,
     /// 制御ストリーム ID (送信側)
     pub(crate) control_stream_id: Option<u64>,
     /// QPACK エンコーダーストリーム ID (送信側)
@@ -20,7 +22,7 @@ impl ServerConnectionState {
     /// 新しいサーバー接続状態を作成する
     pub(crate) fn new(settings: H3Settings) -> Self {
         Self {
-            h3_conn: Connection::server(settings),
+            h3_conn: ServerConnection::new(settings),
             control_stream_id: None,
             encoder_stream_id: None,
             decoder_stream_id: None,
@@ -110,7 +112,7 @@ impl ServerConnectionState {
 /// クライアント側 HTTP/3 接続状態
 pub(crate) struct ClientConnectionState {
     /// HTTP/3 接続 (Sans I/O)
-    pub(crate) h3_conn: Connection,
+    pub(crate) h3_conn: ClientConnection,
     /// 制御ストリーム ID (送信側)
     pub(crate) control_stream_id: Option<u64>,
     /// QPACK エンコーダーストリーム ID (送信側)
@@ -123,7 +125,7 @@ impl ClientConnectionState {
     /// 新しいクライアント接続状態を作成する
     pub(crate) fn new(settings: H3Settings) -> Self {
         Self {
-            h3_conn: Connection::client(settings),
+            h3_conn: ClientConnection::new(settings),
             control_stream_id: None,
             encoder_stream_id: None,
             decoder_stream_id: None,
