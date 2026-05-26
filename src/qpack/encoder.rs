@@ -14,6 +14,7 @@ use crate::error::QpackError;
 use super::dynamic_table::DynamicTable;
 use super::header::Header;
 use super::huffman;
+use super::integer;
 use super::table::{STATIC_TABLE, find_static_entry};
 
 /// QPACK エンコーダー
@@ -94,7 +95,7 @@ impl Encoder {
             Some(1)
         } else {
             // 6-bit prefix を超える場合
-            self.encode_integer(buf, index as u64, 6, 0xc0)
+            integer::encode_integer(buf, index as u64, 6, 0xc0)
         }
     }
 
@@ -115,7 +116,7 @@ impl Encoder {
             buf[0] = 0x50 | (index as u8);
             1
         } else {
-            self.encode_integer(buf, index as u64, 4, 0x50)?
+            integer::encode_integer(buf, index as u64, 4, 0x50)?
         };
 
         // Value
@@ -176,14 +177,14 @@ impl Encoder {
                 // H ビットを設定: prefix に 0x08 を OR (3-bit prefix の場合)
                 let h_bit = 1u8 << prefix_bits;
                 let offset =
-                    self.encode_integer(buf, huffman_len as u64, prefix_bits, prefix | h_bit)?;
+                    integer::encode_integer(buf, huffman_len as u64, prefix_bits, prefix | h_bit)?;
                 huffman::encode(&mut buf[offset..], data)?;
                 return Some(offset + huffman_len);
             }
         }
 
         // リテラル文字列 (H=0)
-        let offset = self.encode_integer(buf, data.len() as u64, prefix_bits, prefix)?;
+        let offset = integer::encode_integer(buf, data.len() as u64, prefix_bits, prefix)?;
         if buf.len() < offset + data.len() {
             return None;
         }
@@ -197,60 +198,19 @@ impl Encoder {
             let huffman_len = huffman::encoded_len(data);
             if huffman_len < data.len() {
                 // ハフマン符号化を使用
-                let offset = self.encode_integer(buf, huffman_len as u64, 7, 0x80)?;
+                let offset = integer::encode_integer(buf, huffman_len as u64, 7, 0x80)?;
                 huffman::encode(&mut buf[offset..], data)?;
                 return Some(offset + huffman_len);
             }
         }
 
         // リテラル文字列
-        let offset = self.encode_integer(buf, data.len() as u64, 7, 0x00)?;
+        let offset = integer::encode_integer(buf, data.len() as u64, 7, 0x00)?;
         if buf.len() < offset + data.len() {
             return None;
         }
         buf[offset..offset + data.len()].copy_from_slice(data);
         Some(offset + data.len())
-    }
-
-    /// 整数をエンコード (RFC 7541 Section 5.1)
-    fn encode_integer(
-        &self,
-        buf: &mut [u8],
-        value: u64,
-        prefix_bits: u8,
-        prefix: u8,
-    ) -> Option<usize> {
-        let max_prefix = (1u64 << prefix_bits) - 1;
-
-        if value < max_prefix {
-            if buf.is_empty() {
-                return None;
-            }
-            buf[0] = prefix | (value as u8);
-            Some(1)
-        } else {
-            if buf.is_empty() {
-                return None;
-            }
-            buf[0] = prefix | (max_prefix as u8);
-            let mut offset = 1;
-            let mut remaining = value - max_prefix;
-
-            while remaining >= 128 {
-                if offset >= buf.len() {
-                    return None;
-                }
-                buf[offset] = 0x80 | ((remaining & 0x7f) as u8);
-                remaining >>= 7;
-                offset += 1;
-            }
-
-            if offset >= buf.len() {
-                return None;
-            }
-            buf[offset] = remaining as u8;
-            Some(offset + 1)
-        }
     }
 }
 
@@ -542,7 +502,7 @@ impl DynamicEncoder {
 
         // Required Insert Count をエンコード
         let enc_insert_count = self.encode_required_insert_count(required_insert_count);
-        offset += encode_integer_to_buf(&mut buf[offset..], enc_insert_count, 8, 0x00)?;
+        offset += integer::encode_integer(&mut buf[offset..], enc_insert_count, 8, 0x00)?;
 
         // Base = Required Insert Count (シンプルな実装)
         // Sign = 0, Delta Base = 0
@@ -639,7 +599,7 @@ impl DynamicEncoder {
     /// Format: 1TNNNNNN (T=1 for static)
     fn encode_indexed_field_static(&self, buf: &mut [u8], index: usize) -> Option<usize> {
         // 0xc0 = 11000000 (T=1)
-        encode_integer_to_buf(buf, index as u64, 6, 0xc0)
+        integer::encode_integer(buf, index as u64, 6, 0xc0)
     }
 
     /// Indexed Field Line (動的テーブル) をエンコード (RFC 9204 Section 4.5.2, 4.5.3)
@@ -665,11 +625,11 @@ impl DynamicEncoder {
             // Post-Base Indexed Field Line (RFC 9204 Section 4.5.3)
             let post_base_index = absolute_index - base;
             // 0x10 = 00010000
-            encode_integer_to_buf(buf, post_base_index, 4, 0x10)
+            integer::encode_integer(buf, post_base_index, 4, 0x10)
         } else {
             let relative_index = base - absolute_index - 1;
             // 0x80 = 10000000 (T=0)
-            encode_integer_to_buf(buf, relative_index, 6, 0x80)
+            integer::encode_integer(buf, relative_index, 6, 0x80)
         }
     }
 
@@ -683,7 +643,7 @@ impl DynamicEncoder {
         value: &[u8],
     ) -> Option<usize> {
         // 0x50 = 01010000 (N=0, T=1)
-        let mut offset = encode_integer_to_buf(buf, index as u64, 4, 0x50)?;
+        let mut offset = integer::encode_integer(buf, index as u64, 4, 0x50)?;
 
         // Value
         let value_len = self.encode_string(&mut buf[offset..], value)?;
@@ -716,11 +676,11 @@ impl DynamicEncoder {
             // Post-Base Name Reference (RFC 9204 Section 4.5.5)
             let post_base_index = absolute_index - base;
             // 0x00 = 00000000 (N=0)
-            encode_integer_to_buf(buf, post_base_index, 3, 0x00)?
+            integer::encode_integer(buf, post_base_index, 3, 0x00)?
         } else {
             let relative_index = base - absolute_index - 1;
             // 0x40 = 01000000 (N=0, T=0)
-            encode_integer_to_buf(buf, relative_index, 4, 0x40)?
+            integer::encode_integer(buf, relative_index, 4, 0x40)?
         };
 
         // Value
@@ -781,14 +741,14 @@ impl DynamicEncoder {
                 // H ビットを設定: prefix に 0x08 を OR (3-bit prefix の場合)
                 let h_bit = 1u8 << prefix_bits;
                 let offset =
-                    encode_integer_to_buf(buf, huffman_len as u64, prefix_bits, prefix | h_bit)?;
+                    integer::encode_integer(buf, huffman_len as u64, prefix_bits, prefix | h_bit)?;
                 huffman::encode(&mut buf[offset..], data)?;
                 return Some(offset + huffman_len);
             }
         }
 
         // リテラル文字列 (H=0)
-        let offset = encode_integer_to_buf(buf, data.len() as u64, prefix_bits, prefix)?;
+        let offset = integer::encode_integer(buf, data.len() as u64, prefix_bits, prefix)?;
         if buf.len() < offset + data.len() {
             return None;
         }
@@ -801,13 +761,13 @@ impl DynamicEncoder {
         if self.use_huffman {
             let huffman_len = huffman::encoded_len(data);
             if huffman_len < data.len() {
-                let offset = encode_integer_to_buf(buf, huffman_len as u64, 7, 0x80)?;
+                let offset = integer::encode_integer(buf, huffman_len as u64, 7, 0x80)?;
                 huffman::encode(&mut buf[offset..], data)?;
                 return Some(offset + huffman_len);
             }
         }
 
-        let offset = encode_integer_to_buf(buf, data.len() as u64, 7, 0x00)?;
+        let offset = integer::encode_integer(buf, data.len() as u64, 7, 0x00)?;
         if buf.len() < offset + data.len() {
             return None;
         }
@@ -842,41 +802,6 @@ impl DynamicEncoder {
             .name
             .clone();
         self.table.insert(name, value)
-    }
-}
-
-/// 整数をバッファにエンコード
-fn encode_integer_to_buf(buf: &mut [u8], value: u64, prefix_bits: u8, prefix: u8) -> Option<usize> {
-    let max_prefix = (1u64 << prefix_bits) - 1;
-
-    if value < max_prefix {
-        if buf.is_empty() {
-            return None;
-        }
-        buf[0] = prefix | (value as u8);
-        Some(1)
-    } else {
-        if buf.is_empty() {
-            return None;
-        }
-        buf[0] = prefix | (max_prefix as u8);
-        let mut offset = 1;
-        let mut remaining = value - max_prefix;
-
-        while remaining >= 128 {
-            if offset >= buf.len() {
-                return None;
-            }
-            buf[offset] = 0x80 | ((remaining & 0x7f) as u8);
-            remaining >>= 7;
-            offset += 1;
-        }
-
-        if offset >= buf.len() {
-            return None;
-        }
-        buf[offset] = remaining as u8;
-        Some(offset + 1)
     }
 }
 

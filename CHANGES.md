@@ -173,6 +173,8 @@
 
 ### misc
 
+- [UPDATE] QPACK 整数エンコード/デコードの重複実装を src/qpack/integer.rs に一本化する
+  - @voluntas
 - [UPDATE] prop_webtransport.rs をディレクトリモジュールに分割し PBT 間の重複テストを削除する
   - @voluntas
 - [UPDATE] validation.rs のインラインテストを tests/test_validation.rs に分割する

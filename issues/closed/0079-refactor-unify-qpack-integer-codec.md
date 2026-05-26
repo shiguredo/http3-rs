@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-26
 - Polished: 2026-05-26
 - Model: deepseek-v4-pro
 - Branch: feature/refactor-unify-qpack-integer-codec
@@ -106,6 +107,25 @@ encode はスライス版と Vec 版でセマンティクスが異なる (バッ
 
 - refs/rfc7541.txt Section 5.1 "Integer Representation": プレフィックス整数表現のエンコード/デコードアルゴリズム
 - refs/h3/rfc9204.txt Section 4.1.1 "Prefixed Integers": QPACK が RFC 7541 Section 5.1 を unmodified で参照。 62 ビットまでのデコード MUST 要件
+
+## 解決方法
+
+`src/qpack/integer.rs` を新設し、4 ファイル (encoder.rs, decoder.rs, encoder_stream.rs, decoder_stream.rs) に散在していた 8 箇所の整数エンコード/デコード実装を 3 関数 (`encode_integer`, `encode_integer_to_vec`, `decode_integer`) に統合した。
+
+### 変更内容
+
+- `src/qpack/integer.rs` を新設し、スライス版エンコード・Vec 版エンコード・デコードの 3 関数を配置
+- `src/qpack/mod.rs` にモジュール宣言を追加
+- `src/qpack/encoder.rs` から `Encoder::encode_integer` メソッドと `encode_integer_to_buf` フリー関数を削除し、`integer::encode_integer` に置換
+- `src/qpack/decoder.rs` から `Decoder::decode_integer` メソッドと `decode_integer` フリー関数を削除し、`integer::decode_integer` に置換
+- `src/qpack/encoder_stream.rs` から `encode_integer` と `decode_integer` フリー関数を削除し、`integer::encode_integer_to_vec` / `integer::decode_integer` に置換
+- `src/qpack/decoder_stream.rs` から `encode_integer` と `decode_integer` フリー関数を削除し、`integer::encode_integer_to_vec` / `integer::decode_integer` に置換
+- `pbt/tests/prop_qpack.rs` を `pbt/tests/prop_qpack/main.rs` に変換し、`integer.rs` サブモジュールとして整数コーデック専用の PBT と境界値テストを追加
+
+### テスト
+
+- PBT: encode -> decode ラウンドトリップ (スライス版・Vec 版)、スライス版と Vec 版の一致、1 バイトエンコーディング
+- 境界値テスト: 空バッファ、0 値、max_prefix 境界、バッファ不足、オーバーフロー保護、不完全多バイト、最大デコード可能値
 
 ## CHANGES.md エントリ案
 

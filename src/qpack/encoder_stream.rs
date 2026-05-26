@@ -13,6 +13,7 @@ use crate::error::QpackError;
 
 use super::dynamic_table::DynamicTable;
 use super::huffman;
+use super::integer;
 use super::table::STATIC_TABLE;
 
 /// エンコーダーストリーム命令
@@ -86,7 +87,7 @@ impl EncoderStream {
         if capacity > self.max_table_capacity {
             return Err(QpackError::CapacityExceeded);
         }
-        encode_integer(&mut self.send_buffer, capacity, 5, 0x20);
+        integer::encode_integer_to_vec(&mut self.send_buffer, capacity, 5, 0x20);
         Ok(())
     }
 
@@ -107,7 +108,7 @@ impl EncoderStream {
             return Err(QpackError::DynamicTableDisabled);
         }
         let prefix = if is_static { 0xc0 } else { 0x80 };
-        encode_integer(&mut self.send_buffer, name_index, 6, prefix);
+        integer::encode_integer_to_vec(&mut self.send_buffer, name_index, 6, prefix);
         encode_string(&mut self.send_buffer, value);
         Ok(())
     }
@@ -145,7 +146,7 @@ impl EncoderStream {
         if self.max_table_capacity == 0 {
             return Err(QpackError::DynamicTableDisabled);
         }
-        encode_integer(&mut self.send_buffer, relative_index, 5, 0x00);
+        integer::encode_integer_to_vec(&mut self.send_buffer, relative_index, 5, 0x00);
         Ok(())
     }
 
@@ -246,7 +247,7 @@ impl EncoderStreamReceiver {
         &mut self,
         table: &mut DynamicTable,
     ) -> Result<Option<EncoderInstruction>, QpackError> {
-        let (capacity, consumed) = decode_integer(&self.recv_buffer, 5)?;
+        let (capacity, consumed) = integer::decode_integer(&self.recv_buffer, 5)?;
 
         // 最大容量を超えていないかチェック
         if capacity > self.max_table_capacity {
@@ -267,7 +268,7 @@ impl EncoderStreamReceiver {
         table: &mut DynamicTable,
     ) -> Result<Option<EncoderInstruction>, QpackError> {
         let is_static = (self.recv_buffer[0] & 0x40) != 0;
-        let (name_index, mut consumed) = decode_integer(&self.recv_buffer, 6)?;
+        let (name_index, mut consumed) = integer::decode_integer(&self.recv_buffer, 6)?;
 
         // Value をデコード
         let (value, value_len) = decode_string(&self.recv_buffer[consumed..])?;
@@ -331,7 +332,7 @@ impl EncoderStreamReceiver {
         &mut self,
         table: &mut DynamicTable,
     ) -> Result<Option<EncoderInstruction>, QpackError> {
-        let (relative_index, consumed) = decode_integer(&self.recv_buffer, 5)?;
+        let (relative_index, consumed) = integer::decode_integer(&self.recv_buffer, 5)?;
 
         // テーブル操作を先に行い、成功後に drain
         table
@@ -351,24 +352,6 @@ impl EncoderStreamReceiver {
 
 // ヘルパー関数
 
-/// 整数をエンコード (RFC 7541 Section 5.1)
-fn encode_integer(buf: &mut Vec<u8>, value: u64, prefix_bits: u8, prefix: u8) {
-    let max_prefix = (1u64 << prefix_bits) - 1;
-
-    if value < max_prefix {
-        buf.push(prefix | (value as u8));
-    } else {
-        buf.push(prefix | (max_prefix as u8));
-        let mut remaining = value - max_prefix;
-
-        while remaining >= 128 {
-            buf.push(0x80 | ((remaining & 0x7f) as u8));
-            remaining >>= 7;
-        }
-        buf.push(remaining as u8);
-    }
-}
-
 /// 文字列をエンコード (7-bit prefix)
 fn encode_string(buf: &mut Vec<u8>, data: &[u8]) {
     encode_string_with_prefix(buf, data, 7, 0x00);
@@ -386,54 +369,15 @@ fn encode_string_with_prefix(buf: &mut Vec<u8>, data: &[u8], prefix_bits: u8, ba
         // ハフマン符号化を使用
         // H ビットは prefix ビットの直上
         let huffman_flag = 1u8 << prefix_bits;
-        encode_integer(buf, huffman_len as u64, prefix_bits, base | huffman_flag);
+        integer::encode_integer_to_vec(buf, huffman_len as u64, prefix_bits, base | huffman_flag);
         let start = buf.len();
         buf.resize(start + huffman_len, 0);
         huffman::encode(&mut buf[start..], data);
     } else {
         // リテラル
-        encode_integer(buf, data.len() as u64, prefix_bits, base);
+        integer::encode_integer_to_vec(buf, data.len() as u64, prefix_bits, base);
         buf.extend_from_slice(data);
     }
-}
-
-/// 整数をデコード
-fn decode_integer(data: &[u8], prefix_bits: u8) -> Result<(u64, usize), QpackError> {
-    if data.is_empty() {
-        return Err(QpackError::BufferTooShort);
-    }
-
-    let mask = ((1u16 << prefix_bits) - 1) as u8;
-    let prefix_value = data[0] & mask;
-
-    if prefix_value < mask {
-        return Ok((prefix_value as u64, 1));
-    }
-
-    let mut value = prefix_value as u64;
-    let mut shift = 0u32;
-    let mut offset = 1;
-
-    loop {
-        if offset >= data.len() {
-            return Err(QpackError::BufferTooShort);
-        }
-
-        let byte = data[offset];
-        value += ((byte & 0x7f) as u64) << shift;
-        offset += 1;
-
-        if byte & 0x80 == 0 {
-            break;
-        }
-
-        shift += 7;
-        if shift > 56 {
-            return Err(QpackError::DecodeFailed);
-        }
-    }
-
-    Ok((value, offset))
 }
 
 /// 文字列をデコード (7-bit prefix)
@@ -455,7 +399,7 @@ fn decode_string_with_prefix(data: &[u8], prefix_bits: u8) -> Result<(Vec<u8>, u
     // H ビットは prefix ビットの直上
     let huffman_flag = 1u8 << prefix_bits;
     let is_huffman = (data[0] & huffman_flag) != 0;
-    let (length, prefix_len) = decode_integer(data, prefix_bits)?;
+    let (length, prefix_len) = integer::decode_integer(data, prefix_bits)?;
 
     let total_len = prefix_len + length as usize;
     if data.len() < total_len {

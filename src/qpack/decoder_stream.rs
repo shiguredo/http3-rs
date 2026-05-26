@@ -10,6 +10,8 @@
 
 use crate::error::QpackError;
 
+use super::integer;
+
 /// デコーダーストリーム命令
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderInstruction {
@@ -62,21 +64,21 @@ impl DecoderStream {
     ///
     /// Format: 1xxxxxxx (7-bit prefix integer)
     pub fn encode_section_acknowledgment(&mut self, stream_id: u64) {
-        encode_integer(&mut self.send_buffer, stream_id, 7, 0x80);
+        integer::encode_integer_to_vec(&mut self.send_buffer, stream_id, 7, 0x80);
     }
 
     /// ストリームキャンセルをエンコード (Section 4.4.2)
     ///
     /// Format: 01xxxxxx (6-bit prefix integer)
     pub fn encode_stream_cancellation(&mut self, stream_id: u64) {
-        encode_integer(&mut self.send_buffer, stream_id, 6, 0x40);
+        integer::encode_integer_to_vec(&mut self.send_buffer, stream_id, 6, 0x40);
     }
 
     /// 挿入カウントインクリメントをエンコード (Section 4.4.3)
     ///
     /// Format: 00xxxxxx (6-bit prefix integer)
     pub fn encode_insert_count_increment(&mut self, increment: u64) {
-        encode_integer(&mut self.send_buffer, increment, 6, 0x00);
+        integer::encode_integer_to_vec(&mut self.send_buffer, increment, 6, 0x00);
     }
 
     /// 送信データを取得
@@ -175,7 +177,7 @@ impl DecoderStreamReceiver {
 
     /// Section Acknowledgment をデコード
     fn decode_section_acknowledgment(&mut self) -> Result<Option<DecoderInstruction>, QpackError> {
-        let (stream_id, consumed) = decode_integer(&self.recv_buffer, 7)?;
+        let (stream_id, consumed) = integer::decode_integer(&self.recv_buffer, 7)?;
 
         self.recv_buffer.drain(..consumed);
 
@@ -186,7 +188,7 @@ impl DecoderStreamReceiver {
 
     /// Stream Cancellation をデコード
     fn decode_stream_cancellation(&mut self) -> Result<Option<DecoderInstruction>, QpackError> {
-        let (stream_id, consumed) = decode_integer(&self.recv_buffer, 6)?;
+        let (stream_id, consumed) = integer::decode_integer(&self.recv_buffer, 6)?;
 
         self.recv_buffer.drain(..consumed);
 
@@ -198,7 +200,7 @@ impl DecoderStreamReceiver {
         &mut self,
         total_insert_count: u64,
     ) -> Result<Option<DecoderInstruction>, QpackError> {
-        let (increment, consumed) = decode_integer(&self.recv_buffer, 6)?;
+        let (increment, consumed) = integer::decode_integer(&self.recv_buffer, 6)?;
 
         // インクリメントが 0 の場合はエラー (RFC 9204 Section 4.4.3)
         if increment == 0 {
@@ -222,65 +224,6 @@ impl DecoderStreamReceiver {
     pub fn buffer(&self) -> &[u8] {
         &self.recv_buffer
     }
-}
-
-// ヘルパー関数
-
-/// 整数をエンコード (RFC 7541 Section 5.1)
-fn encode_integer(buf: &mut Vec<u8>, value: u64, prefix_bits: u8, prefix: u8) {
-    let max_prefix = (1u64 << prefix_bits) - 1;
-
-    if value < max_prefix {
-        buf.push(prefix | (value as u8));
-    } else {
-        buf.push(prefix | (max_prefix as u8));
-        let mut remaining = value - max_prefix;
-
-        while remaining >= 128 {
-            buf.push(0x80 | ((remaining & 0x7f) as u8));
-            remaining >>= 7;
-        }
-        buf.push(remaining as u8);
-    }
-}
-
-/// 整数をデコード
-fn decode_integer(data: &[u8], prefix_bits: u8) -> Result<(u64, usize), QpackError> {
-    if data.is_empty() {
-        return Err(QpackError::BufferTooShort);
-    }
-
-    let mask = ((1u16 << prefix_bits) - 1) as u8;
-    let prefix_value = data[0] & mask;
-
-    if prefix_value < mask {
-        return Ok((prefix_value as u64, 1));
-    }
-
-    let mut value = prefix_value as u64;
-    let mut shift = 0u32;
-    let mut offset = 1;
-
-    loop {
-        if offset >= data.len() {
-            return Err(QpackError::BufferTooShort);
-        }
-
-        let byte = data[offset];
-        value += ((byte & 0x7f) as u64) << shift;
-        offset += 1;
-
-        if byte & 0x80 == 0 {
-            break;
-        }
-
-        shift += 7;
-        if shift > 56 {
-            return Err(QpackError::DecodeFailed);
-        }
-    }
-
-    Ok((value, offset))
 }
 
 #[cfg(test)]

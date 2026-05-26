@@ -14,6 +14,7 @@ use crate::error::QpackError;
 use super::dynamic_table::DynamicTable;
 use super::header::Header;
 use super::huffman;
+use super::integer;
 use super::table::{STATIC_TABLE_LEN, get_static_entry};
 
 /// QPACK 動的デコードの結果 (RFC 9204 Section 2.1.2)
@@ -63,7 +64,7 @@ impl Decoder {
         let mut offset = 0;
 
         // Required Insert Count
-        let (ric, ric_len) = self.decode_integer(&data[offset..], 8)?;
+        let (ric, ric_len) = integer::decode_integer(&data[offset..], 8)?;
         offset += ric_len;
 
         if ric != 0 {
@@ -75,7 +76,7 @@ impl Decoder {
         if offset >= data.len() {
             return Err(QpackError::BufferTooShort);
         }
-        let (_, delta_len) = self.decode_integer(&data[offset..], 7)?;
+        let (_, delta_len) = integer::decode_integer(&data[offset..], 7)?;
         offset += delta_len;
 
         // ヘッダーをデコード
@@ -136,7 +137,7 @@ impl Decoder {
             return Err(QpackError::DecodeFailed);
         }
 
-        let (index, consumed) = self.decode_integer(data, 6)?;
+        let (index, consumed) = integer::decode_integer(data, 6)?;
 
         if index as usize >= STATIC_TABLE_LEN {
             return Err(QpackError::InvalidIndex(index));
@@ -161,7 +162,7 @@ impl Decoder {
         let mut offset = 0;
 
         // Name index
-        let (index, index_len) = self.decode_integer(data, 4)?;
+        let (index, index_len) = integer::decode_integer(data, 4)?;
         offset += index_len;
 
         if index as usize >= STATIC_TABLE_LEN {
@@ -185,7 +186,7 @@ impl Decoder {
         let mut offset = 0;
 
         // Skip prefix byte (already validated)
-        let (name_len_value, prefix_len) = self.decode_integer(data, 3)?;
+        let (name_len_value, prefix_len) = integer::decode_integer(data, 3)?;
         offset += prefix_len;
 
         // Decode name
@@ -209,7 +210,7 @@ impl Decoder {
         }
 
         let is_huffman = (data[0] & 0x80) != 0;
-        let (length, prefix_len) = self.decode_integer(data, 7)?;
+        let (length, prefix_len) = integer::decode_integer(data, 7)?;
 
         let total_len = prefix_len + length as usize;
         if data.len() < total_len {
@@ -247,45 +248,6 @@ impl Decoder {
         };
 
         Ok((decoded, length))
-    }
-
-    /// 整数をデコード (RFC 7541 Section 5.1)
-    fn decode_integer(&self, data: &[u8], prefix_bits: u8) -> Result<(u64, usize), QpackError> {
-        if data.is_empty() {
-            return Err(QpackError::BufferTooShort);
-        }
-
-        let mask = ((1u16 << prefix_bits) - 1) as u8;
-        let prefix_value = data[0] & mask;
-
-        if prefix_value < mask {
-            return Ok((prefix_value as u64, 1));
-        }
-
-        let mut value = prefix_value as u64;
-        let mut shift = 0u32;
-        let mut offset = 1;
-
-        loop {
-            if offset >= data.len() {
-                return Err(QpackError::BufferTooShort);
-            }
-
-            let byte = data[offset];
-            value += ((byte & 0x7f) as u64) << shift;
-            offset += 1;
-
-            if byte & 0x80 == 0 {
-                break;
-            }
-
-            shift += 7;
-            if shift > 56 {
-                return Err(QpackError::DecodeFailed);
-            }
-        }
-
-        Ok((value, offset))
     }
 }
 
@@ -364,7 +326,7 @@ impl DynamicDecoder {
         let mut offset = 0;
 
         // Required Insert Count をデコード
-        let (enc_insert_count, ric_len) = decode_integer(&data[offset..], 8)?;
+        let (enc_insert_count, ric_len) = integer::decode_integer(&data[offset..], 8)?;
         offset += ric_len;
 
         // Required Insert Count を復元
@@ -381,7 +343,7 @@ impl DynamicDecoder {
             return Err(QpackError::BufferTooShort);
         }
         let sign = (data[offset] & 0x80) != 0;
-        let (delta_base, delta_len) = decode_integer(&data[offset..], 7)?;
+        let (delta_base, delta_len) = integer::decode_integer(&data[offset..], 7)?;
         offset += delta_len;
 
         // Base を計算
@@ -494,7 +456,7 @@ impl DynamicDecoder {
     ) -> Result<(Header, usize), QpackError> {
         let is_static = (data[0] & 0x40) != 0;
 
-        let (index, consumed) = decode_integer(data, 6)?;
+        let (index, consumed) = integer::decode_integer(data, 6)?;
 
         if is_static {
             // 静的テーブル
@@ -534,7 +496,7 @@ impl DynamicDecoder {
         base: u64,
         required_insert_count: u64,
     ) -> Result<(Header, usize), QpackError> {
-        let (post_base_index, consumed) = decode_integer(data, 4)?;
+        let (post_base_index, consumed) = integer::decode_integer(data, 4)?;
 
         // absolute_index = base + post_base_index
         // RFC 9204 Section 2.2.3: absolute index >= Required Insert Count は
@@ -569,7 +531,7 @@ impl DynamicDecoder {
         let mut offset = 0;
 
         // Name index
-        let (index, index_len) = decode_integer(data, 4)?;
+        let (index, index_len) = integer::decode_integer(data, 4)?;
         offset += index_len;
 
         let name = if is_static {
@@ -614,7 +576,7 @@ impl DynamicDecoder {
         let mut offset = 0;
 
         // Name index (post-base)
-        let (post_base_index, index_len) = decode_integer(data, 3)?;
+        let (post_base_index, index_len) = integer::decode_integer(data, 3)?;
         offset += index_len;
 
         // absolute_index = base + post_base_index
@@ -645,7 +607,7 @@ impl DynamicDecoder {
         let mut offset = 0;
 
         // Skip prefix byte (already validated)
-        let (name_len_value, prefix_len) = decode_integer(data, 3)?;
+        let (name_len_value, prefix_len) = integer::decode_integer(data, 3)?;
         offset += prefix_len;
 
         // Decode name
@@ -675,45 +637,6 @@ impl DynamicDecoder {
     }
 }
 
-/// 整数をデコード
-fn decode_integer(data: &[u8], prefix_bits: u8) -> Result<(u64, usize), QpackError> {
-    if data.is_empty() {
-        return Err(QpackError::BufferTooShort);
-    }
-
-    let mask = ((1u16 << prefix_bits) - 1) as u8;
-    let prefix_value = data[0] & mask;
-
-    if prefix_value < mask {
-        return Ok((prefix_value as u64, 1));
-    }
-
-    let mut value = prefix_value as u64;
-    let mut shift = 0u32;
-    let mut offset = 1;
-
-    loop {
-        if offset >= data.len() {
-            return Err(QpackError::BufferTooShort);
-        }
-
-        let byte = data[offset];
-        value += ((byte & 0x7f) as u64) << shift;
-        offset += 1;
-
-        if byte & 0x80 == 0 {
-            break;
-        }
-
-        shift += 7;
-        if shift > 56 {
-            return Err(QpackError::DecodeFailed);
-        }
-    }
-
-    Ok((value, offset))
-}
-
 /// 文字列をデコード
 fn decode_string(data: &[u8]) -> Result<(Vec<u8>, usize), QpackError> {
     if data.is_empty() {
@@ -721,7 +644,7 @@ fn decode_string(data: &[u8]) -> Result<(Vec<u8>, usize), QpackError> {
     }
 
     let is_huffman = (data[0] & 0x80) != 0;
-    let (length, prefix_len) = decode_integer(data, 7)?;
+    let (length, prefix_len) = integer::decode_integer(data, 7)?;
 
     let total_len = prefix_len + length as usize;
     if data.len() < total_len {
