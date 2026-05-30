@@ -262,12 +262,12 @@ fn is_valid_ip_literal_content(content: &[u8]) -> bool {
         .all(|&b| b.is_ascii_hexdigit() || b == b':' || b == b'.')
 }
 
-/// 非 CONNECT リクエストの :authority が URI authority として妥当かを検証する
-/// (RFC 9114 Section 4.3.1, RFC 3986 Section 3.2)
+/// :authority (非 CONNECT / Extended CONNECT) または代替の Host ヘッダーが URI authority
+/// として妥当かを検証する (RFC 9114 Section 4.3.1, RFC 9110 Section 7.2, RFC 3986 Section 3.2)
 ///
 /// authority = host [ ":" port ]
 /// host = IP-literal / IPv4address / reg-name
-/// ポートはオプション。userinfo は別途チェック済みのためここでは検証しない。
+/// ポートはオプション。userinfo (@) はいずれの経路でも許可文字に含まれないため拒否される。
 fn is_valid_authority(value: &[u8]) -> bool {
     if value.is_empty() {
         return false;
@@ -437,7 +437,14 @@ pub fn validate_request_headers(headers: &[Header]) -> Result<(), Error> {
                 return Err(Error::StreamError(ErrorCode::MessageError));
             }
 
+            // Host は単一値フィールドで複数生成は禁止 (RFC 9110 Section 5.3、ABNF は
+            // Section 7.2)。:authority の重複拒否 (上記参照) と同じく拒否し、:authority との
+            // 一致チェックを最後の Host だけで通過させる迂回を防ぐ。受信側拒否は RFC の MUST
+            // ではなく堅牢性向上。
             if header.name() == b"host" {
+                if host.is_some() {
+                    return Err(Error::StreamError(ErrorCode::MessageError));
+                }
                 host = Some(header.value());
             }
         }
@@ -582,6 +589,17 @@ pub fn validate_request_headers(headers: &[Header]) -> Result<(), Error> {
     }
     if let Some(h) = host
         && h.is_empty()
+    {
+        return Err(Error::StreamError(ErrorCode::MessageError));
+    }
+
+    // :authority が無く Host のみで authority 情報を運ぶ場合、Host を :authority と同じ
+    // 構文 (uri-host[:port]) で検証する (RFC 9110 Section 7.2, RFC 3986 Section 3.2.2)。
+    // RFC の MUST ではなく :authority との検証レベルを揃える堅牢性向上。plain CONNECT は
+    // :authority 必須 (上記で None を拒否済み) のためこの分岐には入らない。
+    if authority.is_none()
+        && let Some(h) = host
+        && !is_valid_authority(h)
     {
         return Err(Error::StreamError(ErrorCode::MessageError));
     }

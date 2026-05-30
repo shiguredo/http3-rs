@@ -435,3 +435,42 @@ proptest! {
         );
     }
 }
+
+/// authority 候補を生成する (host[:port] 構文の有効・無効を混在させる)。
+///
+/// 文字集合はすべて有効な field-value 文字に限定するため、Host 経路の
+/// field-value 検査では落ちず、authority 構文検査 (is_valid_authority) の
+/// 結果だけが Ok/Err を分ける。
+fn authority_candidate() -> impl Strategy<Value = Vec<u8>> {
+    proptest::collection::vec(prop::sample::select(b"ab01.:-[]".to_vec()), 1..16)
+}
+
+proptest! {
+    /// :authority 経路と Host 単独経路で authority 構文検証の結果が一致すること。
+    ///
+    /// Host は :authority の代替として同じ uri-host[:port] 構文で検証される (RFC 9110
+    /// Section 7.2)。charset は field-value として有効かつ userinfo (@) や空値を含まないため、
+    /// 両経路で挙動が分かれる差分 (userinfo 拒否 / 空値 / CONNECT) を踏まず、
+    /// is_valid_authority の結果だけが Ok/Err を分ける。それらの差分は単体テストで固定する。
+    #[test]
+    fn prop_host_only_matches_authority_validation(value in authority_candidate()) {
+        let with_authority = vec![
+            Header::new(b":method", b"GET").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":path", b"/").unwrap(),
+            Header::new(b":authority", &value).unwrap(),
+        ];
+        let with_host = vec![
+            Header::new(b":method", b"GET").unwrap(),
+            Header::new(b":scheme", b"https").unwrap(),
+            Header::new(b":path", b"/").unwrap(),
+            Header::new(b"host", &value).unwrap(),
+        ];
+        prop_assert_eq!(
+            validate_request_headers(&with_authority).is_ok(),
+            validate_request_headers(&with_host).is_ok(),
+            "value={:?}",
+            value,
+        );
+    }
+}

@@ -2,8 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-05-30
+- Completed: 2026-05-30
 - Model: Opus 4.8
-- Branch: feature/add-host-header-validation
+- Branch: feature/change-host-header-validation
 - Polished: 2026-05-30
 
 ## 目的
@@ -46,15 +47,18 @@ Medium。RFC 9114 / RFC 9110 が Host 構文不正の拒否を MUST として要
 
 ## 解決方法
 
-1. ヘッダーループの Host 取得 (`src/validation.rs:440-441`) を、`:authority` の重複検出 (`src/validation.rs:396-398`) と同じパターンに変更する。`host.is_some()` なら `H3_MESSAGE_ERROR` を返し、そうでなければ `host = Some(header.value())` とする。
-2. Host 非空チェック (`src/validation.rs:583-587`) の直後に、`authority.is_none() && host.is_some()` のとき `is_valid_authority(h)` を適用し、不正なら `H3_MESSAGE_ERROR` を返す。`:authority` と Host の両方が存在する場合は一致チェック (`src/validation.rs:570-573`) と `:authority` の検証 (`src/validation.rs:602-607`) で既に担保されるため、Host 単独経路のみ追加すればよい (重複検証を避ける)。
-   - `is_valid_authority` は内部の `is_valid_reg_name` (`src/validation.rs:213`) 経由で `@` (userinfo) を常に拒否する。`:authority` の userinfo 拒否は http/https 限定で別途 `src/validation.rs:591-597` にあるが、Host では scheme に依らず常に拒否される。Host に userinfo は不要なため妥当。
-3. 追加するコードコメントに、根拠として RFC 9110 Section 7.2 (`Host = uri-host [ ":" port ]`) と、uri-host の構文実体である RFC 3986 Section 3.2.2 (host = IP-literal / IPv4address / reg-name) を記載する。あわせて構文検証の `H3_MESSAGE_ERROR` は RFC の MUST ではなく堅牢性向上である旨を明記する。
-4. テストを追加する:
-   - `tests/test_validation.rs`: Host を 2 つ持つリクエストを `H3_MESSAGE_ERROR` で拒否すること (`:authority` 有無の両方で確認)。
-   - `tests/test_validation.rs`: `:authority` 不在で不正な Host (非数字ポート `example.com:notaport`、末尾コロン `example.com:`、ホスト名に不正文字) を `H3_MESSAGE_ERROR` で拒否すること。非 CONNECT と Extended CONNECT の両経路を含める。
-   - `tests/test_validation.rs`: `:authority` 不在で正当な Host (`example.com` / `example.com:8443` / `[::1]:443`) を受理すること。両経路を含める。
-   - `pbt/tests/prop_validation.rs`: 現状 `is_valid_authority` を対象とする構文検証 PBT は存在しない (既存 PBT は `:authority` に固定値を使うのみ)。authority 値を変化させる strategy を新規追加し、「`is_valid_authority(v)` が false ⇔ Host 単独リクエストが Err」「同じ `v` で `:authority` 経路も同一判定」の同値性を検証する。
+1. `validate_request_headers` (`src/validation.rs`) のヘッダーループで Host を取得する際、`:authority` の重複拒否と同じく `host.is_some()` なら `H3_MESSAGE_ERROR` を返すようにした。これにより重複 Host で `:authority` 整合チェックを最後の Host だけで通過させる迂回を塞いだ。
+2. Host 非空チェックの直後に、`authority.is_none()` かつ Host が存在する場合に `is_valid_authority(h)` を適用し、不正なら `H3_MESSAGE_ERROR` を返す処理を追加した。`:authority` と Host の両方が存在する場合は一致チェックと `:authority` 検証で担保されるため、Host 単独経路のみ追加検証する。ガード条件により plain CONNECT (`:authority` 必須) は対象外、非 CONNECT と Extended CONNECT の Host 単独経路は対象になる。
+3. `is_valid_authority` の doc コメントを `:authority` と Host 両用の用途へ更新し、Host 重複拒否 (RFC 9110 Section 5.3、ABNF は Section 7.2) と Host 単独構文検証 (RFC 9110 Section 7.2 / RFC 3986 Section 3.2.2) の根拠を記載した。いずれも RFC の MUST ではなく `:authority` と検証レベルを揃える堅牢性向上である旨も明記した。
+4. テストを追加した:
+   - `tests/test_validation.rs`: 重複 Host を `H3_MESSAGE_ERROR` で拒否すること (`:authority` 無しと、`:authority` 有りで先頭 Host を整合チェックから隠す迂回シナリオの両方)。
+   - `tests/test_validation.rs`: `:authority` 不在で不正な Host (非数字ポート / 末尾コロン / ホスト欠落 / reg-name 不正文字 / userinfo) を非 CONNECT と Extended CONNECT の両経路で拒否すること。
+   - `tests/test_validation.rs`: `:authority` 不在で正当な Host (`example.com` / `example.com:8443` / `[::1]:443`) を受理すること。
+   - `pbt/tests/prop_validation.rs`: authority 候補を生成する strategy を新規追加し、`:authority` 経路と Host 単独経路で検証結果が一致する同値性プロパティを検証した。charset は field-value として有効かつ userinfo・空値を含まないため、両経路で挙動が分かれる差分を踏まず `is_valid_authority` の結果だけが判定を分ける。
+
+## 補足
+
+当初はブランチ・カテゴリを `add` としていたが、従来受理していた重複 Host / 不正 Host を新たに拒否する後方互換のない挙動変更のため、`change` に変更した (CHANGES.md も `[CHANGE]`)。
 
 ## 関連
 

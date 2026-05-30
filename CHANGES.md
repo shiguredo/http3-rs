@@ -21,6 +21,10 @@
   - @voluntas
 - [CHANGE] `Event` enum の WebTransport バリアント 14 個を `Event::WebTransport(WebTransportEvent)` にネスト化する
   - @voluntas
+- [CHANGE] 重複した Host ヘッダーを持つリクエストを `H3_MESSAGE_ERROR` で拒否する (RFC 9110 Section 5.3)
+  - @voluntas
+- [CHANGE] `:authority` が無く Host ヘッダーのみで authority を運ぶリクエストの Host 値を uri-host[:port] 構文で検証し、不正値を `H3_MESSAGE_ERROR` で拒否する (RFC 9110 Section 7.2)
+  - @voluntas
 - [ADD] `VarInt::from_static` / `qpack::Header::from_static` / `frame::GoawayPayload::from_static` の doc に `compile_fail` ブロックを追加し、`const fn` 検査のリグレッションを CI (`cargo test --doc`) で防止する
   - @voluntas
 - [ADD] 構築時検査の `from_static` ↔ `new` 一貫性、`from_validated_parts` ↔ `new` 整合性、`Header::new` ↔ QPACK ラウンドトリップ完全性を検証する PBT を追加する
