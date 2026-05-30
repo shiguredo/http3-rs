@@ -221,3 +221,7 @@
   - @voluntas
 - [FIX] CI の共通 workspace job から `interop/h3` / `interop/wt` を除外し、相互運用テストは macOS 専用 step でのみ実行する
   - @voluntas
+- [FIX] STOP_SENDING 受信時のクリティカルストリーム判定を受信側から送信側 (`control_send` / ローカル QPACK encoder・decoder) に修正し、送信側クリティカルストリームへの STOP_SENDING を `H3_CLOSED_CRITICAL_STREAM` とする (RFC 9114 Section 6.2.1, RFC 9204 Section 4.2)
+  - @voluntas
+- [FIX] payload が欠落した GOAWAY フレームのデコードエラーを `BufferTooShort` から `InvalidLength` に変更し、`H3_FRAME_ERROR` に集約されるよう修正する (RFC 9114 Section 7.1)
+  - @voluntas

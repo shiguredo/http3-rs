@@ -119,3 +119,18 @@ fn connection_maintained_after_stream_error() {
         "StreamError 後も既存ストリームのデータ取得が可能であること"
     );
 }
+
+#[test]
+fn empty_goaway_payload_is_frame_error() {
+    // payload 長 0 の GOAWAY を制御ストリームに投入すると H3_FRAME_ERROR になることを検証する
+    // (RFC 9114 Section 7.1)。デコード失敗が BufferTooShort のままだと接続エラーに集約されない。
+    let (mut client, _server) = setup_pair();
+
+    // setup_pair で stream 3 は制御ストリームとして確立済み (type 0x00 + SETTINGS 投入済み)。
+    // そこへ GOAWAY (type=0x07) で length=0x00 の不正フレームを投入する。
+    let err = client.feed_stream(3, &[0x07, 0x00], false).unwrap_err();
+    assert!(
+        matches!(err, Error::ConnectionError(ErrorCode::FrameError)),
+        "空 payload の GOAWAY は H3_FRAME_ERROR であること: {err:?}"
+    );
+}

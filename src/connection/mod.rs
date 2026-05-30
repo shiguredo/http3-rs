@@ -1380,7 +1380,7 @@ impl Connection {
         }
 
         // ストリームタイプ確定後のクリティカルストリーム FIN チェック
-        // (RFC 9114 Section 6.2.1, RFC 9204 Section 4.3)
+        // (RFC 9114 Section 6.2.1, RFC 9204 Section 4.2)
         // 初回チャンクに FIN が付いている場合、上部の FIN チェック時点では
         // stream_id が未登録のため検出できない
         if fin {
@@ -3814,7 +3814,7 @@ impl Connection {
     /// QUIC から RESET_STREAM 受信時に呼ぶ
     ///
     /// ストリームの状態を Reset に遷移し、イベントを発行する。
-    /// クリティカルストリームへの RESET_STREAM は接続エラー (RFC 9114 Section 6.2.1, RFC 9204 Section 4.3)
+    /// クリティカルストリームへの RESET_STREAM は接続エラー (RFC 9114 Section 6.2.1, RFC 9204 Section 4.2)
     ///
     /// `final_size` は RFC 9000 Section 19.4 で定義される RESET_STREAM の Final Size。
     /// `RESET_STREAM_AT` (draft-ietf-quic-reliable-stream-reset) で運ばれた reliable size
@@ -3826,7 +3826,9 @@ impl Connection {
         error_code: u64,
         final_size: u64,
     ) -> Result<(), Error> {
-        // クリティカルストリームが閉じられた場合は接続エラー
+        // RESET_STREAM は peer が送信するストリームの中断を通知するフレームのため、
+        // 判定対象は受信側クリティカルストリーム (control_recv / peer QPACK stream)。
+        // STOP_SENDING (送信側が対象) とは方向が逆になる点に注意。
         let is_critical = self.control_recv.stream_id() == Some(stream_id)
             || self.peer_encoder_stream_id == Some(stream_id)
             || self.peer_decoder_stream_id == Some(stream_id);
@@ -3887,12 +3889,14 @@ impl Connection {
     /// QUIC から STOP_SENDING 受信時に呼ぶ
     ///
     /// ストリームのローカル側をクローズし、イベントを発行する。
-    /// クリティカルストリームへの STOP_SENDING は接続エラー (RFC 9114 Section 6.2.1, RFC 9204 Section 4.3)
+    /// クリティカルストリームへの STOP_SENDING は接続エラー (RFC 9114 Section 6.2.1, RFC 9204 Section 4.2)
     pub fn stop_sending(&mut self, stream_id: u64, error_code: u64) -> Result<(), Error> {
-        // クリティカルストリームへの STOP_SENDING は接続エラー
-        let is_critical = self.control_recv.stream_id() == Some(stream_id)
-            || self.peer_encoder_stream_id == Some(stream_id)
-            || self.peer_decoder_stream_id == Some(stream_id);
+        // STOP_SENDING は「こちらが送信するストリームの送信停止」を要求するフレームのため、
+        // 判定対象は送信側クリティカルストリーム (control_send / ローカル QPACK encoder・decoder)。
+        // 受信側ストリーム (control_recv / peer QPACK stream) はこちらが送信しないため対象外。
+        let is_critical = self.control_send.stream_id() == Some(stream_id)
+            || self.encoder_stream_id == Some(stream_id)
+            || self.decoder_stream_id == Some(stream_id);
         if is_critical {
             return Err(Error::ConnectionError(ErrorCode::ClosedCriticalStream));
         }
@@ -4078,7 +4082,7 @@ mod tests {
 
     // =========================================================================
     // 0023: RESET_STREAM / STOP_SENDING によるクリティカルストリーム閉鎖検出
-    // (RFC 9114 Section 6.2.1, RFC 9204 Section 4.3)
+    // (RFC 9114 Section 6.2.1, RFC 9204 Section 4.2)
     // =========================================================================
 
     #[test]
@@ -4096,13 +4100,38 @@ mod tests {
 
     #[test]
     fn test_stop_sending_on_control_stream_is_closed_critical_stream() {
+        // STOP_SENDING は送信側クリティカルストリームを対象とする。
+        // ローカルの送信制御ストリーム (control_send) への STOP_SENDING は接続エラー。
         let mut conn = Connection::client(Settings::default());
-        conn.feed_stream(3, &[0x00, 0x04, 0x00], false).unwrap();
-        let err = conn.stop_sending(3, 0).unwrap_err();
+        conn.set_control_stream_id(2).unwrap();
+        let err = conn.stop_sending(2, 0).unwrap_err();
         assert!(matches!(
             err,
             Error::ConnectionError(ErrorCode::ClosedCriticalStream)
         ));
+    }
+
+    #[test]
+    fn test_stop_sending_on_peer_control_stream_is_not_critical() {
+        // STOP_SENDING は受信側ストリーム (peer の制御ストリーム) を対象としない。
+        // こちらが送信しないストリームへの STOP_SENDING はクリティカル扱いしない。
+        let mut conn = Connection::client(Settings::default());
+        conn.feed_stream(3, &[0x00, 0x04, 0x00], false).unwrap();
+        assert!(conn.stop_sending(3, 0).is_ok());
+    }
+
+    #[test]
+    fn test_stop_sending_on_peer_qpack_streams_is_not_critical() {
+        // peer の QPACK エンコーダー (0x02) / デコーダー (0x03) も受信側ストリームのため
+        // STOP_SENDING はクリティカル扱いしない。stream_reset (受信側を critical 扱い) との
+        // 方向の非対称が崩れていないことを固定する。
+        let mut conn = Connection::client(Settings::default());
+        conn.feed_stream(3, &[0x02], false).unwrap();
+        assert!(conn.stop_sending(3, 0).is_ok());
+
+        let mut conn = Connection::client(Settings::default());
+        conn.feed_stream(3, &[0x03], false).unwrap();
+        assert!(conn.stop_sending(3, 0).is_ok());
     }
 
     #[test]
@@ -4131,9 +4160,10 @@ mod tests {
 
     #[test]
     fn test_stop_sending_on_qpack_encoder_stream_is_closed_critical_stream() {
+        // ローカル QPACK エンコーダーストリームへの STOP_SENDING は接続エラー。
         let mut conn = Connection::client(Settings::default());
-        conn.feed_stream(3, &[0x02], false).unwrap();
-        let err = conn.stop_sending(3, 0).unwrap_err();
+        conn.set_encoder_stream_id(6).unwrap();
+        let err = conn.stop_sending(6, 0).unwrap_err();
         assert!(matches!(
             err,
             Error::ConnectionError(ErrorCode::ClosedCriticalStream)
@@ -4142,9 +4172,10 @@ mod tests {
 
     #[test]
     fn test_stop_sending_on_qpack_decoder_stream_is_closed_critical_stream() {
+        // ローカル QPACK デコーダーストリームへの STOP_SENDING は接続エラー。
         let mut conn = Connection::client(Settings::default());
-        conn.feed_stream(3, &[0x03], false).unwrap();
-        let err = conn.stop_sending(3, 0).unwrap_err();
+        conn.set_decoder_stream_id(10).unwrap();
+        let err = conn.stop_sending(10, 0).unwrap_err();
         assert!(matches!(
             err,
             Error::ConnectionError(ErrorCode::ClosedCriticalStream)

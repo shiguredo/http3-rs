@@ -174,7 +174,9 @@ fn decode_settings_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
 }
 
 fn decode_goaway_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
-    let (id, consumed) = varint::decode(payload).map_err(|_| FrameDecodeError::BufferTooShort)?;
+    // payload は完全に受信済みなので、varint デコード失敗 (空 payload を含む) は H3_FRAME_ERROR
+    // (RFC 9114 Section 7.1)。decode_settings_frame / decode_max_push_id_frame と同じ扱い。
+    let (id, consumed) = varint::decode(payload).map_err(|_| FrameDecodeError::InvalidLength)?;
     // ペイロードに余剰バイトがあれば不正 (RFC 9114 Section 7.1)
     if consumed != payload.len() {
         return Err(FrameDecodeError::InvalidLength);
@@ -388,5 +390,21 @@ mod tests {
         let buf = [0x0d, 0x01, 0x05];
         let result = decode_frame(&buf).unwrap();
         assert_eq!(result, (Frame::MaxPushId(VarInt::from_static(5)), 3));
+    }
+
+    #[test]
+    fn test_decode_goaway_frame_empty_payload_is_invalid_length() {
+        // payload 長 0 の GOAWAY は途中切れ扱いで H3_FRAME_ERROR (RFC 9114 Section 7.1)。
+        // BufferTooShort ではなく InvalidLength を返し、SETTINGS / MAX_PUSH_ID と一貫させる。
+        let buf = [0x07, 0x00];
+        assert_eq!(decode_frame(&buf), Err(FrameDecodeError::InvalidLength));
+    }
+
+    #[test]
+    fn test_decode_goaway_frame_trailing_bytes_is_invalid_length() {
+        // payload に余剰バイトがある GOAWAY も H3_FRAME_ERROR (RFC 9114 Section 7.1)。
+        // length=2 だが ID varint は 1 バイト (0x05) で、余剰バイト 0x99 が残る。
+        let buf = [0x07, 0x02, 0x05, 0x99];
+        assert_eq!(decode_frame(&buf), Err(FrameDecodeError::InvalidLength));
     }
 }
