@@ -287,6 +287,76 @@ fn test_authority_host_mismatch_is_malformed() {
 }
 
 #[test]
+fn test_duplicate_host_is_malformed() {
+    // Host は単一値フィールドのため重複は malformed (RFC 9110 Section 5.3)
+    let headers = vec![
+        wire_header(b":method", b"GET"),
+        wire_header(b":scheme", b"https"),
+        wire_header(b":path", b"/"),
+        wire_header(b"host", b"example.com"),
+        wire_header(b"host", b"other.com"),
+    ];
+    assert!(validate_request_headers(&headers).is_err());
+}
+
+#[test]
+fn test_duplicate_host_with_authority_is_malformed() {
+    // :authority と一致する Host を 2 つ目に置いて 1 つ目の不一致 Host を
+    // 整合チェックから隠す迂回を防ぐこと。重複 Host は一致チェックより前に拒否される。
+    let headers = vec![
+        wire_header(b":method", b"GET"),
+        wire_header(b":scheme", b"https"),
+        wire_header(b":path", b"/"),
+        wire_header(b":authority", b"origin.example"),
+        wire_header(b"host", b"attacker.example"),
+        wire_header(b"host", b"origin.example"),
+    ];
+    assert!(validate_request_headers(&headers).is_err());
+}
+
+#[test]
+fn test_host_only_with_invalid_syntax_is_malformed() {
+    // :authority が無く Host のみの場合、Host を uri-host[:port] で構文検証する
+    // (RFC 9110 Section 7.2)。field-value としては有効でも authority 構文に外れる値
+    // (非数字ポート / 末尾コロン / ホスト欠落 / reg-name 不正文字 / userinfo) を拒否する。
+    for invalid in [
+        b"example.com:notaport".as_slice(),
+        b"example.com:",
+        b":8443",
+        b"example.com/path",
+        b"user@example.com",
+    ] {
+        let headers = vec![
+            wire_header(b":method", b"GET"),
+            wire_header(b":scheme", b"https"),
+            wire_header(b":path", b"/"),
+            wire_header(b"host", invalid),
+        ];
+        assert!(
+            validate_request_headers(&headers).is_err(),
+            "不正な Host を拒否すること: {invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn test_host_only_with_valid_syntax_is_valid() {
+    // :authority が無く Host のみでも正当な uri-host[:port] は受理する
+    for valid in [b"example.com".as_slice(), b"example.com:8443", b"[::1]:443"] {
+        let headers = vec![
+            wire_header(b":method", b"GET"),
+            wire_header(b":scheme", b"https"),
+            wire_header(b":path", b"/"),
+            wire_header(b"host", valid),
+        ];
+        assert!(
+            validate_request_headers(&headers).is_ok(),
+            "正当な Host を受理すること: {valid:?}"
+        );
+    }
+}
+
+#[test]
 fn test_duplicate_method_is_malformed() {
     let headers = vec![
         wire_header(b":method", b"GET"),
@@ -662,6 +732,19 @@ fn test_extended_connect_authority_host_mismatch_is_malformed() {
         wire_header(b":path", b"/webtransport"),
         wire_header(b":authority", b"example.com"),
         wire_header(b"host", b"other.com"),
+    ];
+    assert!(validate_request_headers(&headers).is_err());
+}
+
+#[test]
+fn test_extended_connect_host_only_with_invalid_syntax_is_malformed() {
+    // Extended CONNECT でも :authority が無く Host のみの場合は Host 構文を検証する
+    let headers = vec![
+        wire_header(b":method", b"CONNECT"),
+        wire_header(b":protocol", b"webtransport-h3"),
+        wire_header(b":scheme", b"https"),
+        wire_header(b":path", b"/webtransport"),
+        wire_header(b"host", b"example.com:notaport"),
     ];
     assert!(validate_request_headers(&headers).is_err());
 }
