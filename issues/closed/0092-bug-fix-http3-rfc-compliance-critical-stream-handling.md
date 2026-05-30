@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-05-30
+- Completed: 2026-05-30
 - Model: Codex 5.3
 - Branch: feature/fix-http3-rfc-compliance-critical-stream-handling
 - Polished: 2026-05-30
@@ -50,13 +51,13 @@ High。項目 1 (`STOP_SENDING` の critical stream 判定漏れ) は接続管�
 
 ## 解決方法
 
-1. `stop_sending` (`src/connection/mod.rs:3891`) の critical 判定対象を、送信側ストリーム `control_send.stream_id()` / `encoder_stream_id` / `decoder_stream_id` に置き換える。受信側ストリームの判定は `STOP_SENDING` では誤りなので除去する。
-2. `decode_goaway_frame` (`src/frame/decoder.rs:177`) の `.map_err(|_| FrameDecodeError::BufferTooShort)` を `InvalidLength` に変更し、`decode_max_push_id_frame` と揃える。`src/stream/control.rs:250` の既存 `InvalidLength => FrameError` 経路で `H3_FRAME_ERROR` に集約されるため、`control.rs` 側のマッピング変更は不要。
-3. 関連するコードコメントの誤った RFC 引用を修正する。`src/connection/mod.rs` の `1383` / `3817` / `3890` / `4081` 行が QPACK critical stream の根拠を "RFC 9204 Section 4.3" と誤記しているが、正しくは "RFC 9204 Section 4.2" (Encoder and Decoder Streams)。Section 4.3 は Encoder Instructions で無関係。
-4. テストを追加する (いずれも意図的なエラーパスのため単体テスト):
-   - `tests/test_connection.rs`: 送信側 control / encoder / decoder stream への `STOP_SENDING` 受信で `H3_CLOSED_CRITICAL_STREAM` になること。
-   - `tests/test_connection.rs`: 空 payload GOAWAY を control stream に投入し、`H3_FRAME_ERROR` の接続エラーになること (end-to-end)。
-   - `src/frame/decoder.rs` の既存 `#[cfg(test)]` テスト: 空 payload GOAWAY のデコードが `FrameDecodeError::InvalidLength` を返すこと。
+1. `stop_sending` (`src/connection/mod.rs`) の critical 判定対象を、受信側 (`control_recv` / `peer_encoder_stream_id` / `peer_decoder_stream_id`) から送信側 (`control_send.stream_id()` / `encoder_stream_id` / `decoder_stream_id`) に置き換えた。STOP_SENDING は「こちらが送信するストリームの送信停止要求」のため、送信側を見るのが正しい。判定理由をコメントで明記した。
+2. `decode_goaway_frame` (`src/frame/decoder.rs`) の varint デコード失敗時のエラーを `FrameDecodeError::BufferTooShort` から `InvalidLength` に変更し、`decode_settings_frame` / `decode_max_push_id_frame` と揃えた。`src/stream/control.rs` の既存 `InvalidLength => FrameError` 経路で `H3_FRAME_ERROR` に集約される。GOAWAY は control stream 専用フレームのため request stream 経路は対象外。
+3. QPACK critical stream の根拠を誤って "RFC 9204 Section 4.3" と記載していたコードコメント 4 箇所 (`src/connection/mod.rs` の FIN チェック / `stream_reset` doc / `stop_sending` doc / テスト節ヘッダー) を "RFC 9204 Section 4.2" (Encoder and Decoder Streams) に修正した。あわせて `stream_reset` 側にも RESET_STREAM が受信側を対象とする旨のコメントを追記し、`stop_sending` との方向の非対称を明示した。
+4. テストを追加・更新した (いずれも意図的なエラーパスのため単体テスト):
+   - `src/connection/mod.rs` のインラインテスト: 送信側 control / encoder / decoder stream への `STOP_SENDING` で `H3_CLOSED_CRITICAL_STREAM` になることを検証するよう既存テストを更新 (旧テストは受信側を critical 扱いする誤った挙動を検証していた)。受信側 (peer 制御ストリーム / peer QPACK ストリーム) への `STOP_SENDING` が critical 扱いされないことの回帰テストを追加した。`stop_sending` / `set_encoder_stream_id` / `set_decoder_stream_id` は `ClientConnection` / `ServerConnection` ラッパーに露出していないため、`Connection` を直接使うインラインテストに配置した。
+   - `src/frame/decoder.rs` のインラインテスト: 空 payload / 余剰バイトの GOAWAY デコードが `FrameDecodeError::InvalidLength` を返すことを検証する単体テストを追加した。正常系のラウンドトリップは既存 PBT (`pbt/tests/prop_frame.rs`) でカバー済みのため単体テストには追加していない。
+   - `tests/test_connection.rs`: 空 payload GOAWAY を control stream に投入し `H3_FRAME_ERROR` の接続エラーになることを end-to-end で検証するテストを追加した。
 
 ## 関連
 
