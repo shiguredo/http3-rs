@@ -6,7 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-shiguredo_http3 = { path = "../.." }
+shiguredo_http3.workspace = true
 s2n-quic = { version = "1.80", default-features = false, features = ["provider-address-token-default", "provider-tls-rustls", "unstable-provider-datagram", "provider-event-tracing"] }
 rustls = "0.23"
 rcgen = "0.14"

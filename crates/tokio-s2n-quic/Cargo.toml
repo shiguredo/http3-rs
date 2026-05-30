@@ -24,7 +24,7 @@ path = "examples/wt_echo_client.rs"
 [dependencies]
 bytes = "1.11"
 s2n-quic = "1.80"
-shiguredo_http3 = { path = "../.." }
+shiguredo_http3.workspace = true
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "sync"] }
 
 [dev-dependencies]
