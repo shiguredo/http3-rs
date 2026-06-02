@@ -180,6 +180,8 @@
   - @voluntas
 - [FIX] QPACK エンコーダーの ack_section を Result 化し、Post-Base 参照エンコードを実装し、RIC エンコードの max_entries=0 時のエッジケースを修正する
   - @voluntas
+- [FIX] nghttp3 webtransport ブランチに追加された `wt_data_stream_open` コールバックに追従し、`nghttp3-sys` / `ngtcp2-sys` の bindings を再生成して `nghttp3_callbacks` のレイアウト不整合による SIGSEGV を修正する
+  - @voluntas
 
 ### misc
 

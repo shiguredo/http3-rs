@@ -893,6 +893,7 @@ fn create_callbacks() -> nghttp3_callbacks {
         rand: Some(on_rand),
         recv_settings2: None,
         recv_wt_data: Some(on_recv_wt_data),
+        wt_data_stream_open: Some(on_wt_data_stream_open),
     }
 }
 
@@ -1199,5 +1200,22 @@ unsafe extern "C" fn on_recv_wt_data(
         }
     }
 
+    0
+}
+
+/// WebTransport データストリームオープンコールバック
+///
+/// リモートのストリームが WebTransport データストリームと識別されたときに
+/// 呼び出される (nghttp3 1.12.0 以降の WebTransport API)。
+/// データ自体は `recv_wt_data` で配送されるため、ここでは通知のみで何もしない。
+/// nghttp3 はこのフィールドが NULL でないことを前提に呼び出すため、
+/// レイアウト不整合による未定義動作を避けるためにも必ず関数を設定する。
+unsafe extern "C" fn on_wt_data_stream_open(
+    _conn: *mut nghttp3_conn,
+    _session_id: i64,
+    _stream_id: i64,
+    _conn_user_data: *mut c_void,
+    _stream_user_data: *mut c_void,
+) -> c_int {
     0
 }
