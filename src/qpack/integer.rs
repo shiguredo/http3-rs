@@ -11,7 +11,12 @@ use crate::error::QpackError;
 /// スライスにエンコード (RFC 7541 Section 5.1)
 ///
 /// バッファ不足時は None を返す。
+/// prefix_bits が 1..=8 の範囲外の場合は None を返す (RFC 7541 Section 5.1)。
 pub fn encode_integer(buf: &mut [u8], value: u64, prefix_bits: u8, prefix: u8) -> Option<usize> {
+    // RFC 7541 Section 5.1: prefix size is always between 1 and 8 bits
+    if prefix_bits == 0 || prefix_bits > 8 {
+        return None;
+    }
     let max_prefix = (1u64 << prefix_bits) - 1;
 
     if value < max_prefix {
@@ -48,7 +53,12 @@ pub fn encode_integer(buf: &mut [u8], value: u64, prefix_bits: u8, prefix: u8) -
 /// Vec にエンコード (RFC 7541 Section 5.1)
 ///
 /// Vec に push で追記する。バッファ不足は発生しない。
+/// prefix_bits が 1..=8 の範囲外の場合は何もせずに返る (RFC 7541 Section 5.1)。
 pub fn encode_integer_to_vec(buf: &mut Vec<u8>, value: u64, prefix_bits: u8, prefix: u8) {
+    // RFC 7541 Section 5.1: prefix size is always between 1 and 8 bits
+    if prefix_bits == 0 || prefix_bits > 8 {
+        return;
+    }
     let max_prefix = (1u64 << prefix_bits) - 1;
 
     if value < max_prefix {
@@ -68,9 +78,14 @@ pub fn encode_integer_to_vec(buf: &mut Vec<u8>, value: u64, prefix_bits: u8, pre
 /// デコード (RFC 7541 Section 5.1)
 ///
 /// shift > 56 でオーバーフロー保護 (RFC 9204 Section 4.1.1: 62 ビットまでデコード可能)。
+/// prefix_bits が 0 または 9 以上の場合は DecodeFailed を返す (RFC 7541 Section 5.1)。
 pub fn decode_integer(data: &[u8], prefix_bits: u8) -> Result<(u64, usize), QpackError> {
     if data.is_empty() {
         return Err(QpackError::BufferTooShort);
+    }
+    // RFC 7541 Section 5.1: prefix size is always between 1 and 8 bits
+    if prefix_bits == 0 || prefix_bits > 8 {
+        return Err(QpackError::DecodeFailed);
     }
 
     let mask = ((1u16 << prefix_bits) - 1) as u8;

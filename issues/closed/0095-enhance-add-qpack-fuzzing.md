@@ -5,6 +5,7 @@
 - Model: DeepSeek v4-pro
 - Branch: feature/add-qpack-fuzzing
 - Polished: 2026-06-07
+- Completed: 2026-06-07
 
 ## 目的
 
@@ -104,3 +105,17 @@ fuzz ターゲット内の処理:
 
 - fuzz はテスト基盤の改善であり、機能に直接影響しないため `CHANGES.md` の `### misc` に `[ADD]` として追記する。
 - `FuzzInput` に variant が追加されるため、既存の fuzz corpus は新しい enum representation と一致せず破棄される。corpus は fuzz 実行により再構築される。
+
+## 解決方法
+
+`fuzz/fuzz_targets/fuzz_qpack.rs` に 3 つの variant を追加した:
+
+1. `DynamicEncoder` — `DynamicEncoder` にテーブルを設定し、任意のヘッダーリストをエンコード
+2. `IntegerDecode` — `decode_integer` に任意バイト列と任意 prefix_bits を投入
+3. `IntegerEncode` — `encode_integer` / `encode_integer_to_vec` に任意値・任意 prefix_bits・任意 prefix を投入
+
+`src/qpack/integer.rs` のシフトオーバーフローを修正した:
+
+- `encode_integer`: `prefix_bits == 0 || prefix_bits > 8` のガードを追加
+- `encode_integer_to_vec`: 同様のガードを追加
+- `decode_integer`: `prefix_bits == 0 || prefix_bits > 8` で `DecodeFailed` を返す
