@@ -5,6 +5,7 @@
 - Model: DeepSeek v4-pro
 - Branch: feature/add-grease-settings
 - Polished: 2026-06-07
+- Completed: 2026-06-07
 
 ## 目的
 
@@ -33,4 +34,6 @@ RFC 9114 では SHOULD レベルの推奨であり、MUST ではない。GREASE 
 
 ## 解決方法
 
-`SettingsPayload::from_settings()` 内で、アプリケーション設定の追加後に GREASE 設定を 1 つ追加する。GREASE 値は固定的な `0x21` (N=0) で十分だが、接続ごとに異なる値を選ぶ方がより効果的。
+`src/frame/mod.rs` の `SettingsPayload::from_settings()` 内で、アプリケーション設定と WebTransport 設定の追加後に GREASE 設定 (ID=`0x21`, value=`0`) を 1 つ追加した。GREASE 設定は `Setting::from_wire` で `Setting::Unknown` として構築し、`SettingsPayload::add` で追加する。受信側 (`Settings::from_payload`) は `Unknown` を無視するため後方互換性は維持される。
+
+`pbt/tests/prop_settings.rs` に `prop_settings_payload_includes_grease` を追加し、任意の `Settings` から生成した `SettingsPayload` に GREASE 設定が必ず 1 つ含まれることを検証する。
