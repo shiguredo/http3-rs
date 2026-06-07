@@ -185,6 +185,8 @@
 
 ### misc
 
+- [ADD] `fuzz_qpack` に DynamicEncoder, 整数エンコード/デコードの fuzz 経路を追加する
+  - @voluntas
 - [UPDATE] QPACK 整数エンコード/デコードの重複実装を src/qpack/integer.rs に一本化する
   - @voluntas
 - [UPDATE] disassociate_stream の不要な `#[allow(dead_code)]` を削除する
@@ -222,6 +224,8 @@
 - [ADD] `prop_qpack.rs` に `DynamicEncoder` / `DynamicDecoder` ラウンドトリップと Blocked/Unblocked のプロパティ検証を追加する
   - @voluntas
 - [ADD] SETTINGS フレームに GREASE 予約設定 (RFC 9114 Section 7.2.4.1, ID=0x21) を追加する
+  - @voluntas
+- [FIX] QPACK 整数エンコード/デコードのシフトオーバーフローを修正する (encode_integer: prefix_bits >= 64, decode_integer: prefix_bits >= 16)
   - @voluntas
 - [FIX] `fuzz/fuzz_targets/fuzz_settings.rs` が `Settings::from_payload` の `Result` 戻り値に追従しておらず fuzz crate がコンパイルできなかった問題を修正する
   - @voluntas
