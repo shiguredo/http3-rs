@@ -340,6 +340,9 @@ impl SettingsPayload {
     /// H3 設定と WebTransport 設定の両方を含める。`Settings` のフィールドは
     /// 各 ID と 1 対 1 に対応するため、追加時に [`SettingError::DuplicateId`] が
     /// 発生する可能性は無い (`expect` で握り潰す)。
+    ///
+    /// RFC 9114 Section 7.2.4.1 に従い、予約設定 (GREASE: `0x1f * N + 0x21`) を
+    /// 最低 1 つ含める (SHOULD)。N=0 (`0x21`) を使用し、値は任意として 0 を設定する。
     pub fn from_settings(settings: &crate::settings::Settings) -> Self {
         let mut payload = Self::new();
         for setting in settings.iter() {
@@ -354,6 +357,15 @@ impl SettingsPayload {
                     .expect("webtransport::Settings::iter() yields unique IDs");
             }
         }
+        // GREASE (RFC 9114 §7.2.4.1)
+        let grease = crate::settings::Setting::from_wire(
+            crate::varint::VarInt::from_static(0x21),
+            crate::varint::VarInt::ZERO,
+        )
+        .expect("GREASE ID 0x21 は HTTP/2 専用 ID でも予約 ID でもないため from_wire は常に成功する（失敗時は実装バグ）");
+        payload.add(grease).expect(
+            "GREASE 設定 0x21 は既知 ID 群と競合しないため add は常に成功する（失敗時は実装バグ）",
+        );
         payload
     }
 }

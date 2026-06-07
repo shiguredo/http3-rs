@@ -243,3 +243,14 @@ proptest! {
         prop_assert_eq!(err, SettingError::DuplicateId { id: setting.id() });
     }
 }
+
+proptest! {
+    /// Property: `SettingsPayload::from_settings()` が GREASE 設定 (RFC 9114 §7.2.4.1)
+    /// を最低 1 つ含む
+    #[test]
+    fn prop_settings_payload_includes_grease(settings in arbitrary_settings()) {
+        let payload = SettingsPayload::from_settings(&settings);
+        let grease_count = payload.settings().iter().filter(|s| s.id().get() == 0x21).count();
+        prop_assert_eq!(grease_count, 1, "GREASE 設定 (0x21) がちょうど 1 つ含まれていること");
+    }
+}
