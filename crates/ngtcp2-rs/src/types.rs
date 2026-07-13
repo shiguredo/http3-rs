@@ -315,4 +315,13 @@ pub enum Http3Event {
         stream_id: StreamId,
         data: Vec<u8>,
     },
+    /// WebTransport セッションクローズ受信 (WT_CLOSE_SESSION Capsule)
+    WebTransportCloseSession {
+        session_id: SessionId,
+        /// アプリケーションエラーコード
+        error_code: u32,
+        /// アプリケーションエラーメッセージ
+        /// 仕様上は UTF-8 だが、不正なバイト列が送られてくる可能性もあるため生のまま保持する
+        message: Vec<u8>,
+    },
 }

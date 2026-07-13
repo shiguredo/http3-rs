@@ -77,6 +77,8 @@
   Reserved 登録、Section 7.2.8 で受信時 H3_FRAME_UNEXPECTED: 0x02 / 0x06 / 0x08 / 0x09) を
   `Unknown` で偽装できない不変条件を保証する
   - @voluntas
+- [ADD] ngtcp2-rs クレートの `Http3Event` に `WebTransportCloseSession` バリアントを追加し、nghttp3 の `recv_wt_close_session` コールバック経由で WT_CLOSE_SESSION Capsule の受信 (アプリケーションエラーコード・メッセージ) を通知する
+  - @voluntas
 - [CHANGE] `varint::encode` / `varint::encode_into_vec` / `varint::decode` のシグネチャを `VarInt` を扱う形に変更する
   - @voluntas
 - [CHANGE] `varint::MAX_VALUE` / `varint::encoded_len(u64)` / `varint::try_encoded_len` / `varint::try_encode_into_vec` / `varint::EncodeError::ValueTooLarge` を削除する (`VarInt` 型が値域を保証するため)
@@ -181,6 +183,8 @@
 - [FIX] QPACK エンコーダーの ack_section を Result 化し、Post-Base 参照エンコードを実装し、RIC エンコードの max_entries=0 時のエッジケースを修正する
   - @voluntas
 - [FIX] nghttp3 webtransport ブランチに追加された `wt_data_stream_open` コールバックに追従し、`nghttp3-sys` / `ngtcp2-sys` の bindings を再生成して `nghttp3_callbacks` のレイアウト不整合による SIGSEGV を修正する
+  - @voluntas
+- [FIX] ngtcp2 / nghttp3 webtransport ブランチに追加された `stream_close2` / `recv_stop_sending` / `recv_wt_close_session` コールバックに追従し、`ngtcp2-sys` / `nghttp3-sys` の bindings を再生成してコールバック構造体のレイアウト不整合による WebTransport interop テスト失敗を修正する
   - @voluntas
 
 ### misc

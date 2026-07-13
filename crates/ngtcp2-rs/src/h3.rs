@@ -892,8 +892,12 @@ fn create_callbacks() -> nghttp3_callbacks {
         end_origin: None,
         rand: Some(on_rand),
         recv_settings2: None,
+        // stream_close2 は既存の stream_close の拡張版であり、
+        // stream_close が設定されていれば不要なため未設定にする
+        stream_close2: None,
         recv_wt_data: Some(on_recv_wt_data),
         wt_data_stream_open: Some(on_wt_data_stream_open),
+        recv_wt_close_session: Some(on_recv_wt_close_session),
     }
 }
 
@@ -1217,5 +1221,41 @@ unsafe extern "C" fn on_wt_data_stream_open(
     _conn_user_data: *mut c_void,
     _stream_user_data: *mut c_void,
 ) -> c_int {
+    0
+}
+
+/// WT_CLOSE_SESSION Capsule 受信コールバック
+///
+/// ピアが WebTransport セッションを終了したときに呼び出される。
+/// エラーメッセージは 0 バイトの場合があり、その場合 msg は NULL になり得る。
+unsafe extern "C" fn on_recv_wt_close_session(
+    _conn: *mut nghttp3_conn,
+    session_id: i64,
+    wt_error_code: u32,
+    msg: *const u8,
+    msglen: usize,
+    conn_user_data: *mut c_void,
+    _stream_user_data: *mut c_void,
+) -> c_int {
+    if conn_user_data.is_null() {
+        return 0;
+    }
+
+    unsafe {
+        let user_data = &*(conn_user_data as *const Http3UserData);
+        if !user_data.events.is_null() {
+            let message = if msg.is_null() || msglen == 0 {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(msg, msglen).to_vec()
+            };
+            (*user_data.events).push_back(Http3Event::WebTransportCloseSession {
+                session_id,
+                error_code: wt_error_code,
+                message,
+            });
+        }
+    }
+
     0
 }
