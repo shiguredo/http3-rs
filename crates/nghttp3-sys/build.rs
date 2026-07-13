@@ -31,9 +31,21 @@ fn main() {
     let branch = dep.get("branch").and_then(|v| v.as_str());
     let version = dep.get("version").and_then(|v| v.as_str());
 
-    // nghttp3 をクローン
+    // nghttp3 をクローンする (クローン済みの場合は fetch して最新化する)
     let nghttp3_dir = out_dir.join("nghttp3");
-    if !nghttp3_dir.exists() {
+    let fetched = if nghttp3_dir.exists() {
+        // 既存クローンが stale なまま使われると bindings やビルドが上流と乖離するため、
+        // fetch で最新に追従する (失敗時は既存のチェックアウトで続行する)
+        let status = Command::new("git")
+            .current_dir(&nghttp3_dir)
+            .args(["fetch", "origin"])
+            .status();
+        let fetched = matches!(status, Ok(s) if s.success());
+        if !fetched {
+            println!("cargo:warning=Failed to fetch nghttp3; using existing checkout");
+        }
+        fetched
+    } else {
         // git clone
         let status = Command::new("git")
             .args(["clone", git_url, nghttp3_dir.to_str().unwrap()])
@@ -42,38 +54,50 @@ fn main() {
         if !status.success() {
             panic!("Failed to clone nghttp3");
         }
+        true
+    };
 
-        // branch または version (タグ) でチェックアウト
-        if let Some(branch_name) = branch {
-            let status = Command::new("git")
-                .current_dir(&nghttp3_dir)
-                .args(["checkout", branch_name])
-                .status()
-                .expect("Failed to execute git checkout");
-            if !status.success() {
-                panic!("Failed to checkout branch {branch_name}");
-            }
-        } else if let Some(ver) = version {
-            let tag = format!("v{ver}");
-            let status = Command::new("git")
-                .current_dir(&nghttp3_dir)
-                .args(["checkout", &tag])
-                .status()
-                .expect("Failed to execute git checkout");
-            if !status.success() {
-                panic!("Failed to checkout tag {tag}");
-            }
-        }
-
-        // submodule を初期化・更新
+    // branch または version (タグ) でチェックアウト
+    if let Some(branch_name) = branch {
         let status = Command::new("git")
             .current_dir(&nghttp3_dir)
-            .args(["submodule", "update", "--init", "--recursive"])
+            .args(["checkout", branch_name])
             .status()
-            .expect("Failed to execute git submodule update");
+            .expect("Failed to execute git checkout");
         if !status.success() {
-            panic!("Failed to update submodules");
+            panic!("Failed to checkout branch {branch_name}");
         }
+        // fetch 済みの場合はリモートブランチの最新コミットにリセットする
+        if fetched {
+            let status = Command::new("git")
+                .current_dir(&nghttp3_dir)
+                .args(["reset", "--hard", &format!("origin/{branch_name}")])
+                .status()
+                .expect("Failed to execute git reset");
+            if !status.success() {
+                panic!("Failed to reset to origin/{branch_name}");
+            }
+        }
+    } else if let Some(ver) = version {
+        let tag = format!("v{ver}");
+        let status = Command::new("git")
+            .current_dir(&nghttp3_dir)
+            .args(["checkout", &tag])
+            .status()
+            .expect("Failed to execute git checkout");
+        if !status.success() {
+            panic!("Failed to checkout tag {tag}");
+        }
+    }
+
+    // submodule を初期化・更新する (reset でコミットが変わる場合があるため毎回実行する)
+    let status = Command::new("git")
+        .current_dir(&nghttp3_dir)
+        .args(["submodule", "update", "--init", "--recursive"])
+        .status()
+        .expect("Failed to execute git submodule update");
+    if !status.success() {
+        panic!("Failed to update submodules");
     }
 
     // nghttp3 ビルド

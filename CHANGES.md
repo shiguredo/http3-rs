@@ -186,6 +186,8 @@
   - @voluntas
 - [FIX] ngtcp2 / nghttp3 webtransport ブランチに追加された `stream_close2` / `recv_stop_sending` / `recv_wt_close_session` コールバックに追従し、`ngtcp2-sys` / `nghttp3-sys` の bindings を再生成してコールバック構造体のレイアウト不整合による WebTransport interop テスト失敗を修正する
   - @voluntas
+- [FIX] `ngtcp2-sys` / `nghttp3-sys` の build.rs でクローン済みの上流リポジトリを fetch してリモートブランチの最新にリセットし、stale なキャッシュから古いヘッダで bindings の再生成やビルドが行われる問題を修正する
+  - @voluntas
 
 ### misc
 
