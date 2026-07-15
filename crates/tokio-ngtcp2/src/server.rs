@@ -5,10 +5,11 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
+use nghttp3_sys::nghttp3_settings;
+use ngtcp2_sys::ngtcp2_transport_params;
 use shiguredo_ngtcp2::{
-    Connection, ConnectionId, Error, Header, Http3Connection, Http3Event, Http3SettingsExt,
-    PacketInfo, Result, StreamId, TlsContext, TransportParamsExt, nghttp3_settings,
-    ngtcp2_transport_params,
+    Connection, ConnectionId, Error, Header, Http3Connection, Http3Event, Http3Settings,
+    PacketInfo, Result, StreamId, TlsContext, TransportParams,
 };
 
 use crate::{Socket, timestamp};
@@ -20,7 +21,7 @@ pub struct Server {
     // TLS コンテキスト
     tls_ctx: TlsContext,
     // トランスポートパラメータ (将来の拡張用に保持)
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     transport_params: ngtcp2_transport_params,
     // HTTP/3 設定
     h3_settings: nghttp3_settings,
@@ -75,10 +76,10 @@ impl Server {
 
         // トランスポートパラメータ
         let transport_params =
-            transport_params.unwrap_or_else(ngtcp2_transport_params::default_params);
+            transport_params.unwrap_or_else(|| TransportParams::new().into_raw());
 
         // HTTP/3 設定
-        let h3_settings = h3_settings.unwrap_or_else(nghttp3_settings::default_settings);
+        let h3_settings = h3_settings.unwrap_or_else(|| Http3Settings::new().into_raw());
 
         Ok(Self {
             socket,
@@ -280,7 +281,9 @@ impl Server {
 
         // サーバー用のトランスポートパラメータを作成
         // original_dcid はクライアントからの最初の Initial パケットの DCID
-        let params = ngtcp2_transport_params::default_params().with_original_dcid(&original_dcid);
+        let params = TransportParams::new()
+            .with_original_dcid(&original_dcid)
+            .into_raw();
 
         // QUIC 接続を作成
         // server_new の引数:
@@ -386,7 +389,7 @@ impl Server {
         addr: SocketAddr,
         ts: u64,
     ) -> Result<()> {
-        use shiguredo_ngtcp2::nghttp3_vec;
+        use nghttp3_sys::nghttp3_vec;
 
         if !conn.conn.is_handshake_completed() || !conn.control_streams_bound {
             return Ok(());

@@ -1097,7 +1097,7 @@ pub fn encode(buf: &mut [u8], data: &[u8]) -> Option<usize> {
 
 /// ハフマンデコード
 pub fn decode(data: &[u8]) -> Result<Vec<u8>, QpackError> {
-    let mut result = Vec::with_capacity(data.len() * 2);
+    let mut result = Vec::new();
     let mut acc: u64 = 0;
     let mut acc_bits: u32 = 0;
 
@@ -1176,10 +1176,10 @@ mod tests {
         let encoded_length = encoded_len(input);
         let mut buf = vec![0u8; encoded_length];
 
-        let len = encode(&mut buf, input).unwrap();
+        let len = encode(&mut buf, input).expect("test must succeed");
         assert_eq!(len, encoded_length);
 
-        let decoded = decode(&buf).unwrap();
+        let decoded = decode(&buf).expect("test must succeed");
         assert_eq!(decoded, input);
     }
 
@@ -1188,8 +1188,8 @@ mod tests {
         let input = b"GET";
         let mut buf = vec![0u8; encoded_len(input)];
 
-        encode(&mut buf, input).unwrap();
-        let decoded = decode(&buf).unwrap();
+        encode(&mut buf, input).expect("test must succeed");
+        let decoded = decode(&buf).expect("test must succeed");
         assert_eq!(decoded, input);
     }
 
@@ -1198,8 +1198,8 @@ mod tests {
         let input = b"/index.html";
         let mut buf = vec![0u8; encoded_len(input)];
 
-        encode(&mut buf, input).unwrap();
-        let decoded = decode(&buf).unwrap();
+        encode(&mut buf, input).expect("test must succeed");
+        let decoded = decode(&buf).expect("test must succeed");
         assert_eq!(decoded, input);
     }
 

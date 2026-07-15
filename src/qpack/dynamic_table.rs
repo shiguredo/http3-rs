@@ -341,7 +341,7 @@ mod tests {
         assert_eq!(table.len(), 1);
         assert_eq!(table.insert_count(), 1);
 
-        let entry = table.get_by_absolute_index(0).unwrap();
+        let entry = table.get_by_absolute_index(0).expect("test must succeed");
         assert_eq!(entry.name, b":authority");
         assert_eq!(entry.value, b"www.example.com");
     }
@@ -360,21 +360,48 @@ mod tests {
         assert_eq!(table.len(), 3);
 
         // 絶対インデックスでアクセス
-        assert_eq!(table.get_by_absolute_index(0).unwrap().name, b"name1");
-        assert_eq!(table.get_by_absolute_index(1).unwrap().name, b"name2");
-        assert_eq!(table.get_by_absolute_index(2).unwrap().name, b"name3");
-
-        // エンコーダー相対インデックスでアクセス (0 = 最新)
         assert_eq!(
-            table.get_by_relative_index_encoder(0).unwrap().name,
-            b"name3"
+            table
+                .get_by_absolute_index(0)
+                .expect("test must succeed")
+                .name,
+            b"name1"
         );
         assert_eq!(
-            table.get_by_relative_index_encoder(1).unwrap().name,
+            table
+                .get_by_absolute_index(1)
+                .expect("test must succeed")
+                .name,
             b"name2"
         );
         assert_eq!(
-            table.get_by_relative_index_encoder(2).unwrap().name,
+            table
+                .get_by_absolute_index(2)
+                .expect("test must succeed")
+                .name,
+            b"name3"
+        );
+
+        // エンコーダー相対インデックスでアクセス (0 = 最新)
+        assert_eq!(
+            table
+                .get_by_relative_index_encoder(0)
+                .expect("test must succeed")
+                .name,
+            b"name3"
+        );
+        assert_eq!(
+            table
+                .get_by_relative_index_encoder(1)
+                .expect("test must succeed")
+                .name,
+            b"name2"
+        );
+        assert_eq!(
+            table
+                .get_by_relative_index_encoder(2)
+                .expect("test must succeed")
+                .name,
             b"name1"
         );
     }
@@ -464,15 +491,24 @@ mod tests {
         // relative=1 -> abs=3-1-1=1 -> name1
         // relative=2 -> abs=3-2-1=0 -> name0
         assert_eq!(
-            table.get_by_relative_index_repr(0, 3).unwrap().name,
+            table
+                .get_by_relative_index_repr(0, 3)
+                .expect("test must succeed")
+                .name,
             b"name2"
         );
         assert_eq!(
-            table.get_by_relative_index_repr(1, 3).unwrap().name,
+            table
+                .get_by_relative_index_repr(1, 3)
+                .expect("test must succeed")
+                .name,
             b"name1"
         );
         assert_eq!(
-            table.get_by_relative_index_repr(2, 3).unwrap().name,
+            table
+                .get_by_relative_index_repr(2, 3)
+                .expect("test must succeed")
+                .name,
             b"name0"
         );
 
@@ -492,8 +528,20 @@ mod tests {
         // Base = 2 の場合
         // post_base=0 -> abs=2+0=2 -> name2
         // post_base=1 -> abs=2+1=3 -> name3
-        assert_eq!(table.get_by_post_base_index(0, 2).unwrap().name, b"name2");
-        assert_eq!(table.get_by_post_base_index(1, 2).unwrap().name, b"name3");
+        assert_eq!(
+            table
+                .get_by_post_base_index(0, 2)
+                .expect("test must succeed")
+                .name,
+            b"name2"
+        );
+        assert_eq!(
+            table
+                .get_by_post_base_index(1, 2)
+                .expect("test must succeed")
+                .name,
+            b"name3"
+        );
 
         // 範囲外
         assert!(table.get_by_post_base_index(2, 2).is_none());
@@ -511,7 +559,7 @@ mod tests {
         assert_eq!(idx, Some(2));
         assert_eq!(table.len(), 3);
 
-        let entry = table.get_by_absolute_index(2).unwrap();
+        let entry = table.get_by_absolute_index(2).expect("test must succeed");
         assert_eq!(entry.name, b"name");
         assert_eq!(entry.value, b"value");
     }

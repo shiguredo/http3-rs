@@ -35,7 +35,6 @@ impl Socket {
     }
 
     /// データを送信
-    #[allow(dead_code)]
     pub async fn send_to(&self, buf: &[u8], target: SocketAddr) -> std::io::Result<usize> {
         self.inner.send_to(buf, target).await
     }
@@ -47,7 +46,6 @@ impl Socket {
 }
 
 /// タイムスタンプを取得 (ナノ秒)
-#[allow(dead_code)]
 pub(crate) fn timestamp() -> u64 {
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     let start = START.get_or_init(Instant::now);

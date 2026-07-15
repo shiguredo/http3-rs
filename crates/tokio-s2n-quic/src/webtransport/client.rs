@@ -60,7 +60,7 @@ impl WtClient {
         let decoder_stream_id: u64 = decoder_send.id();
 
         let init_data = {
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock().expect("mutex should not be poisoned");
             let data =
                 s.init_h3_streams(control_stream_id, encoder_stream_id, decoder_stream_id)?;
             // s2n-quic は DATAGRAM (RFC 9221) と RESET_STREAM_AT をサポートする
@@ -130,7 +130,7 @@ impl WtClient {
         // (draft-ietf-webtrans-http3-15 Section 3.1)
         loop {
             {
-                let s = state.lock().unwrap();
+                let s = state.lock().expect("mutex should not be poisoned");
                 if s.h3_conn.peer_settings().is_some() {
                     break;
                 }
@@ -143,7 +143,7 @@ impl WtClient {
 
         // Sans I/O で CONNECT リクエストをエンコード
         let request_data = {
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock().expect("mutex should not be poisoned");
 
             let connect_req = ConnectRequest::new("https", &config.server_name, path)
                 .draft_version(config.draft_version);
@@ -177,7 +177,7 @@ impl WtClient {
             // notify_one() が取りこぼされる場合に備え、毎回 drain_events を確認する
             {
                 let events = {
-                    let mut s = state.lock().unwrap();
+                    let mut s = state.lock().expect("mutex should not be poisoned");
                     s.drain_events()?
                 };
                 for event in events {
@@ -199,7 +199,7 @@ impl WtClient {
                     };
 
                     let events = {
-                        let mut s = state.lock().unwrap();
+                        let mut s = state.lock().expect("mutex should not be poisoned");
                         s.process_stream_data(connect_stream_id, &data, fin)?
                     };
 
@@ -267,7 +267,10 @@ async fn route_uni_stream(
             }
             Ok(None) => {
                 // ストリームが先に閉じた
-                let _ = state.lock().unwrap().feed_stream_only(stream_id, &[], true);
+                let _ = state
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .feed_stream_only(stream_id, &[], true);
                 notify.notify_one();
                 return;
             }
@@ -286,18 +289,21 @@ async fn route_uni_stream(
             // H3 制御ストリームとしてフィード
             let _ = state
                 .lock()
-                .unwrap()
+                .expect("mutex should not be poisoned")
                 .feed_stream_only(stream_id, &type_buf, false);
             notify.notify_one();
 
             while let Ok(Some(data)) = recv_stream.receive().await {
                 let _ = state
                     .lock()
-                    .unwrap()
+                    .expect("mutex should not be poisoned")
                     .feed_stream_only(stream_id, &data, false);
                 notify.notify_one();
             }
-            let _ = state.lock().unwrap().feed_stream_only(stream_id, &[], true);
+            let _ = state
+                .lock()
+                .expect("mutex should not be poisoned")
+                .feed_stream_only(stream_id, &[], true);
             notify.notify_one();
         }
     }

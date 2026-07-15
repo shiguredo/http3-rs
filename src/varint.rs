@@ -13,7 +13,6 @@ use core::fmt;
 pub struct VarInt(u64);
 
 /// VarInt 構築時のエラー
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VarIntError {
     /// 値が VarInt の最大値 (`2^62 - 1`) を超えている
@@ -170,7 +169,6 @@ impl TryFrom<usize> for VarInt {
 }
 
 /// 可変長整数デコードエラー
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodeError {
     /// バッファが不足している
@@ -180,7 +178,6 @@ pub enum DecodeError {
 /// 可変長整数エンコードエラー
 ///
 /// 値域は [`VarInt`] が保証するため、ここでは出力バッファ不足だけを表現する。
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncodeError {
     /// バッファが不足している

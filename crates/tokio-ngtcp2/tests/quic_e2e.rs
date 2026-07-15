@@ -50,7 +50,7 @@ async fn test_quic_handshake_insecure() {
 
     // サーバーを起動
     let mut server = Server::bind(
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().expect("test must succeed"),
         &cert_path,
         &key_path,
         None,
@@ -127,7 +127,7 @@ async fn test_quic_multiple_clients() {
 
     // サーバーを起動
     let mut server = Server::bind(
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().expect("test must succeed"),
         &cert_path,
         &key_path,
         None,
@@ -217,7 +217,7 @@ async fn test_quic_connection_close() {
 
     // サーバーを起動
     let mut server = Server::bind(
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().expect("test must succeed"),
         &cert_path,
         &key_path,
         None,

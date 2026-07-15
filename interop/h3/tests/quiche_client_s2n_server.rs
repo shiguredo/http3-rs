@@ -8,18 +8,22 @@ use interop_h3::{generate_shared_certificate, run_quiche_client};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_http3_request_response() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
     // s2n-quic サーバーを起動
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem);
-    let mut server = H3Server::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    );
+    let mut server = H3Server::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
     let port = server_addr.port();
     eprintln!("[test] サーバーポート: {}", port);
 
     let server_handle = tokio::spawn(async move {
-        let mut conn = server.accept().await.unwrap();
-        let request = conn.accept_request().await.unwrap();
+        let mut conn = server.accept().await.expect("test must succeed");
+        let request = conn.accept_request().await.expect("test must succeed");
         eprintln!(
             "[server] リクエスト受信: {}",
             String::from_utf8_lossy(request.path())
@@ -31,7 +35,7 @@ async fn test_http3_request_response() {
                     .body("Hello from HTTP/3 server!"),
             )
             .await
-            .unwrap();
+            .expect("test must succeed");
         // レスポンス送信完了を待ってから終了
         tokio::time::sleep(Duration::from_millis(100)).await;
     });

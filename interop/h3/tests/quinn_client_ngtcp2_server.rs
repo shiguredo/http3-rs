@@ -13,7 +13,7 @@ async fn start_ngtcp2_server(
     key_path: &std::path::Path,
 ) -> Result<(Server, std::net::SocketAddr), Box<dyn std::error::Error + Send + Sync>> {
     let server = Server::bind(
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().expect("test must succeed"),
         cert_path,
         key_path,
         None,
@@ -29,11 +29,14 @@ async fn start_ngtcp2_server(
 
 #[tokio::test]
 async fn test_http3_request_response() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (_cert_dir, cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (_cert_dir, cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
     // ngtcp2 サーバーを起動
-    let (server, server_addr) = start_ngtcp2_server(&cert_path, &key_path).await.unwrap();
+    let (server, server_addr) = start_ngtcp2_server(&cert_path, &key_path)
+        .await
+        .expect("test must succeed");
     let port = server_addr.port();
     eprintln!("[test] サーバーポート: {}", port);
 

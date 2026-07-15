@@ -52,7 +52,6 @@ pub const fn is_http2_only_id(id: u64) -> bool {
 /// [`UnknownSetting`] は private フィールドで HTTP/2 専用 / 予約 ID が
 /// 混入できない不変条件を保証する。RFC 9114 §7.2.4 末尾「An implementation
 /// MUST ignore any parameter with an identifier it does not understand」に対応。
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Setting {
     /// QPACK 最大テーブル容量 (RFC 9204 §5, ID = 0x01)
@@ -123,12 +122,12 @@ impl UnknownSetting {
     }
 
     /// 未知パラメータの ID を取得する
-    pub fn id(&self) -> VarInt {
+    pub fn id(self) -> VarInt {
         self.id
     }
 
     /// 未知パラメータの値を取得する
-    pub fn value(&self) -> VarInt {
+    pub fn value(self) -> VarInt {
         self.value
     }
 }
@@ -137,7 +136,6 @@ impl UnknownSetting {
 ///
 /// いずれのエラーも上位の SETTINGS フレームハンドラで H3_SETTINGS_ERROR に
 /// 変換される。
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingError {
     /// HTTP/2 専用の SETTINGS ID を受信した (0x02, 0x03, 0x04, 0x05)
@@ -543,7 +541,7 @@ mod tests {
     use super::*;
 
     fn v(n: u64) -> VarInt {
-        VarInt::new(n).unwrap()
+        VarInt::new(n).expect("test must succeed")
     }
 
     #[test]
@@ -560,23 +558,23 @@ mod tests {
     #[test]
     fn test_setting_from_wire_known_ids() {
         assert_eq!(
-            Setting::from_wire(v(0x01), v(4096)).unwrap(),
+            Setting::from_wire(v(0x01), v(4096)).expect("test must succeed"),
             Setting::QpackMaxTableCapacity(v(4096))
         );
         assert_eq!(
-            Setting::from_wire(v(0x06), v(16384)).unwrap(),
+            Setting::from_wire(v(0x06), v(16384)).expect("test must succeed"),
             Setting::MaxFieldSectionSize(v(16384))
         );
         assert_eq!(
-            Setting::from_wire(v(0x07), v(50)).unwrap(),
+            Setting::from_wire(v(0x07), v(50)).expect("test must succeed"),
             Setting::QpackBlockedStreams(v(50))
         );
         assert_eq!(
-            Setting::from_wire(v(0x08), v(1)).unwrap(),
+            Setting::from_wire(v(0x08), v(1)).expect("test must succeed"),
             Setting::EnableConnectProtocol(true)
         );
         assert_eq!(
-            Setting::from_wire(v(0x33), v(0)).unwrap(),
+            Setting::from_wire(v(0x33), v(0)).expect("test must succeed"),
             Setting::H3Datagram(false)
         );
     }
@@ -617,7 +615,7 @@ mod tests {
 
     #[test]
     fn test_setting_from_wire_unknown_id() {
-        let s = Setting::from_wire(v(0x99), v(42)).unwrap();
+        let s = Setting::from_wire(v(0x99), v(42)).expect("test must succeed");
         let Setting::Unknown(u) = s else {
             panic!("expected Unknown");
         };
@@ -628,31 +626,31 @@ mod tests {
     #[test]
     fn test_setting_from_wire_wt_ids() {
         assert_eq!(
-            Setting::from_wire(v(0x2c7cf000), v(1)).unwrap(),
+            Setting::from_wire(v(0x2c7cf000), v(1)).expect("test must succeed"),
             Setting::WtEnabled(v(1))
         );
         assert_eq!(
-            Setting::from_wire(v(0x14e9cd29), v(1)).unwrap(),
+            Setting::from_wire(v(0x14e9cd29), v(1)).expect("test must succeed"),
             Setting::WtMaxSessionsDraft14(v(1))
         );
         assert_eq!(
-            Setting::from_wire(v(0x2b603742), v(1)).unwrap(),
+            Setting::from_wire(v(0x2b603742), v(1)).expect("test must succeed"),
             Setting::EnableWebTransportDraft02(true)
         );
         assert_eq!(
-            Setting::from_wire(v(0xc671706a), v(3)).unwrap(),
+            Setting::from_wire(v(0xc671706a), v(3)).expect("test must succeed"),
             Setting::WebTransportMaxSessionsDraft07(v(3))
         );
         assert_eq!(
-            Setting::from_wire(v(0x2b61), v(1024)).unwrap(),
+            Setting::from_wire(v(0x2b61), v(1024)).expect("test must succeed"),
             Setting::WtInitialMaxData(v(1024))
         );
         assert_eq!(
-            Setting::from_wire(v(0x2b64), v(100)).unwrap(),
+            Setting::from_wire(v(0x2b64), v(100)).expect("test must succeed"),
             Setting::WtInitialMaxStreamsUni(v(100))
         );
         assert_eq!(
-            Setting::from_wire(v(0x2b65), v(50)).unwrap(),
+            Setting::from_wire(v(0x2b65), v(50)).expect("test must succeed"),
             Setting::WtInitialMaxStreamsBidi(v(50))
         );
     }
@@ -674,11 +672,11 @@ mod tests {
             Setting::WtInitialMaxData(v(1024)),
             Setting::WtInitialMaxStreamsUni(v(100)),
             Setting::WtInitialMaxStreamsBidi(v(50)),
-            Setting::from_wire(v(0xdead_beef), v(42)).unwrap(),
+            Setting::from_wire(v(0xdead_beef), v(42)).expect("test must succeed"),
         ];
         for setting in cases {
             let (id, value) = setting.as_wire();
-            let restored = Setting::from_wire(id, value).unwrap();
+            let restored = Setting::from_wire(id, value).expect("test must succeed");
             assert_eq!(restored, setting);
         }
     }
@@ -687,7 +685,7 @@ mod tests {
     fn test_setting_id() {
         assert_eq!(Setting::QpackMaxTableCapacity(v(4096)).id(), v(0x01));
         assert_eq!(Setting::H3Datagram(true).id(), v(0x33));
-        let unknown = Setting::from_wire(v(0xfeed), v(0)).unwrap();
+        let unknown = Setting::from_wire(v(0xfeed), v(0)).expect("test must succeed");
         assert_eq!(unknown.id(), v(0xfeed));
     }
 
@@ -740,7 +738,7 @@ mod tests {
             .max_field_section_size(32768)
             .qpack_blocked_streams(50);
 
-        let settings = Settings::from_limits(&limits).unwrap();
+        let settings = Settings::from_limits(&limits).expect("test must succeed");
         assert_eq!(settings.qpack_max_table_capacity, Some(v(4096)));
         assert_eq!(settings.max_field_section_size, Some(v(32768)));
         assert_eq!(settings.qpack_blocked_streams, Some(v(50)));
@@ -774,7 +772,7 @@ mod tests {
         assert_eq!(settings.h3_datagram, Some(true));
         assert!(settings.is_webtransport_enabled());
 
-        let wt = settings.wt_settings.unwrap();
+        let wt = settings.wt_settings.expect("test must succeed");
         assert_eq!(wt.wt_enabled, v(1));
         assert_eq!(wt.enable_webtransport_draft02, Some(true));
         assert_eq!(wt.webtransport_max_sessions_draft07, Some(v(1)));
@@ -815,7 +813,7 @@ mod tests {
         let mut payload = SettingsPayload::new();
         payload
             .add(Setting::QpackMaxTableCapacity(v(4096)))
-            .unwrap();
+            .expect("test must succeed");
         let err = payload
             .add(Setting::QpackMaxTableCapacity(v(8192)))
             .unwrap_err();
@@ -827,10 +825,12 @@ mod tests {
         use crate::frame::SettingsPayload;
 
         // Setting::Unknown は from_wire 経由でしか作れないため、wire からの構築をシミュレート
-        let unknown = Setting::from_wire(v(0xdead), v(1)).unwrap();
+        let unknown = Setting::from_wire(v(0xdead), v(1)).expect("test must succeed");
         let mut payload = SettingsPayload::new();
-        payload.add(unknown).unwrap();
-        payload.add(Setting::H3Datagram(true)).unwrap();
+        payload.add(unknown).expect("test must succeed");
+        payload
+            .add(Setting::H3Datagram(true))
+            .expect("test must succeed");
         let settings = Settings::from_payload(&payload);
         assert_eq!(settings.h3_datagram, Some(true));
         assert!(settings.qpack_max_table_capacity.is_none());

@@ -38,7 +38,7 @@ proptest! {
         session_id in valid_session_id(),
         payload in valid_payload(),
     ) {
-        let datagram = Datagram::new(session_id, payload.clone()).unwrap();
+        let datagram = Datagram::new(session_id, payload.clone()).expect("test must succeed");
 
         let mut buf = Vec::new();
         datagram.encode(&mut buf);
@@ -72,7 +72,7 @@ proptest! {
     fn prop_quarter_stream_id_equals_session_id_div_4(
         session_id in valid_session_id(),
     ) {
-        let datagram = Datagram::new(session_id, vec![]).unwrap();
+        let datagram = Datagram::new(session_id, vec![]).expect("test must succeed");
         let qsi = datagram.quarter_stream_id();
 
         prop_assert_eq!(
@@ -95,7 +95,7 @@ proptest! {
         session_id in valid_session_id(),
         payload in valid_payload(),
     ) {
-        let datagram = Datagram::new(session_id, payload).unwrap();
+        let datagram = Datagram::new(session_id, payload).expect("test must succeed");
 
         let mut buf = Vec::new();
         datagram.encode(&mut buf);
@@ -121,7 +121,7 @@ proptest! {
         let mut buf = Vec::new();
         shiguredo_http3::varint::encode_into_vec(
             &mut buf,
-            shiguredo_http3::VarInt::new(qsi).unwrap(),
+            shiguredo_http3::VarInt::new(qsi).expect("test must succeed"),
         );
         buf.extend_from_slice(&payload);
 

@@ -19,7 +19,7 @@ async fn start_ngtcp2_server(
     key_path: &std::path::Path,
 ) -> Result<(Server, SocketAddr), Box<dyn std::error::Error + Send + Sync>> {
     let server = Server::bind(
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().expect("test must succeed"),
         cert_path,
         key_path,
         None,
@@ -73,14 +73,17 @@ async fn run_ngtcp2_server(
 
 #[tokio::test]
 async fn test_http3_request_response() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (_cert_dir, cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (_cert_dir, cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
     eprintln!("[test] cert_path: {:?}", cert_path);
     eprintln!("[test] key_path: {:?}", key_path);
 
     // ngtcp2 サーバーを起動
-    let (server, server_addr) = start_ngtcp2_server(&cert_path, &key_path).await.unwrap();
+    let (server, server_addr) = start_ngtcp2_server(&cert_path, &key_path)
+        .await
+        .expect("test must succeed");
     let port = server_addr.port();
     eprintln!("[test] サーバーポート: {}", port);
 
@@ -94,7 +97,9 @@ async fn test_http3_request_response() {
 
     // s2n-quic クライアントでリクエスト
     let result = tokio::time::timeout(Duration::from_secs(10), async {
-        let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+        let addr: SocketAddr = format!("127.0.0.1:{}", port)
+            .parse()
+            .expect("test must succeed");
         let config = ClientConfig::new(addr, "localhost").ca_cert(&cert_pem);
         let mut client = H3Client::connect(config).await?;
 
@@ -139,10 +144,13 @@ async fn test_http3_request_response() {
 /// サーバーが適切に受信して 200 を返せることを確認する。
 #[tokio::test]
 async fn test_post_request_with_body() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (_cert_dir, cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (_cert_dir, cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
-    let (mut server, server_addr) = start_ngtcp2_server(&cert_path, &key_path).await.unwrap();
+    let (mut server, server_addr) = start_ngtcp2_server(&cert_path, &key_path)
+        .await
+        .expect("test must succeed");
     let port = server_addr.port();
 
     let server_task = tokio::spawn(async move {
@@ -168,7 +176,9 @@ async fn test_post_request_with_body() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let result = tokio::time::timeout(Duration::from_secs(10), async {
-        let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+        let addr: SocketAddr = format!("127.0.0.1:{}", port)
+            .parse()
+            .expect("test must succeed");
         let config = ClientConfig::new(addr, "localhost").ca_cert(&cert_pem);
         let mut client = H3Client::connect(config).await?;
 
@@ -202,10 +212,13 @@ async fn test_post_request_with_body() {
 /// s2n クライアント (shiguredo_http3) が正しく受信できることを確認する。
 #[tokio::test]
 async fn test_response_custom_headers() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (_cert_dir, cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (_cert_dir, cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
-    let (mut server, server_addr) = start_ngtcp2_server(&cert_path, &key_path).await.unwrap();
+    let (mut server, server_addr) = start_ngtcp2_server(&cert_path, &key_path)
+        .await
+        .expect("test must succeed");
     let port = server_addr.port();
 
     let server_task = tokio::spawn(async move {
@@ -233,7 +246,9 @@ async fn test_response_custom_headers() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let result = tokio::time::timeout(Duration::from_secs(10), async {
-        let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+        let addr: SocketAddr = format!("127.0.0.1:{}", port)
+            .parse()
+            .expect("test must succeed");
         let config = ClientConfig::new(addr, "localhost").ca_cert(&cert_pem);
         let mut client = H3Client::connect(config).await?;
 
@@ -290,10 +305,13 @@ async fn test_response_custom_headers() {
 /// s2n クライアント (shiguredo_http3) が正しくステータスコードを受信できることを確認する。
 #[tokio::test]
 async fn test_status_404() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (_cert_dir, cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (_cert_dir, cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
-    let (mut server, server_addr) = start_ngtcp2_server(&cert_path, &key_path).await.unwrap();
+    let (mut server, server_addr) = start_ngtcp2_server(&cert_path, &key_path)
+        .await
+        .expect("test must succeed");
     let port = server_addr.port();
 
     let server_task = tokio::spawn(async move {
@@ -329,7 +347,9 @@ async fn test_status_404() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let result = tokio::time::timeout(Duration::from_secs(10), async {
-        let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+        let addr: SocketAddr = format!("127.0.0.1:{}", port)
+            .parse()
+            .expect("test must succeed");
         let config = ClientConfig::new(addr, "localhost").ca_cert(&cert_pem);
         let mut client = H3Client::connect(config).await?;
 

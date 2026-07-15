@@ -65,7 +65,7 @@ impl Connection {
     ///
     /// # Safety
     /// callbacks と settings は有効なポインタである必要がある
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub unsafe fn client_new_raw(
         dcid: &ConnectionId,
         scid: &ConnectionId,
@@ -138,7 +138,7 @@ impl Connection {
     ///
     /// # Safety
     /// callbacks と settings は有効なポインタである必要がある
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub unsafe fn server_new_raw(
         dcid: &ConnectionId,
         scid: &ConnectionId,
@@ -217,7 +217,7 @@ impl Connection {
     /// * `tls_session` - TLS セッション
     /// * `params` - トランスポートパラメータ
     /// * `initial_ts` - 初期タイムスタンプ (ナノ秒)
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn client_new(
         dcid: &ConnectionId,
         scid: &ConnectionId,
@@ -347,7 +347,6 @@ impl Connection {
     /// * `tls_session` - TLS セッション
     /// * `params` - トランスポートパラメータ
     /// * `initial_ts` - 初期タイムスタンプ (ナノ秒)
-    #[allow(clippy::too_many_arguments)]
     pub fn server_new(
         dcid: &ConnectionId,
         scid: &ConnectionId,

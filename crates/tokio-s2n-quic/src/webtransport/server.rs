@@ -118,7 +118,7 @@ impl WtSessionRequest {
         let decoder_stream_id: u64 = decoder_send.id();
 
         let init_data = {
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock().expect("mutex should not be poisoned");
             let data =
                 s.init_h3_streams(control_stream_id, encoder_stream_id, decoder_stream_id)?;
             // s2n-quic は DATAGRAM (RFC 9221) と RESET_STREAM_AT をサポートする
@@ -195,7 +195,7 @@ impl WtSessionRequest {
 
         // Sans I/O にストリームの存在を通知
         {
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock().expect("mutex should not be poisoned");
             let _ = s.h3_conn.feed_stream(connect_stream_id, &[], false);
         }
 
@@ -204,7 +204,7 @@ impl WtSessionRequest {
         // (draft-ietf-webtrans-http3-15 Section 3.1)
         loop {
             {
-                let s = state.lock().unwrap();
+                let s = state.lock().expect("mutex should not be poisoned");
                 if s.h3_conn.peer_settings().is_some() {
                     break;
                 }
@@ -228,7 +228,7 @@ impl WtSessionRequest {
             // notify_one() が取りこぼされる場合に備え、毎回 drain_events を確認する
             {
                 let events = {
-                    let mut s = state.lock().unwrap();
+                    let mut s = state.lock().expect("mutex should not be poisoned");
                     s.drain_events()?
                 };
                 for event in events {
@@ -260,7 +260,7 @@ impl WtSessionRequest {
                     };
 
                     let events = {
-                        let mut s = state.lock().unwrap();
+                        let mut s = state.lock().expect("mutex should not be poisoned");
                         s.process_stream_data(connect_stream_id, &data, fin)?
                     };
 
@@ -323,7 +323,7 @@ impl WtSessionRequest {
 
         // Sans I/O でレスポンスをエンコード
         let data = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock().expect("mutex should not be poisoned");
             s.h3_conn
                 .send_response(self.stream_id, &response_headers, false)?;
 
@@ -361,7 +361,7 @@ impl WtSessionRequest {
         let response_headers = ConnectResponse::new(status).to_headers()?;
 
         let data = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock().expect("mutex should not be poisoned");
             s.h3_conn
                 .send_response(self.stream_id, &response_headers, true)?;
 
@@ -411,7 +411,10 @@ async fn route_uni_stream(
             }
             Ok(None) => {
                 // ストリームが先に閉じた
-                let _ = state.lock().unwrap().feed_stream_only(stream_id, &[], true);
+                let _ = state
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .feed_stream_only(stream_id, &[], true);
                 notify.notify_one();
                 return;
             }
@@ -430,18 +433,21 @@ async fn route_uni_stream(
             // H3 制御ストリームとしてフィード
             let _ = state
                 .lock()
-                .unwrap()
+                .expect("mutex should not be poisoned")
                 .feed_stream_only(stream_id, &type_buf, false);
             notify.notify_one();
 
             while let Ok(Some(data)) = recv_stream.receive().await {
                 let _ = state
                     .lock()
-                    .unwrap()
+                    .expect("mutex should not be poisoned")
                     .feed_stream_only(stream_id, &data, false);
                 notify.notify_one();
             }
-            let _ = state.lock().unwrap().feed_stream_only(stream_id, &[], true);
+            let _ = state
+                .lock()
+                .expect("mutex should not be poisoned")
+                .feed_stream_only(stream_id, &[], true);
             notify.notify_one();
         }
     }

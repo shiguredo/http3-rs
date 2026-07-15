@@ -11,18 +11,22 @@ use interop_h3::generate_shared_certificate;
 /// 複数の連続リクエストをテスト
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_multiple_sequential_requests() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem);
-    let mut server = H3Server::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    );
+    let mut server = H3Server::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
     eprintln!("[server] サーバー起動: {}", server_addr);
 
     // サーバー: 3 リクエストを処理
     let server_handle = tokio::spawn(async move {
-        let mut conn = server.accept().await.unwrap();
+        let mut conn = server.accept().await.expect("test must succeed");
         for i in 0..3 {
-            let request = conn.accept_request().await.unwrap();
+            let request = conn.accept_request().await.expect("test must succeed");
             eprintln!(
                 "[server] リクエスト {}: {}",
                 i + 1,
@@ -35,7 +39,7 @@ async fn test_multiple_sequential_requests() {
                         .body("Hello from HTTP/3 server!"),
                 )
                 .await
-                .unwrap();
+                .expect("test must succeed");
         }
     });
 
@@ -44,7 +48,9 @@ async fn test_multiple_sequential_requests() {
     // クライアント: 3 リクエストを順番に送信
     let client_config =
         tokio_s2n_quic::ClientConfig::new(server_addr, "localhost").ca_cert(&cert_pem);
-    let mut client = H3Client::connect(client_config).await.unwrap();
+    let mut client = H3Client::connect(client_config)
+        .await
+        .expect("test must succeed");
 
     let mut responses = Vec::new();
     let paths = ["/path1", "/path2", "/path3"];
@@ -52,7 +58,7 @@ async fn test_multiple_sequential_requests() {
         let response = client
             .send_request(H3ClientRequest::get(path).authority("localhost"))
             .await
-            .unwrap();
+            .expect("test must succeed");
         eprintln!(
             "[client] レスポンス: status={}, body={}",
             response.status(),
@@ -79,18 +85,22 @@ async fn test_multiple_sequential_requests() {
 /// 大きなボディのレスポンステスト (64KB)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_large_body_response() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
     let body_size = 64 * 1024; // 64KB
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem);
-    let mut server = H3Server::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    );
+    let mut server = H3Server::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
     eprintln!("[server] サーバー起動: {}", server_addr);
 
     // サーバー: 大きなボディでレスポンス
     let server_handle = tokio::spawn(async move {
-        let mut conn = server.accept().await.unwrap();
-        let request = conn.accept_request().await.unwrap();
+        let mut conn = server.accept().await.expect("test must succeed");
+        let request = conn.accept_request().await.expect("test must succeed");
 
         let body: Vec<u8> = (0..body_size).map(|i| (i % 256) as u8).collect();
         request
@@ -100,7 +110,7 @@ async fn test_large_body_response() {
                     .body(body),
             )
             .await
-            .unwrap();
+            .expect("test must succeed");
     });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -108,12 +118,14 @@ async fn test_large_body_response() {
     // クライアント
     let client_config =
         tokio_s2n_quic::ClientConfig::new(server_addr, "localhost").ca_cert(&cert_pem);
-    let mut client = H3Client::connect(client_config).await.unwrap();
+    let mut client = H3Client::connect(client_config)
+        .await
+        .expect("test must succeed");
 
     let response = client
         .send_request(H3ClientRequest::get("/large").authority("localhost"))
         .await
-        .unwrap();
+        .expect("test must succeed");
 
     server_handle.abort();
 

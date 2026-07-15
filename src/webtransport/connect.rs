@@ -82,7 +82,7 @@ impl Default for ServerSettingsParams {
 
 impl DraftVersion {
     /// このドラフトバージョンに対応する `:protocol` 疑似ヘッダーの値を返す
-    pub fn protocol_value(&self) -> &'static str {
+    pub fn protocol_value(self) -> &'static str {
         match self {
             Self::Draft02 | Self::Draft07 | Self::Draft14 => PROTOCOL_WEBTRANSPORT_DRAFT02,
             Self::Draft15 => PROTOCOL_WEBTRANSPORT_H3,
@@ -103,10 +103,7 @@ impl DraftVersion {
     ///
     /// draft-ietf-webtrans-http3-14, draft-ietf-webtrans-http3-15
     /// 将来のドラフトで変更される可能性がある
-    pub fn build_server_settings(
-        &self,
-        params: &ServerSettingsParams,
-    ) -> super::settings::Settings {
+    pub fn build_server_settings(self, params: &ServerSettingsParams) -> super::settings::Settings {
         match self {
             Self::Draft15 => super::settings::Settings::new()
                 .wt_enabled(VarInt::from_static(1))
@@ -147,7 +144,7 @@ impl DraftVersion {
     ///
     /// draft-ietf-webtrans-http3-14 Section 5
     /// 将来のドラフトで変更される可能性がある
-    pub fn requires_initial_capsule_flow_control(&self) -> bool {
+    pub fn requires_initial_capsule_flow_control(self) -> bool {
         matches!(self, Self::Draft14)
     }
 
@@ -168,7 +165,7 @@ impl DraftVersion {
     /// draft-ietf-webtrans-http3-14 Section 3.1,
     /// draft-ietf-webtrans-http3-15 Section 3.1
     /// 将来のドラフトで変更される可能性がある
-    pub fn requires_enable_connect_protocol(&self) -> bool {
+    pub fn requires_enable_connect_protocol(self) -> bool {
         matches!(self, Self::Draft07 | Self::Draft14 | Self::Draft15)
     }
 
@@ -182,7 +179,7 @@ impl DraftVersion {
     /// draft-ietf-webtrans-http3-14 Section 3.1,
     /// draft-ietf-webtrans-http3-15 Section 3.1
     /// 将来のドラフトで変更される可能性がある
-    pub fn requires_reset_stream_at(&self) -> bool {
+    pub fn requires_reset_stream_at(self) -> bool {
         matches!(self, Self::Draft14 | Self::Draft15)
     }
 
@@ -203,10 +200,7 @@ impl DraftVersion {
     /// draft-ietf-webtrans-http3-14 Section 3.1,
     /// draft-ietf-webtrans-http3-15 Section 3.1
     /// 将来のドラフトで変更される可能性がある
-    pub fn build_client_settings(
-        &self,
-        params: &ServerSettingsParams,
-    ) -> super::settings::Settings {
+    pub fn build_client_settings(self, params: &ServerSettingsParams) -> super::settings::Settings {
         match self {
             Self::Draft15 => super::settings::Settings::new()
                 .wt_enabled(VarInt::from_static(1))
@@ -226,7 +220,7 @@ impl DraftVersion {
 }
 
 /// CONNECT リクエスト検証エラー (draft-ietf-webtrans-http3-15 Section 3.2)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectError {
     /// `:scheme` が `https` でない
     InvalidScheme,
@@ -916,7 +910,7 @@ mod tests {
     #[test]
     fn test_connect_request_to_headers_basic() {
         let req = ConnectRequest::new("https", "example.com", "/wt");
-        let headers = req.to_headers().unwrap();
+        let headers = req.to_headers().expect("test must succeed");
         assert_eq!(headers.len(), 5);
         assert_eq!(headers[0].name(), b":method");
         assert_eq!(headers[0].value(), b"CONNECT");
@@ -934,7 +928,7 @@ mod tests {
     fn test_connect_request_to_headers_draft02() {
         let req =
             ConnectRequest::new("https", "example.com", "/wt").draft_version(DraftVersion::Draft02);
-        let headers = req.to_headers().unwrap();
+        let headers = req.to_headers().expect("test must succeed");
         assert_eq!(headers[1].name(), b":protocol");
         assert_eq!(headers[1].value(), PROTOCOL_WEBTRANSPORT_DRAFT02.as_bytes());
     }
@@ -943,7 +937,7 @@ mod tests {
     fn test_connect_request_to_headers_draft07() {
         let req =
             ConnectRequest::new("https", "example.com", "/wt").draft_version(DraftVersion::Draft07);
-        let headers = req.to_headers().unwrap();
+        let headers = req.to_headers().expect("test must succeed");
         assert_eq!(headers[1].name(), b":protocol");
         assert_eq!(headers[1].value(), PROTOCOL_WEBTRANSPORT_DRAFT02.as_bytes());
     }
@@ -952,7 +946,7 @@ mod tests {
     fn test_connect_request_to_headers_with_origin() {
         let req =
             ConnectRequest::new("https", "example.com", "/wt").origin("https://client.example");
-        let headers = req.to_headers().unwrap();
+        let headers = req.to_headers().expect("test must succeed");
         assert_eq!(headers.len(), 6);
         assert_eq!(headers[5].name(), b"origin");
         assert_eq!(headers[5].value(), b"https://client.example");
@@ -962,7 +956,7 @@ mod tests {
     fn test_connect_request_to_headers_with_available_protocols() {
         let req = ConnectRequest::new("https", "example.com", "/wt")
             .available_protocols(vec!["moq".to_string(), "chat".to_string()]);
-        let headers = req.to_headers().unwrap();
+        let headers = req.to_headers().expect("test must succeed");
         assert_eq!(headers.len(), 6);
         assert_eq!(headers[5].name(), b"wt-available-protocols");
         assert_eq!(headers[5].value(), b"\"moq\", \"chat\"");
@@ -977,7 +971,7 @@ mod tests {
             (b":authority", b"example.com"),
             (b":path", b"/wt"),
         ];
-        let req = ConnectRequest::from_headers(&headers).unwrap();
+        let req = ConnectRequest::from_headers(&headers).expect("test must succeed");
         assert_eq!(req.draft_version, DraftVersion::Draft15);
         assert_eq!(req.scheme, "https");
         assert_eq!(req.authority, "example.com");
@@ -996,7 +990,7 @@ mod tests {
             (b":authority", b"example.com"),
             (b":path", b"/"),
         ];
-        let req = ConnectRequest::from_headers(&headers).unwrap();
+        let req = ConnectRequest::from_headers(&headers).expect("test must succeed");
         assert_eq!(req.draft_version, DraftVersion::Draft02);
         assert_eq!(req.scheme, "https");
     }
@@ -1039,7 +1033,7 @@ mod tests {
             (b":path", b"/wt"),
             (b"origin", b"https://client.example"),
         ];
-        let req = ConnectRequest::from_headers(&headers).unwrap();
+        let req = ConnectRequest::from_headers(&headers).expect("test must succeed");
         assert_eq!(req.origin, Some("https://client.example".to_string()));
     }
 
@@ -1048,9 +1042,9 @@ mod tests {
         // to_headers で生成したヘッダーを from_headers でパースする
         let original =
             ConnectRequest::new("https", "example.com", "/wt").origin("https://client.example");
-        let headers = original.to_headers().unwrap();
+        let headers = original.to_headers().expect("test must succeed");
         let pairs: Vec<(&[u8], &[u8])> = headers.iter().map(|h| (h.name(), h.value())).collect();
-        let parsed = ConnectRequest::from_headers(&pairs).unwrap();
+        let parsed = ConnectRequest::from_headers(&pairs).expect("test must succeed");
         assert_eq!(parsed.scheme, original.scheme);
         assert_eq!(parsed.authority, original.authority);
         assert_eq!(parsed.path, original.path);
@@ -1060,7 +1054,7 @@ mod tests {
     #[test]
     fn test_connect_response_to_headers_basic() {
         let resp = ConnectResponse::new(200);
-        let headers = resp.to_headers().unwrap();
+        let headers = resp.to_headers().expect("test must succeed");
         assert_eq!(headers.len(), 1);
         assert_eq!(headers[0].name(), b":status");
         assert_eq!(headers[0].value(), b"200");
@@ -1069,7 +1063,7 @@ mod tests {
     #[test]
     fn test_connect_response_to_headers_with_protocol() {
         let resp = ConnectResponse::new(200).with_protocol("moq");
-        let headers = resp.to_headers().unwrap();
+        let headers = resp.to_headers().expect("test must succeed");
         assert_eq!(headers.len(), 2);
         assert_eq!(headers[1].name(), b"wt-protocol");
         assert_eq!(headers[1].value(), b"\"moq\"");
@@ -1110,7 +1104,7 @@ mod tests {
     }
 
     fn vi(value: u64) -> VarInt {
-        VarInt::new(value).unwrap()
+        VarInt::new(value).expect("test must succeed")
     }
 
     #[test]

@@ -19,18 +19,18 @@
 //! let mut conn = ClientConnection::new(Settings::default());
 //!
 //! // 制御ストリーム ID を設定
-//! conn.set_control_stream_id(2).unwrap();
+//! conn.set_control_stream_id(2).expect("infallible: implementation bug if this panics");
 //!
 //! // リクエストを送信
 //! let stream_id = conn.send_request(&[
-//!     Header::new(b":method", b"GET").unwrap(),
-//!     Header::new(b":path", b"/").unwrap(),
-//!     Header::new(b":scheme", b"https").unwrap(),
-//!     Header::new(b":authority", b"example.com").unwrap(),
-//! ], true).unwrap();
+//!     Header::new(b":method", b"GET").expect("infallible: implementation bug if this panics"),
+//!     Header::new(b":path", b"/").expect("infallible: implementation bug if this panics"),
+//!     Header::new(b":scheme", b"https").expect("infallible: implementation bug if this panics"),
+//!     Header::new(b":authority", b"example.com").expect("infallible: implementation bug if this panics"),
+//! ], true).expect("infallible: implementation bug if this panics");
 //!
 //! // QUIC からデータを受信
-//! conn.feed_stream(stream_id, &response_data, fin).unwrap();
+//! conn.feed_stream(stream_id, &response_data, fin).expect("infallible: implementation bug if this panics");
 //!
 //! // イベントを処理
 //! while let Some(event) = conn.poll_event() {

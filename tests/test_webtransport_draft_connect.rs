@@ -17,7 +17,7 @@ use shiguredo_http3::{
 };
 
 fn vi(value: u64) -> VarInt {
-    VarInt::new(value).unwrap()
+    VarInt::new(value).expect("test must succeed")
 }
 
 // =========================================================================
@@ -28,7 +28,9 @@ fn vi(value: u64) -> VarInt {
 fn build_headers_frame(headers: &[Header]) -> Vec<u8> {
     let encoder = Encoder::new();
     let mut qpack_buf = vec![0u8; 4096];
-    let qpack_len = encoder.encode(&mut qpack_buf, headers).unwrap();
+    let qpack_len = encoder
+        .encode(&mut qpack_buf, headers)
+        .expect("test must succeed");
     qpack_buf.truncate(qpack_len);
 
     let mut frame = Vec::new();
@@ -58,8 +60,8 @@ fn build_draft02_client_ctrl() -> Vec<u8> {
             .enable_webtransport_server(wt)
     };
     let mut client = shiguredo_http3::ClientConnection::new(settings);
-    client.set_control_stream_id(2).unwrap();
-    let (ctrl, _) = client.take_stream_data(2).unwrap();
+    client.set_control_stream_id(2).expect("test must succeed");
+    let (ctrl, _) = client.take_stream_data(2).expect("test must succeed");
     ctrl
 }
 
@@ -75,8 +77,8 @@ fn build_draft07_client_ctrl() -> Vec<u8> {
             .enable_webtransport_server(wt)
     };
     let mut client = shiguredo_http3::ClientConnection::new(settings);
-    client.set_control_stream_id(2).unwrap();
-    let (ctrl, _) = client.take_stream_data(2).unwrap();
+    client.set_control_stream_id(2).expect("test must succeed");
+    let (ctrl, _) = client.take_stream_data(2).expect("test must succeed");
     ctrl
 }
 
@@ -94,8 +96,8 @@ fn build_draft14_client_ctrl_with_ecp() -> Vec<u8> {
         .enable_connect_protocol(true)
         .enable_webtransport_server(wt);
     let mut client = shiguredo_http3::ClientConnection::new(settings);
-    client.set_control_stream_id(2).unwrap();
-    let (ctrl, _) = client.take_stream_data(2).unwrap();
+    client.set_control_stream_id(2).expect("test must succeed");
+    let (ctrl, _) = client.take_stream_data(2).expect("test must succeed");
     ctrl
 }
 
@@ -113,8 +115,8 @@ fn build_draft14_client_ctrl_without_ecp() -> Vec<u8> {
             .enable_webtransport_server(wt)
     };
     let mut client = shiguredo_http3::ClientConnection::new(settings);
-    client.set_control_stream_id(2).unwrap();
-    let (ctrl, _) = client.take_stream_data(2).unwrap();
+    client.set_control_stream_id(2).expect("test must succeed");
+    let (ctrl, _) = client.take_stream_data(2).expect("test must succeed");
     ctrl
 }
 
@@ -125,8 +127,8 @@ fn build_draft15_client_ctrl_with_ecp() -> Vec<u8> {
         .h3_datagram(true)
         .enable_webtransport_server(wt);
     let mut client = shiguredo_http3::ClientConnection::new(settings);
-    client.set_control_stream_id(2).unwrap();
-    let (ctrl, _) = client.take_stream_data(2).unwrap();
+    client.set_control_stream_id(2).expect("test must succeed");
+    let (ctrl, _) = client.take_stream_data(2).expect("test must succeed");
     ctrl
 }
 
@@ -140,8 +142,8 @@ fn build_draft15_client_ctrl_without_ecp() -> Vec<u8> {
             .enable_webtransport_server(wt)
     };
     let mut client = shiguredo_http3::ClientConnection::new(settings);
-    client.set_control_stream_id(2).unwrap();
-    let (ctrl, _) = client.take_stream_data(2).unwrap();
+    client.set_control_stream_id(2).expect("test must succeed");
+    let (ctrl, _) = client.take_stream_data(2).expect("test must succeed");
     ctrl
 }
 
@@ -154,21 +156,23 @@ fn setup_server(reset_stream_at: bool) -> ServerConnection {
         .wt_max_sessions_draft14(vi(100));
     let settings = Settings::new().enable_webtransport_server(wt);
     let mut server = ServerConnection::new(settings);
-    server.set_control_stream_id(3).unwrap();
+    server.set_control_stream_id(3).expect("test must succeed");
     server
         .set_webtransport_transport_verified(true, reset_stream_at)
-        .unwrap();
+        .expect("test must succeed");
     // サーバーの制御ストリームデータを消費
-    let _ = server.take_stream_data(3).unwrap();
+    let _ = server.take_stream_data(3).expect("test must succeed");
     server
 }
 
 /// サーバーにクライアントの制御ストリームデータを feed し、SETTINGS イベントを消費する
 fn feed_client_settings(server: &mut ServerConnection, client_ctrl: &[u8]) {
-    server.feed_stream(2, client_ctrl, false).unwrap();
+    server
+        .feed_stream(2, client_ctrl, false)
+        .expect("test must succeed");
     // SETTINGS イベントを消費
     loop {
-        match server.poll_event().unwrap() {
+        match server.poll_event().expect("test must succeed") {
             Some(Event::SettingsReceived { .. }) => break,
             Some(_) => {}
             None => break,
@@ -179,7 +183,7 @@ fn feed_client_settings(server: &mut ServerConnection, client_ctrl: &[u8]) {
 /// WebTransport CONNECT ヘッダーを構築する
 fn wt_connect_headers(draft: DraftVersion) -> Vec<Header> {
     vec![
-        Header::new(b":method", b"CONNECT").unwrap(),
+        Header::new(b":method", b"CONNECT").expect("test must succeed"),
         Header::new(
             b":protocol",
             match draft {
@@ -187,10 +191,10 @@ fn wt_connect_headers(draft: DraftVersion) -> Vec<Header> {
                 _ => b"webtransport",
             },
         )
-        .unwrap(),
-        Header::new(b":scheme", b"https").unwrap(),
-        Header::new(b":authority", b"example.com").unwrap(),
-        Header::new(b":path", b"/wt").unwrap(),
+        .expect("test must succeed"),
+        Header::new(b":scheme", b"https").expect("test must succeed"),
+        Header::new(b":authority", b"example.com").expect("test must succeed"),
+        Header::new(b":path", b"/wt").expect("test must succeed"),
     ]
 }
 
@@ -211,7 +215,7 @@ mod draft02 {
         feed_client_settings(&mut server, &client_ctrl);
 
         // peer SETTINGS 検証
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert!(peer.is_webtransport_enabled());
         assert_eq!(peer.enable_connect_protocol, None);
         assert_eq!(
@@ -234,7 +238,7 @@ mod draft02 {
         let client_ctrl = build_draft02_client_ctrl();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert_eq!(
             peer.webtransport_draft_pattern(),
             Some(DraftVersion::Draft02)
@@ -259,7 +263,7 @@ mod draft07 {
         feed_client_settings(&mut server, &client_ctrl);
 
         // peer SETTINGS 検証
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert!(peer.is_webtransport_enabled());
         assert_eq!(peer.enable_connect_protocol, None);
         assert_eq!(
@@ -296,13 +300,13 @@ mod draft07 {
                 .enable_webtransport_server(wt)
         };
         let mut client = shiguredo_http3::ClientConnection::new(settings);
-        client.set_control_stream_id(2).unwrap();
-        let (client_ctrl, _) = client.take_stream_data(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
 
         let mut server = setup_server(true);
         feed_client_settings(&mut server, &client_ctrl);
 
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert_eq!(
             peer.webtransport_draft_pattern(),
             Some(DraftVersion::Draft07),
@@ -325,7 +329,7 @@ mod draft07 {
         let client_ctrl = build_draft07_client_ctrl();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert_eq!(
             peer.webtransport_draft_pattern(),
             Some(DraftVersion::Draft07)
@@ -348,7 +352,7 @@ mod draft14 {
         let client_ctrl = build_draft14_client_ctrl_with_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert!(peer.is_webtransport_enabled());
         assert_eq!(peer.enable_connect_protocol, Some(true));
 
@@ -370,7 +374,7 @@ mod draft14 {
         let client_ctrl = build_draft14_client_ctrl_without_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert!(peer.is_webtransport_enabled());
         assert_eq!(peer.enable_connect_protocol, None);
 
@@ -389,7 +393,7 @@ mod draft14 {
         let client_ctrl = build_draft14_client_ctrl_with_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert_eq!(
             peer.webtransport_draft_pattern(),
             Some(DraftVersion::Draft14)
@@ -411,7 +415,7 @@ mod draft15 {
         let client_ctrl = build_draft15_client_ctrl_with_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert!(peer.is_webtransport_enabled());
         assert_eq!(peer.enable_connect_protocol, Some(true));
 
@@ -432,7 +436,7 @@ mod draft15 {
         let client_ctrl = build_draft15_client_ctrl_without_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert!(peer.is_webtransport_enabled());
         assert_eq!(peer.enable_connect_protocol, None);
 
@@ -468,7 +472,7 @@ mod draft15 {
         let client_ctrl = build_draft15_client_ctrl_with_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert_eq!(
             peer.webtransport_draft_pattern(),
             Some(DraftVersion::Draft15)
@@ -493,8 +497,8 @@ mod common {
             ..Settings::new().enable_webtransport_server(wt)
         };
         let mut client = shiguredo_http3::ClientConnection::new(settings);
-        client.set_control_stream_id(2).unwrap();
-        let (client_ctrl, _) = client.take_stream_data(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
 
         let mut server = setup_server(false);
         feed_client_settings(&mut server, &client_ctrl);
@@ -515,13 +519,13 @@ mod common {
             .h3_datagram(true)
             .enable_connect_protocol(true);
         let mut client = shiguredo_http3::ClientConnection::new(settings);
-        client.set_control_stream_id(2).unwrap();
-        let (client_ctrl, _) = client.take_stream_data(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
 
         let mut server = setup_server(false);
         feed_client_settings(&mut server, &client_ctrl);
 
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert!(!peer.is_webtransport_enabled());
 
         let headers = wt_connect_headers(DraftVersion::Draft07);
@@ -541,11 +545,11 @@ mod common {
         feed_client_settings(&mut server, &client_ctrl);
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport").unwrap(),
-            Header::new(b":scheme", b"http").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport").expect("test must succeed"),
+            Header::new(b":scheme", b"http").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
         let frame = build_headers_frame(&headers);
         let err = server.feed_stream(0, &frame, false).unwrap_err();
@@ -561,9 +565,9 @@ mod common {
         let wt = webtransport::Settings::new().webtransport_max_sessions_draft07(vi(1));
         let settings = Settings::new().enable_webtransport_server(wt);
         let mut server = ServerConnection::new(settings);
-        server.set_control_stream_id(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
         // set_webtransport_transport_verified を呼ばない
-        let _ = server.take_stream_data(3).unwrap();
+        let _ = server.take_stream_data(3).expect("test must succeed");
 
         let client_ctrl = build_draft07_client_ctrl();
         feed_client_settings(&mut server, &client_ctrl);
@@ -586,16 +590,16 @@ mod common {
             .h3_datagram(false)
             .enable_connect_protocol(true);
         let mut client = shiguredo_http3::ClientConnection::new(settings);
-        client.set_control_stream_id(2).unwrap();
-        let (client_ctrl, _) = client.take_stream_data(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
         feed_client_settings(&mut server, &client_ctrl);
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"websocket").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/ws").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"websocket").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/ws").expect("test must succeed"),
         ];
         let frame = build_headers_frame(&headers);
         // WebSocket CONNECT は WebTransport のチェックを通らない
@@ -608,7 +612,7 @@ mod common {
 }
 
 // =========================================================================
-// フロー制御無効時の同時セッション数制限 (issue #0051)
+// フロー制御無効時の同時セッション数制限
 // draft-ietf-webtrans-http3-15 Section 5.1, 5.2
 // =========================================================================
 
@@ -622,10 +626,10 @@ mod no_flow_control_single_session {
             .h3_datagram(true)
             .enable_webtransport_server(wt);
         let mut client = shiguredo_http3::ClientConnection::new(settings);
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
         client
             .set_webtransport_transport_verified(true, true)
-            .unwrap();
+            .expect("test must succeed");
         client
     }
 
@@ -667,13 +671,15 @@ mod no_flow_control_single_session {
             .enable_connect_protocol(true)
             .enable_webtransport_server(server_wt);
         let mut server = ServerConnection::new(server_settings);
-        server.set_control_stream_id(3).unwrap();
-        let (server_ctrl, _) = server.take_stream_data(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
+        let (server_ctrl, _) = server.take_stream_data(3).expect("test must succeed");
 
         // クライアントにサーバー制御ストリームを feed して peer SETTINGS を確定
-        client.feed_stream(3, &server_ctrl, false).unwrap();
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("test must succeed");
         // SETTINGS イベントを消費
-        while let Some(_ev) = client.poll_event().unwrap() {}
+        while let Some(_ev) = client.poll_event().expect("test must succeed") {}
 
         let headers = wt_connect_headers(DraftVersion::Draft15);
 
@@ -692,7 +698,7 @@ mod no_flow_control_single_session {
 }
 
 // =========================================================================
-// WT-Available-Protocols 未送時の WT-Protocol 検証 (issue #0052)
+// WT-Available-Protocols 未送時の WT-Protocol 検証
 // draft-ietf-webtrans-http3-15 Section 3.3
 // =========================================================================
 
@@ -717,12 +723,12 @@ mod wt_protocol_without_available_protocols {
             .expect("WT CONNECT は受理されるべき");
 
         // RequestReceived イベントを消費する
-        while let Some(_ev) = server.poll_event().unwrap() {}
+        while let Some(_ev) = server.poll_event().expect("test must succeed") {}
 
         // wt-protocol を含む 2xx を返そうとする → エラー
         let response = vec![
-            Header::new(b":status", b"200").unwrap(),
-            Header::new(b"wt-protocol", b"\"echo\"").unwrap(),
+            Header::new(b":status", b"200").expect("test must succeed"),
+            Header::new(b"wt-protocol", b"\"echo\"").expect("test must succeed"),
         ];
         let err = server.send_response(0, &response, false).unwrap_err();
         assert!(
@@ -745,11 +751,11 @@ mod wt_protocol_without_available_protocols {
             .h3_datagram(true)
             .enable_webtransport_server(wt);
         let mut client = shiguredo_http3::ClientConnection::new(settings);
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
         client
             .set_webtransport_transport_verified(true, true)
-            .unwrap();
-        let _ = client.take_stream_data(2).unwrap();
+            .expect("test must succeed");
+        let _ = client.take_stream_data(2).expect("test must succeed");
 
         // サーバーの SETTINGS を構築して feed
         let server_wt = webtransport::Settings::new()
@@ -762,29 +768,35 @@ mod wt_protocol_without_available_protocols {
             .enable_connect_protocol(true)
             .enable_webtransport_server(server_wt);
         let mut server = ServerConnection::new(server_settings);
-        server.set_control_stream_id(3).unwrap();
-        let (server_ctrl, _) = server.take_stream_data(3).unwrap();
-        client.feed_stream(3, &server_ctrl, false).unwrap();
-        while let Some(_ev) = client.poll_event().unwrap() {}
+        server.set_control_stream_id(3).expect("test must succeed");
+        let (server_ctrl, _) = server.take_stream_data(3).expect("test must succeed");
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("test must succeed");
+        while let Some(_ev) = client.poll_event().expect("test must succeed") {}
 
         // wt-available-protocols を含まない WT CONNECT を送信
         let headers = wt_connect_headers(DraftVersion::Draft15);
-        let stream_id = client.send_request(&headers, false).unwrap();
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
         // 送信バッファを取り出して破棄 (peer に送らない)
         let _ = client.take_stream_data(stream_id);
 
         // 偽の 2xx + WT-Protocol レスポンスをクライアントに feed する
         let response = vec![
-            Header::new(b":status", b"200").unwrap(),
-            Header::new(b"wt-protocol", b"\"echo\"").unwrap(),
+            Header::new(b":status", b"200").expect("test must succeed"),
+            Header::new(b"wt-protocol", b"\"echo\"").expect("test must succeed"),
         ];
         let frame = build_headers_frame(&response);
-        client.feed_stream(stream_id, &frame, false).unwrap();
+        client
+            .feed_stream(stream_id, &frame, false)
+            .expect("test must succeed");
 
         // セッションは Established に遷移せず、WebTransportEvent::SessionClosed が発火する
         let mut session_closed = false;
         let mut session_established = false;
-        while let Some(ev) = client.poll_event().unwrap() {
+        while let Some(ev) = client.poll_event().expect("test must succeed") {
             match ev {
                 Event::WebTransport(WebTransportEvent::SessionClosed { error_code, .. }) => {
                     session_closed = true;
@@ -819,11 +831,11 @@ mod protocol_draft_alignment {
     /// `:protocol` を任意指定して WT CONNECT ヘッダーを構築する
     fn wt_connect_headers_with_protocol(protocol: &'static [u8]) -> Vec<Header> {
         vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", protocol).unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", protocol).expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ]
     }
 
@@ -891,20 +903,22 @@ mod protocol_draft_alignment {
             .enable_connect_protocol(true)
             .enable_webtransport_server(server_wt);
         let mut server = ServerConnection::new(server_settings);
-        server.set_control_stream_id(3).unwrap();
-        let (server_ctrl, _) = server.take_stream_data(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
+        let (server_ctrl, _) = server.take_stream_data(3).expect("test must succeed");
 
         let client_wt = webtransport::Settings::new().wt_enabled(vi(1));
         let client_settings = Settings::new()
             .h3_datagram(true)
             .enable_webtransport_server(client_wt);
         let mut client = shiguredo_http3::ClientConnection::new(client_settings);
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
         client
             .set_webtransport_transport_verified(true, true)
-            .unwrap();
-        client.feed_stream(3, &server_ctrl, false).unwrap();
-        while let Some(_ev) = client.poll_event().unwrap() {}
+            .expect("test must succeed");
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("test must succeed");
+        while let Some(_ev) = client.poll_event().expect("test must succeed") {}
 
         let headers = wt_connect_headers_with_protocol(b"webtransport");
         let result = client.send_request(&headers, false);

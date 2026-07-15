@@ -3,7 +3,8 @@ use std::process::Command;
 
 /// Cargo.toml から外部依存関係のメタデータを読み取る
 fn read_external_dependency(name: &str) -> shiguredo_toml::Table {
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("build script must succeed"));
     let cargo_toml = std::fs::read_to_string(manifest_dir.join("Cargo.toml"))
         .expect("Failed to read Cargo.toml");
     let parsed = shiguredo_toml::from_str(&cargo_toml).expect("Failed to parse Cargo.toml");
@@ -19,7 +20,7 @@ fn read_external_dependency(name: &str) -> shiguredo_toml::Table {
 }
 
 fn main() {
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("build script must succeed"));
 
     // Cargo.toml からメタデータを読み取る
     let dep = read_external_dependency("nghttp3");
@@ -48,7 +49,11 @@ fn main() {
     } else {
         // git clone
         let status = Command::new("git")
-            .args(["clone", git_url, nghttp3_dir.to_str().unwrap()])
+            .args([
+                "clone",
+                git_url,
+                nghttp3_dir.to_str().expect("build script must succeed"),
+            ])
             .status()
             .expect("Failed to execute git clone");
         if !status.success() {
@@ -127,14 +132,20 @@ fn main() {
 
 #[cfg(feature = "overwrite")]
 fn overwrite_bindgen(out_dir: &PathBuf) {
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("build script must succeed"));
     // ビルド後の include ディレクトリ (version.h が生成される場所)
     let nghttp3_installed_include = out_dir.join("include");
     // ソースの include ディレクトリ (nghttp3.h がある場所)
     let nghttp3_source_include = out_dir.join("nghttp3/lib/includes");
 
     bindgen::Builder::default()
-        .header(manifest_dir.join("src/wrapper.h").to_str().unwrap())
+        .header(
+            manifest_dir
+                .join("src/wrapper.h")
+                .to_str()
+                .expect("build script must succeed"),
+        )
         .clang_arg(format!("-I{}", nghttp3_installed_include.display()))
         .clang_arg(format!("-I{}", nghttp3_source_include.display()))
         .allowlist_function("nghttp3_.*")

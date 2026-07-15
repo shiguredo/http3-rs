@@ -8,12 +8,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use nghttp3_sys::nghttp3_vec;
-use ngtcp2_sys::ngtcp2_transport_params;
 use rcgen::{CertificateParams, KeyPair};
 
 use shiguredo_ngtcp2::{
-    Connection, ConnectionId, Header, Http3Connection, Http3Event, Http3SettingsExt, PacketInfo,
-    TlsContext, TransportParamsExt,
+    Connection, ConnectionId, Header, Http3Connection, Http3Event, Http3Settings, PacketInfo,
+    TlsContext, TransportParams,
 };
 
 /// テスト用の証明書と秘密鍵を動的に生成
@@ -51,7 +50,7 @@ fn timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .expect("test must succeed")
         .as_nanos() as u64
 }
 
@@ -132,9 +131,7 @@ fn test_webtransport_headers() {
 /// WebTransport 対応 HTTP/3 クライアント接続を作成する
 #[test]
 fn test_wt_h3_client_creation() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings().with_webtransport();
+    let settings = Http3Settings::new().with_webtransport().into_raw();
 
     // WebTransport が有効になっていることを確認
     assert_eq!(settings.enable_connect_protocol, 1);
@@ -151,9 +148,7 @@ fn test_wt_h3_client_creation() {
 /// WebTransport 対応 HTTP/3 サーバー接続を作成する
 #[test]
 fn test_wt_h3_server_creation() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings().with_webtransport();
+    let settings = Http3Settings::new().with_webtransport().into_raw();
 
     let h3_conn = Http3Connection::server_new(&settings);
     assert!(
@@ -168,15 +163,15 @@ fn test_wt_h3_server_creation() {
 /// WebTransport リクエストは送信できない。エラーが発生するのは正常。
 #[test]
 fn test_submit_wt_request() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings().with_webtransport();
+    let settings = Http3Settings::new().with_webtransport().into_raw();
     let mut h3_client =
         Http3Connection::client_new(&settings).expect("HTTP/3 クライアント作成失敗");
 
     // 制御ストリームと QPACK ストリームをバインド
-    h3_client.bind_control_stream(2).unwrap();
-    h3_client.bind_qpack_streams(6, 10).unwrap();
+    h3_client.bind_control_stream(2).expect("test must succeed");
+    h3_client
+        .bind_qpack_streams(6, 10)
+        .expect("test must succeed");
 
     // WebTransport CONNECT リクエストヘッダー
     let headers = vec![
@@ -229,14 +224,14 @@ fn test_submit_wt_request() {
 /// WebTransport レスポンス送信テスト
 #[test]
 fn test_submit_wt_response() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings().with_webtransport();
+    let settings = Http3Settings::new().with_webtransport().into_raw();
     let mut h3_server = Http3Connection::server_new(&settings).expect("HTTP/3 サーバー作成失敗");
 
     // 制御ストリームと QPACK ストリームをバインド
-    h3_server.bind_control_stream(3).unwrap();
-    h3_server.bind_qpack_streams(7, 11).unwrap();
+    h3_server.bind_control_stream(3).expect("test must succeed");
+    h3_server
+        .bind_qpack_streams(7, 11)
+        .expect("test must succeed");
 
     // WebTransport レスポンスヘッダー (200 OK)
     let headers = vec![Header::status(200)];
@@ -253,14 +248,14 @@ fn test_submit_wt_response() {
 /// WebTransport セッション確認テスト
 #[test]
 fn test_server_confirm_wt_session() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings().with_webtransport();
+    let settings = Http3Settings::new().with_webtransport().into_raw();
     let mut h3_server = Http3Connection::server_new(&settings).expect("HTTP/3 サーバー作成失敗");
 
     // 制御ストリームと QPACK ストリームをバインド
-    h3_server.bind_control_stream(3).unwrap();
-    h3_server.bind_qpack_streams(7, 11).unwrap();
+    h3_server.bind_control_stream(3).expect("test must succeed");
+    h3_server
+        .bind_qpack_streams(7, 11)
+        .expect("test must succeed");
 
     // セッション確認を試行
     // 注: 実際にはリクエスト/レスポンスの後に呼び出す
@@ -275,15 +270,15 @@ fn test_server_confirm_wt_session() {
 /// WebTransport データストリームオープンテスト
 #[test]
 fn test_open_wt_data_stream() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings().with_webtransport();
+    let settings = Http3Settings::new().with_webtransport().into_raw();
     let mut h3_client =
         Http3Connection::client_new(&settings).expect("HTTP/3 クライアント作成失敗");
 
     // 制御ストリームと QPACK ストリームをバインド
-    h3_client.bind_control_stream(2).unwrap();
-    h3_client.bind_qpack_streams(6, 10).unwrap();
+    h3_client.bind_control_stream(2).expect("test must succeed");
+    h3_client
+        .bind_qpack_streams(6, 10)
+        .expect("test must succeed");
 
     // WebTransport データストリームをオープン
     let session_id = 0;
@@ -297,15 +292,15 @@ fn test_open_wt_data_stream() {
 /// WebTransport セッションクローズテスト
 #[test]
 fn test_close_wt_session() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings().with_webtransport();
+    let settings = Http3Settings::new().with_webtransport().into_raw();
     let mut h3_client =
         Http3Connection::client_new(&settings).expect("HTTP/3 クライアント作成失敗");
 
     // 制御ストリームと QPACK ストリームをバインド
-    h3_client.bind_control_stream(2).unwrap();
-    h3_client.bind_qpack_streams(6, 10).unwrap();
+    h3_client.bind_control_stream(2).expect("test must succeed");
+    h3_client
+        .bind_qpack_streams(6, 10)
+        .expect("test must succeed");
 
     // WebTransport セッションをクローズ
     let session_id = 0;
@@ -322,20 +317,21 @@ fn test_quic_h3_webtransport_integration() {
     let (cert_path, key_path) = generate_test_certs();
 
     // 接続 ID を生成
-    let client_dcid = ConnectionId::random(16).unwrap();
-    let client_scid = ConnectionId::random(16).unwrap();
-    let server_scid = ConnectionId::random(16).unwrap();
+    let client_dcid = ConnectionId::random(16).expect("test must succeed");
+    let client_scid = ConnectionId::random(16).expect("test must succeed");
+    let server_scid = ConnectionId::random(16).expect("test must succeed");
 
-    let client_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-    let server_addr: SocketAddr = "127.0.0.1:4433".parse().unwrap();
+    let client_addr: SocketAddr = "127.0.0.1:12345".parse().expect("test must succeed");
+    let server_addr: SocketAddr = "127.0.0.1:4433".parse().expect("test must succeed");
 
     let ts = timestamp();
 
     // DATAGRAM を有効にしたトランスポートパラメータ (WebTransport に必要)
-    let client_params = ngtcp2_transport_params::default_params().with_datagram(65535);
-    let server_params = ngtcp2_transport_params::default_params()
+    let client_params = TransportParams::new().with_datagram(65535).into_raw();
+    let server_params = TransportParams::new()
         .with_datagram(65535)
-        .with_original_dcid(&client_dcid);
+        .with_original_dcid(&client_dcid)
+        .into_raw();
 
     // クライアント QUIC 接続を作成
     let client_tls_ctx = TlsContext::new_client_with_options(&[b"h3"], false)
@@ -386,9 +382,8 @@ fn test_quic_h3_webtransport_integration() {
     eprintln!("QUIC ハンドシェイク完了");
 
     // WebTransport 対応 HTTP/3 接続を作成
-    use nghttp3_sys::nghttp3_settings;
 
-    let h3_settings = nghttp3_settings::default_settings().with_webtransport();
+    let h3_settings = Http3Settings::new().with_webtransport().into_raw();
     let mut h3_client =
         Http3Connection::client_new(&h3_settings).expect("HTTP/3 クライアント作成失敗");
     let mut h3_server = Http3Connection::server_new(&h3_settings).expect("HTTP/3 サーバー作成失敗");
@@ -513,14 +508,14 @@ fn test_quic_h3_webtransport_integration() {
 /// WebTransport イベント受信テスト
 #[test]
 fn test_wt_events() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings().with_webtransport();
+    let settings = Http3Settings::new().with_webtransport().into_raw();
     let mut h3_server = Http3Connection::server_new(&settings).expect("HTTP/3 サーバー作成失敗");
 
     // 制御ストリームと QPACK ストリームをバインド
-    h3_server.bind_control_stream(3).unwrap();
-    h3_server.bind_qpack_streams(7, 11).unwrap();
+    h3_server.bind_control_stream(3).expect("test must succeed");
+    h3_server
+        .bind_qpack_streams(7, 11)
+        .expect("test must succeed");
 
     // 初期状態ではイベントがない
     let event = h3_server.poll_event();
@@ -534,7 +529,7 @@ fn test_wt_events() {
 /// DATAGRAM 対応トランスポートパラメータのテスト
 #[test]
 fn test_datagram_transport_params() {
-    let params = ngtcp2_transport_params::default_params().with_datagram(65535);
+    let params = TransportParams::new().with_datagram(65535).into_raw();
 
     assert_eq!(
         params.max_datagram_frame_size, 65535,
@@ -565,20 +560,21 @@ fn test_datagram_send() {
     let (cert_path, key_path) = generate_test_certs();
 
     // 接続 ID を生成
-    let client_dcid = ConnectionId::random(16).unwrap();
-    let client_scid = ConnectionId::random(16).unwrap();
-    let server_scid = ConnectionId::random(16).unwrap();
+    let client_dcid = ConnectionId::random(16).expect("test must succeed");
+    let client_scid = ConnectionId::random(16).expect("test must succeed");
+    let server_scid = ConnectionId::random(16).expect("test must succeed");
 
-    let client_addr: SocketAddr = "127.0.0.1:12346".parse().unwrap();
-    let server_addr: SocketAddr = "127.0.0.1:4434".parse().unwrap();
+    let client_addr: SocketAddr = "127.0.0.1:12346".parse().expect("test must succeed");
+    let server_addr: SocketAddr = "127.0.0.1:4434".parse().expect("test must succeed");
 
     let ts = timestamp();
 
     // DATAGRAM を有効にしたトランスポートパラメータ
-    let client_params = ngtcp2_transport_params::default_params().with_datagram(65535);
-    let server_params = ngtcp2_transport_params::default_params()
+    let client_params = TransportParams::new().with_datagram(65535).into_raw();
+    let server_params = TransportParams::new()
         .with_datagram(65535)
-        .with_original_dcid(&client_dcid);
+        .with_original_dcid(&client_dcid)
+        .into_raw();
 
     // クライアント QUIC 接続を作成
     let client_tls_ctx = TlsContext::new_client_with_options(&[b"h3"], false)
@@ -690,20 +686,21 @@ struct QuicH3Pair {
 fn setup_quic_h3_pair() -> QuicH3Pair {
     let (cert_path, key_path) = generate_test_certs();
 
-    let client_dcid = ConnectionId::random(16).unwrap();
-    let client_scid = ConnectionId::random(16).unwrap();
-    let server_scid = ConnectionId::random(16).unwrap();
+    let client_dcid = ConnectionId::random(16).expect("test must succeed");
+    let client_scid = ConnectionId::random(16).expect("test must succeed");
+    let server_scid = ConnectionId::random(16).expect("test must succeed");
 
-    let client_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-    let server_addr: SocketAddr = "127.0.0.1:4433".parse().unwrap();
+    let client_addr: SocketAddr = "127.0.0.1:12345".parse().expect("test must succeed");
+    let server_addr: SocketAddr = "127.0.0.1:4433".parse().expect("test must succeed");
 
     let ts = timestamp();
 
     // DATAGRAM を有効にしたトランスポートパラメータ (WebTransport に必要)
-    let client_params = ngtcp2_transport_params::default_params().with_datagram(65535);
-    let server_params = ngtcp2_transport_params::default_params()
+    let client_params = TransportParams::new().with_datagram(65535).into_raw();
+    let server_params = TransportParams::new()
         .with_datagram(65535)
-        .with_original_dcid(&client_dcid);
+        .with_original_dcid(&client_dcid)
+        .into_raw();
 
     // QUIC 接続を作成
     let client_tls_ctx = TlsContext::new_client_with_options(&[b"h3"], false)
@@ -746,9 +743,8 @@ fn setup_quic_h3_pair() -> QuicH3Pair {
     );
 
     // WebTransport 対応 HTTP/3 接続を作成
-    use nghttp3_sys::nghttp3_settings;
 
-    let h3_settings = nghttp3_settings::default_settings().with_webtransport();
+    let h3_settings = Http3Settings::new().with_webtransport().into_raw();
     let mut h3_client =
         Http3Connection::client_new(&h3_settings).expect("HTTP/3 クライアント作成失敗");
     let mut h3_server = Http3Connection::server_new(&h3_settings).expect("HTTP/3 サーバー作成失敗");
@@ -1039,6 +1035,65 @@ fn drain_header_events(h3: &mut Http3Connection) {
     }
 }
 
+/// サーバー側の WebTransportData を集めるまでパケット交換する
+///
+/// Sans I/O では 1 回の交換では ACK / 再送待ちでデータが届かないことがあるため、
+/// データが来るまで複数ラウンド回す。
+fn exchange_until_server_wt_data(pair: &mut QuicH3Pair) -> Vec<u8> {
+    let mut received = Vec::new();
+    for _ in 0..20 {
+        exchange_packets(
+            &mut pair.quic_client,
+            &mut pair.quic_server,
+            &mut pair.h3_client,
+            &mut pair.h3_server,
+            pair.client_addr,
+            pair.server_addr,
+        );
+        while let Some(event) = pair.h3_server.poll_event() {
+            if let Http3Event::WebTransportData { data, .. } = event {
+                received.extend_from_slice(&data);
+            }
+        }
+        if !received.is_empty() {
+            break;
+        }
+    }
+    received
+}
+
+/// サーバー側の WebTransportData をストリーム ID 別に集めるまでパケット交換する
+fn exchange_until_server_wt_stream_data(
+    pair: &mut QuicH3Pair,
+) -> std::collections::HashMap<i64, Vec<u8>> {
+    let mut stream_data: std::collections::HashMap<i64, Vec<u8>> = std::collections::HashMap::new();
+    for _ in 0..20 {
+        exchange_packets(
+            &mut pair.quic_client,
+            &mut pair.quic_server,
+            &mut pair.h3_client,
+            &mut pair.h3_server,
+            pair.client_addr,
+            pair.server_addr,
+        );
+        while let Some(event) = pair.h3_server.poll_event() {
+            if let Http3Event::WebTransportData {
+                stream_id, data, ..
+            } = event
+            {
+                stream_data
+                    .entry(stream_id)
+                    .or_default()
+                    .extend_from_slice(&data);
+            }
+        }
+        if !stream_data.is_empty() {
+            break;
+        }
+    }
+    stream_data
+}
+
 // =============================================================================
 // B1: WebTransport データストリーム送受信テスト
 // =============================================================================
@@ -1065,23 +1120,7 @@ fn test_wt_bidirectional_data_exchange() {
         .send_wt_stream_data(data_stream, test_data, false)
         .expect("データ送信失敗");
 
-    // パケット交換
-    exchange_packets(
-        &mut pair.quic_client,
-        &mut pair.quic_server,
-        &mut pair.h3_client,
-        &mut pair.h3_server,
-        pair.client_addr,
-        pair.server_addr,
-    );
-
-    // サーバー側で WebTransportData イベントを確認
-    let mut received_data = Vec::new();
-    while let Some(event) = pair.h3_server.poll_event() {
-        if let Http3Event::WebTransportData { data, .. } = event {
-            received_data.extend_from_slice(&data);
-        }
-    }
+    let received_data = exchange_until_server_wt_data(&mut pair);
 
     assert_eq!(
         received_data, test_data,
@@ -1111,23 +1150,7 @@ fn test_wt_unidirectional_data_stream() {
         .send_wt_stream_data(data_stream, test_data, false)
         .expect("単方向データ送信失敗");
 
-    // パケット交換
-    exchange_packets(
-        &mut pair.quic_client,
-        &mut pair.quic_server,
-        &mut pair.h3_client,
-        &mut pair.h3_server,
-        pair.client_addr,
-        pair.server_addr,
-    );
-
-    // サーバー側で WebTransportData イベントを確認
-    let mut received_data = Vec::new();
-    while let Some(event) = pair.h3_server.poll_event() {
-        if let Http3Event::WebTransportData { data, .. } = event {
-            received_data.extend_from_slice(&data);
-        }
-    }
+    let received_data = exchange_until_server_wt_data(&mut pair);
 
     assert_eq!(
         received_data, test_data,
@@ -1157,28 +1180,30 @@ fn test_wt_send_data_with_fin() {
         .send_wt_stream_data(data_stream, test_data, true)
         .expect("FIN 付きデータ送信失敗");
 
-    // パケット交換
-    exchange_packets(
-        &mut pair.quic_client,
-        &mut pair.quic_server,
-        &mut pair.h3_client,
-        &mut pair.h3_server,
-        pair.client_addr,
-        pair.server_addr,
-    );
-
-    // サーバー側でデータとストリーム終了イベントを確認
     let mut received_data = Vec::new();
     let mut stream_ended = false;
-    while let Some(event) = pair.h3_server.poll_event() {
-        match event {
-            Http3Event::WebTransportData { data, .. } => {
-                received_data.extend_from_slice(&data);
+    for _ in 0..20 {
+        exchange_packets(
+            &mut pair.quic_client,
+            &mut pair.quic_server,
+            &mut pair.h3_client,
+            &mut pair.h3_server,
+            pair.client_addr,
+            pair.server_addr,
+        );
+        while let Some(event) = pair.h3_server.poll_event() {
+            match event {
+                Http3Event::WebTransportData { data, .. } => {
+                    received_data.extend_from_slice(&data);
+                }
+                Http3Event::StreamEnd { stream_id } if stream_id == data_stream => {
+                    stream_ended = true;
+                }
+                _ => {}
             }
-            Http3Event::StreamEnd { stream_id } if stream_id == data_stream => {
-                stream_ended = true;
-            }
-            _ => {}
+        }
+        if !received_data.is_empty() {
+            break;
         }
     }
 
@@ -1289,29 +1314,7 @@ fn test_wt_multiple_data_streams() {
         .send_wt_stream_data(uni_stream, data_3, false)
         .expect("uni ストリームデータ送信失敗");
 
-    // パケット交換
-    exchange_packets(
-        &mut pair.quic_client,
-        &mut pair.quic_server,
-        &mut pair.h3_client,
-        &mut pair.h3_server,
-        pair.client_addr,
-        pair.server_addr,
-    );
-
-    // サーバー側で各ストリームのデータを分離して確認
-    let mut stream_data: std::collections::HashMap<i64, Vec<u8>> = std::collections::HashMap::new();
-    while let Some(event) = pair.h3_server.poll_event() {
-        if let Http3Event::WebTransportData {
-            stream_id, data, ..
-        } = event
-        {
-            stream_data
-                .entry(stream_id)
-                .or_default()
-                .extend_from_slice(&data);
-        }
-    }
+    let stream_data = exchange_until_server_wt_stream_data(&mut pair);
 
     // 少なくとも 1 つのストリームでデータが受信されていることを確認
     assert!(

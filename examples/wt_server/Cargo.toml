@@ -6,16 +6,29 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+# 本ライブラリ
 shiguredo_http3.workspace = true
+# QUIC / HTTP/3 サーバー実装
 s2n-quic = { version = "1.80", default-features = false, features = ["provider-address-token-default", "provider-tls-rustls", "unstable-provider-datagram", "provider-event-tracing"] }
+# rustls サーバー設定
 rustls = "0.23"
+# 自己署名証明書生成
 rcgen = "0.14"
-base64 = "0.22"
-aws-lc-rs = "1"
+# 証明書キャッシュの Base64 エンコード / デコード
+base64ct = { version = "1.8", features = ["alloc"] }
+# 証明書 SHA-256 ダイジェスト
+aws-lc-rs = "1.17"
+# 証明書有効期間の計算
 time = "0.3"
-tokio = { version = "1", features = ["full"] }
+# 非同期ランタイム
+tokio = { version = "1.52", features = ["full"] }
+# CLI 引数パース
 noargs = "0.4"
+# JSONC (証明書キャッシュ)
 nojson = "0.3"
+# 構造化ログ
 tracing = "0.1"
+# ログフィルタ
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-bytes = "1"
+# バイトバッファ
+bytes = "1.11"

@@ -20,14 +20,18 @@ use tokio_s2n_quic::{ClientConfig, WtClient};
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_webtransport_session() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
     // ngtcp2 サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("server creation failed");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("server creation failed");
 
     let server_addr = server.local_addr();
     eprintln!("[ngtcp2 server] started: {}", server_addr);
@@ -115,14 +119,18 @@ async fn test_webtransport_session() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_unidirectional_stream() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
     // ngtcp2 サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("server creation failed");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("server creation failed");
 
     let server_addr = server.local_addr();
     eprintln!("[ngtcp2 server] started: {}", server_addr);
@@ -217,13 +225,17 @@ async fn test_unidirectional_stream() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_client_opens_bidi_stream() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("server creation failed");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("server creation failed");
 
     let server_addr = server.local_addr();
 
@@ -241,7 +253,7 @@ async fn test_client_opens_bidi_stream() {
                     Http3Event::WebTransportData { data, .. } => {
                         received_data_for_server
                             .lock()
-                            .unwrap()
+                            .expect("test must succeed")
                             .extend_from_slice(data);
                     }
                     _ => {}
@@ -291,7 +303,7 @@ async fn test_client_opens_bidi_stream() {
 
     match client_result {
         Ok(Ok(_session_id)) => {
-            let data = received_data.lock().unwrap().clone();
+            let data = received_data.lock().expect("test must succeed").clone();
             assert_eq!(data, b"Hello WebTransport!", "received data must match");
             eprintln!(
                 "test passed: client bidi stream data={}",
@@ -312,13 +324,17 @@ async fn test_client_opens_bidi_stream() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_server_opens_bidi_stream() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("server creation failed");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("server creation failed");
 
     let server_addr = server.local_addr();
 
@@ -347,7 +363,7 @@ async fn test_server_opens_bidi_stream() {
             }
         }
 
-        let addr = client_addr.unwrap();
+        let addr = client_addr.expect("test must succeed");
         eprintln!("[ngtcp2 server] session established: addr={}", addr);
 
         // 双方向ストリームを開いてデータを送信 (nghttp3 が WT ヘッダーを自動付加)
@@ -430,13 +446,17 @@ async fn test_server_opens_bidi_stream() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_bidi_stream_echo() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("server creation failed");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("server creation failed");
     let server_addr = server.local_addr();
 
     let server_task = tokio::spawn(async move {
@@ -475,8 +495,8 @@ async fn test_bidi_stream_echo() {
             }
         }
 
-        let addr = client_addr.unwrap();
-        let stream_id = echo_stream_id.unwrap();
+        let addr = client_addr.expect("test must succeed");
+        let stream_id = echo_stream_id.expect("test must succeed");
 
         // 同じストリームにエコー返信
         server
@@ -560,13 +580,17 @@ async fn test_bidi_stream_echo() {
 async fn test_multiple_bidi_streams() {
     const NUM_STREAMS: usize = 3;
 
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("server creation failed");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("server creation failed");
     let server_addr = server.local_addr();
 
     let received_data = Arc::new(StdMutex::new(Vec::<Vec<u8>>::new()));
@@ -582,7 +606,10 @@ async fn test_multiple_bidi_streams() {
                         return true;
                     }
                     Http3Event::WebTransportData { data, .. } => {
-                        received_for_server.lock().unwrap().push(data.clone());
+                        received_for_server
+                            .lock()
+                            .expect("test must succeed")
+                            .push(data.clone());
                     }
                     _ => {}
                 }
@@ -627,7 +654,7 @@ async fn test_multiple_bidi_streams() {
 
     match client_result {
         Ok(Ok((_, expected_payloads))) => {
-            let mut received = received_data.lock().unwrap().clone();
+            let mut received = received_data.lock().expect("test must succeed").clone();
             let mut expected = expected_payloads;
             assert_eq!(
                 received.len(),
@@ -653,13 +680,17 @@ async fn test_multiple_bidi_streams() {
 async fn test_large_data() {
     const DATA_SIZE: usize = 64 * 1024;
 
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("server creation failed");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("server creation failed");
     let server_addr = server.local_addr();
 
     let received_data = Arc::new(StdMutex::new(Vec::<u8>::new()));
@@ -672,7 +703,10 @@ async fn test_large_data() {
                 match &event {
                     Http3Event::HeadersEnd { .. } => return true,
                     Http3Event::WebTransportData { data, .. } => {
-                        received_for_server.lock().unwrap().extend_from_slice(data);
+                        received_for_server
+                            .lock()
+                            .expect("test must succeed")
+                            .extend_from_slice(data);
                     }
                     _ => {}
                 }
@@ -723,7 +757,7 @@ async fn test_large_data() {
 
     match client_result {
         Ok(Ok(_)) => {
-            let received = received_data.lock().unwrap().clone();
+            let received = received_data.lock().expect("test must succeed").clone();
             assert_eq!(received.len(), DATA_SIZE, "received byte count must match");
             assert_eq!(received, large_data, "received data must match completely");
             eprintln!("test passed: {} bytes large data transfer", DATA_SIZE);
@@ -741,14 +775,18 @@ async fn test_large_data() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_datagram_session() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
     // ngtcp2 サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("server creation failed");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("server creation failed");
 
     let server_addr = server.local_addr();
     eprintln!("[ngtcp2 server] started: {}", server_addr);

@@ -152,16 +152,18 @@ mod tests {
     #[test]
     fn test_client_connection() {
         let mut client = ClientConnection::with_default_settings();
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
 
         let headers = vec![
-            Header::new(b":method", b"GET").unwrap(),
-            Header::new(b":path", b"/").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":method", b"GET").expect("test must succeed"),
+            Header::new(b":path", b"/").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
         ];
 
-        let stream_id = client.send_request(&headers, true).unwrap();
+        let stream_id = client
+            .send_request(&headers, true)
+            .expect("test must succeed");
         assert_eq!(stream_id, 0);
     }
 }

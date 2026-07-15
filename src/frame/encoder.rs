@@ -183,14 +183,14 @@ mod tests {
         let mut buf = [0u8; 16];
 
         // Type=0, Length=0
-        let len =
-            encode_frame_header(&mut buf, VarInt::from_static(0), VarInt::from_static(0)).unwrap();
+        let len = encode_frame_header(&mut buf, VarInt::from_static(0), VarInt::from_static(0))
+            .expect("test must succeed");
         assert_eq!(len, 2);
         assert_eq!(&buf[..2], &[0x00, 0x00]);
 
         // Type=4 (SETTINGS), Length=10
-        let len =
-            encode_frame_header(&mut buf, VarInt::from_static(4), VarInt::from_static(10)).unwrap();
+        let len = encode_frame_header(&mut buf, VarInt::from_static(4), VarInt::from_static(10))
+            .expect("test must succeed");
         assert_eq!(len, 2);
         assert_eq!(&buf[..2], &[0x04, 0x0a]);
     }

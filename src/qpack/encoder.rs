@@ -812,10 +812,12 @@ mod tests {
     #[test]
     fn test_encode_indexed_field() {
         let encoder = Encoder::new().use_huffman(false);
-        let headers = vec![Header::new(b":method", b"GET").unwrap()];
+        let headers = vec![Header::new(b":method", b"GET").expect("test must succeed")];
 
         let mut buf = vec![0u8; 64];
-        let len = encoder.encode(&mut buf, &headers).unwrap();
+        let len = encoder
+            .encode(&mut buf, &headers)
+            .expect("test must succeed");
 
         // Required Insert Count (0) + Delta Base (0) + Indexed Field (17)
         assert!(len >= 3);
@@ -827,10 +829,12 @@ mod tests {
     #[test]
     fn test_encode_literal_with_name_ref() {
         let encoder = Encoder::new().use_huffman(false);
-        let headers = vec![Header::new(b":status", b"201").unwrap()];
+        let headers = vec![Header::new(b":status", b"201").expect("test must succeed")];
 
         let mut buf = vec![0u8; 64];
-        let len = encoder.encode(&mut buf, &headers).unwrap();
+        let len = encoder
+            .encode(&mut buf, &headers)
+            .expect("test must succeed");
 
         assert!(len >= 3);
         assert_eq!(buf[0], 0x00); // Required Insert Count
@@ -841,10 +845,12 @@ mod tests {
     #[test]
     fn test_encode_literal_with_literal_name() {
         let encoder = Encoder::new().use_huffman(false);
-        let headers = vec![Header::new(b"x-custom", b"value").unwrap()];
+        let headers = vec![Header::new(b"x-custom", b"value").expect("test must succeed")];
 
         let mut buf = vec![0u8; 64];
-        let len = encoder.encode(&mut buf, &headers).unwrap();
+        let len = encoder
+            .encode(&mut buf, &headers)
+            .expect("test must succeed");
 
         assert!(len > 4);
         assert_eq!(buf[0], 0x00); // Required Insert Count
@@ -860,14 +866,16 @@ mod tests {
     fn test_encode_multiple_headers() {
         let encoder = Encoder::new();
         let headers = vec![
-            Header::new(b":method", b"GET").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":path", b"/").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":method", b"GET").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":path", b"/").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
         ];
 
         let mut buf = vec![0u8; 128];
-        let len = encoder.encode(&mut buf, &headers).unwrap();
+        let len = encoder
+            .encode(&mut buf, &headers)
+            .expect("test must succeed");
         assert!(len > 0);
     }
 
@@ -877,17 +885,20 @@ mod tests {
         let encoder = Encoder::new();
 
         // Index 98 (x-frame-options: sameorigin)
-        let headers = vec![Header::new(b"x-frame-options", b"sameorigin").unwrap()];
+        let headers =
+            vec![Header::new(b"x-frame-options", b"sameorigin").expect("test must succeed")];
         let mut buf = vec![0u8; 64];
-        let len = encoder.encode(&mut buf, &headers).unwrap();
+        let len = encoder
+            .encode(&mut buf, &headers)
+            .expect("test must succeed");
         assert!(len > 0);
     }
 
     #[test]
     fn test_estimate_encoded_size() {
         let headers = vec![
-            Header::new(b":method", b"GET").unwrap(),
-            Header::new(b"x-custom", b"value").unwrap(),
+            Header::new(b":method", b"GET").expect("test must succeed"),
+            Header::new(b"x-custom", b"value").expect("test must succeed"),
         ];
         let estimate = estimate_encoded_size(&headers);
         assert!(estimate > 0);
@@ -896,10 +907,12 @@ mod tests {
     #[test]
     fn test_dynamic_encoder_static_only() {
         let mut encoder = DynamicEncoder::new().use_huffman(false);
-        let headers = vec![Header::new(b":method", b"GET").unwrap()];
+        let headers = vec![Header::new(b":method", b"GET").expect("test must succeed")];
 
         let mut buf = vec![0u8; 64];
-        let len = encoder.encode(&mut buf, &headers, 0).unwrap();
+        let len = encoder
+            .encode(&mut buf, &headers, 0)
+            .expect("test must succeed");
 
         assert!(len >= 3);
         assert_eq!(buf[0], 0x00); // Required Insert Count
@@ -919,9 +932,12 @@ mod tests {
         assert_eq!(encoder.table().len(), 1);
 
         // エンコード
-        let headers = vec![Header::new(b":authority", b"www.example.com").unwrap()];
+        let headers =
+            vec![Header::new(b":authority", b"www.example.com").expect("test must succeed")];
         let mut buf = vec![0u8; 64];
-        let len = encoder.encode(&mut buf, &headers, 0).unwrap();
+        let len = encoder
+            .encode(&mut buf, &headers, 0)
+            .expect("test must succeed");
 
         // Required Insert Count > 0 (動的テーブルを参照)
         assert!(len >= 3);
@@ -940,14 +956,19 @@ mod tests {
         encoder.insert(b":authority".to_vec(), b"www.example.com".to_vec());
 
         // blocked_streams_count < peer_max_blocked_streams: 動的テーブルを使用
-        let headers = vec![Header::new(b":authority", b"www.example.com").unwrap()];
+        let headers =
+            vec![Header::new(b":authority", b"www.example.com").expect("test must succeed")];
         let mut buf = vec![0u8; 64];
-        let _len = encoder.encode(&mut buf, &headers, 1).unwrap();
+        let _len = encoder
+            .encode(&mut buf, &headers, 1)
+            .expect("test must succeed");
         assert!(buf[0] > 0); // RIC > 0
 
         // blocked_streams_count >= peer_max_blocked_streams: 静的テーブルのみ
         let mut buf2 = vec![0u8; 64];
-        let len2 = encoder.encode(&mut buf2, &headers, 2).unwrap();
+        let len2 = encoder
+            .encode(&mut buf2, &headers, 2)
+            .expect("test must succeed");
         assert_eq!(buf2[0], 0x00); // RIC = 0
         assert!(len2 > 0);
     }
@@ -963,9 +984,11 @@ mod tests {
         // しかし、動的テーブルに追加すると動的テーブルが優先される
         encoder.insert(b":method".to_vec(), b"GET".to_vec());
 
-        let headers = vec![Header::new(b":method", b"GET").unwrap()];
+        let headers = vec![Header::new(b":method", b"GET").expect("test must succeed")];
         let mut buf = vec![0u8; 64];
-        let len = encoder.encode(&mut buf, &headers, 0).unwrap();
+        let len = encoder
+            .encode(&mut buf, &headers, 0)
+            .expect("test must succeed");
 
         assert!(len >= 3);
         // Required Insert Count が設定されている
@@ -981,7 +1004,10 @@ mod tests {
         let idx = encoder.insert_with_static_name_ref(0, b"example.com".to_vec());
         assert_eq!(idx, Some(0));
 
-        let entry = encoder.table().get_by_absolute_index(0).unwrap();
+        let entry = encoder
+            .table()
+            .get_by_absolute_index(0)
+            .expect("test must succeed");
         assert_eq!(entry.name, b":authority");
         assert_eq!(entry.value, b"example.com");
     }
@@ -1029,7 +1055,7 @@ mod tests {
         let mut buf = vec![0u8; 16];
         let len = encoder
             .encode_indexed_field_dynamic(&mut buf, 5, 3)
-            .unwrap();
+            .expect("test must succeed");
         assert_eq!(len, 1);
         // 0x10 | 2 = 0x12 (00010010)
         assert_eq!(buf[0], 0x12);
@@ -1042,7 +1068,7 @@ mod tests {
         let mut buf = vec![0u8; 16];
         let len = encoder
             .encode_indexed_field_dynamic(&mut buf, 3, 3)
-            .unwrap();
+            .expect("test must succeed");
         assert_eq!(len, 1);
         // 0x10 | 0 = 0x10 (00010000)
         assert_eq!(buf[0], 0x10);
@@ -1056,7 +1082,7 @@ mod tests {
         let mut buf = vec![0u8; 64];
         let len = encoder
             .encode_literal_with_name_ref_dynamic(&mut buf, 5, b"value", 3)
-            .unwrap();
+            .expect("test must succeed");
         // 最初のバイト: 0x00 | 2 = 0x02 (00000010)
         assert_eq!(buf[0], 0x02);
         // 値のエンコード: 長さ 5 + "value" = 6 バイト
@@ -1070,7 +1096,7 @@ mod tests {
         let mut buf = vec![0u8; 16];
         let len = encoder
             .encode_indexed_field_dynamic(&mut buf, 1, 3)
-            .unwrap();
+            .expect("test must succeed");
         assert_eq!(len, 1);
         // 0x80 | 1 = 0x81 (10000001)
         assert_eq!(buf[0], 0x81);

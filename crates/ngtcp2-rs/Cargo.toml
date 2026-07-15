@@ -9,10 +9,15 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+# TLS / 暗号 (aws-lc)
 aws-lc-rs = "1.17"
+# OpenSSL 互換 SSL API (ngtcp2 crypto)
 aws-lc-sys = { version = "0.41", features = ["ssl"] }
+# C FFI
 libc = "0.2"
+# nghttp3 バインディング
 nghttp3-sys = { path = "../nghttp3-sys" }
+# ngtcp2 バインディング
 ngtcp2-sys = { path = "../ngtcp2-sys" }
 
 [dev-dependencies]

@@ -58,7 +58,7 @@ async fn test_http3_get_request() {
 
     // サーバーを起動
     let mut server = Server::bind(
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().expect("test must succeed"),
         &cert_path,
         &key_path,
         None,
@@ -186,7 +186,7 @@ async fn test_http3_post_request() {
 
     // サーバーを起動
     let mut server = Server::bind(
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().expect("test must succeed"),
         &cert_path,
         &key_path,
         None,
@@ -266,7 +266,7 @@ async fn test_http3_concurrent_requests() {
 
     // サーバーを起動
     let mut server = Server::bind(
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().expect("test must succeed"),
         &cert_path,
         &key_path,
         None,
@@ -365,7 +365,7 @@ async fn test_http3_request_with_body() {
 
     // サーバーを起動
     let mut server = Server::bind(
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().expect("test must succeed"),
         &cert_path,
         &key_path,
         None,
@@ -390,7 +390,10 @@ async fn test_http3_request_with_body() {
                             String::from_utf8_lossy(&data)
                         );
                         body_received_clone.store(true, Ordering::SeqCst);
-                        received_body_clone.lock().unwrap().extend_from_slice(&data);
+                        received_body_clone
+                            .lock()
+                            .expect("test must succeed")
+                            .extend_from_slice(&data);
                         None
                     }
                     Http3Event::HeadersEnd { stream_id, .. } => {
@@ -454,7 +457,7 @@ async fn test_http3_request_with_body() {
         "サーバーがリクエストボディを受信するべき"
     );
 
-    let body_data = received_body.lock().unwrap();
+    let body_data = received_body.lock().expect("test must succeed");
     assert!(!body_data.is_empty(), "受信したボディが空でないこと");
     eprintln!(
         "[test] 受信したボディ: {:?}",
@@ -475,7 +478,7 @@ async fn test_http3_response_body() {
 
     // サーバーを起動
     let mut server = Server::bind(
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().expect("test must succeed"),
         &cert_path,
         &key_path,
         None,
@@ -600,7 +603,7 @@ async fn test_http3_stream_multiplexing() {
 
     // サーバーを起動
     let mut server = Server::bind(
-        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().expect("test must succeed"),
         &cert_path,
         &key_path,
         None,

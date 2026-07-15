@@ -17,15 +17,15 @@
 //! // エンコード
 //! let encoder = Encoder::new();
 //! let headers = vec![
-//!     Header::new(b":method", b"GET").unwrap(),
-//!     Header::new(b":path", b"/").unwrap(),
+//!     Header::new(b":method", b"GET").expect("infallible: implementation bug if this panics"),
+//!     Header::new(b":path", b"/").expect("infallible: implementation bug if this panics"),
 //! ];
 //! let mut buf = vec![0u8; 128];
-//! let len = encoder.encode(&mut buf, &headers).unwrap();
+//! let len = encoder.encode(&mut buf, &headers).expect("infallible: implementation bug if this panics");
 //!
 //! // デコード
 //! let decoder = Decoder::new();
-//! let decoded = decoder.decode(&buf[..len]).unwrap();
+//! let decoded = decoder.decode(&buf[..len]).expect("infallible: implementation bug if this panics");
 //! assert_eq!(decoded[0].name(), b":method");
 //! ```
 

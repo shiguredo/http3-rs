@@ -15,14 +15,18 @@ use tokio_ngtcp2::ServerWebTransportSession;
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_webtransport_session() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
-    let (cert_path, key_path) = save_certificate_files(&cert_pem, &key_pem).unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
+    let (cert_path, key_path) =
+        save_certificate_files(&cert_pem, &key_pem).expect("test must succeed");
 
     // ngtcp2 サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("server creation failed");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("server creation failed");
 
     let server_addr = server.local_addr();
     let port = server_addr.port();

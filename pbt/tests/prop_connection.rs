@@ -38,18 +38,18 @@ proptest! {
         let body = vec![0xABu8; body_len];
 
         let mut client = ClientConnection::with_default_settings();
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
 
         let request_headers = vec![
-            Header::new(b":method", b"POST").unwrap(),
-            Header::new(b":path", b"/").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":method", b"POST").expect("test must succeed"),
+            Header::new(b":path", b"/").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
         ];
 
         // ボディ付きリクエストを送信 (fin=false でヘッダーのみ先に送信)
-        let stream_id = client.send_request(&request_headers, false).unwrap();
-        client.send_body(stream_id, &body, true).unwrap();
+        let stream_id = client.send_request(&request_headers, false).expect("test must succeed");
+        client.send_body(stream_id, &body, true).expect("test must succeed");
 
         let (_collected, iterations) = drain_stream_data(&mut client, stream_id, 10);
 
@@ -66,17 +66,17 @@ proptest! {
         let body = vec![0xCDu8; body_len];
 
         let mut client = ClientConnection::with_default_settings();
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
 
         let request_headers = vec![
-            Header::new(b":method", b"POST").unwrap(),
-            Header::new(b":path", b"/").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":method", b"POST").expect("test must succeed"),
+            Header::new(b":path", b"/").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
         ];
 
-        let stream_id = client.send_request(&request_headers, false).unwrap();
-        client.send_body(stream_id, &body, true).unwrap();
+        let stream_id = client.send_request(&request_headers, false).expect("test must succeed");
+        client.send_body(stream_id, &body, true).expect("test must succeed");
 
         let (collected, _iterations) = drain_stream_data(&mut client, stream_id, 10);
 
@@ -95,17 +95,17 @@ proptest! {
         let body = vec![0xEFu8; body_len];
 
         let mut client = ClientConnection::with_default_settings();
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
 
         let request_headers = vec![
-            Header::new(b":method", b"POST").unwrap(),
-            Header::new(b":path", b"/").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":method", b"POST").expect("test must succeed"),
+            Header::new(b":path", b"/").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
         ];
 
-        let stream_id = client.send_request(&request_headers, false).unwrap();
-        client.send_body(stream_id, &body, true).unwrap();
+        let stream_id = client.send_request(&request_headers, false).expect("test must succeed");
+        client.send_body(stream_id, &body, true).expect("test must succeed");
 
         // 全データを消費
         let (_collected, _iterations) = drain_stream_data(&mut client, stream_id, 10);

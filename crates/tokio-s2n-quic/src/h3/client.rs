@@ -68,7 +68,7 @@ impl H3Client {
         let mut decoder_send = connection.open_send_stream().await?;
 
         let init_data = {
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock().expect("mutex should not be poisoned");
             s.init_h3_streams(control_send.id(), encoder_send.id(), decoder_send.id())?
         };
 
@@ -132,14 +132,14 @@ impl H3Client {
                     while let Ok(Some(data)) = recv_stream.receive().await {
                         let _ = state
                             .lock()
-                            .unwrap()
+                            .expect("mutex should not be poisoned")
                             .process_stream_data(stream_id, &data, false);
                         // QPACK データをドレインして送信タスクに転送
                         flush_qpack(&state, &qpack_tx);
                     }
                     let _ = state
                         .lock()
-                        .unwrap()
+                        .expect("mutex should not be poisoned")
                         .process_stream_data(stream_id, &[], true);
                     flush_qpack(&state, &qpack_tx);
                 });
@@ -168,7 +168,7 @@ impl H3Client {
 
         // Sans I/O でリクエストをエンコード
         let request_data = {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock().expect("mutex should not be poisoned");
 
             let mut headers = Vec::new();
             headers.push(Header::new(b":method", request.method.as_slice())?);
@@ -219,7 +219,7 @@ impl H3Client {
             };
 
             let events = {
-                let mut s = self.state.lock().unwrap();
+                let mut s = self.state.lock().expect("mutex should not be poisoned");
                 s.process_stream_data(stream_id, &data, fin)?
             };
 
@@ -266,7 +266,10 @@ fn flush_qpack(
     state: &Arc<StdMutex<ClientConnectionState>>,
     tx: &mpsc::UnboundedSender<(u64, Vec<u8>)>,
 ) {
-    let data = state.lock().unwrap().drain_qpack_data();
+    let data = state
+        .lock()
+        .expect("mutex should not be poisoned")
+        .drain_qpack_data();
     for item in data {
         let _ = tx.send(item);
     }

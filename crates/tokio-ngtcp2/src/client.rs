@@ -3,10 +3,11 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use nghttp3_sys::nghttp3_settings;
+use ngtcp2_sys::ngtcp2_transport_params;
 use shiguredo_ngtcp2::{
-    Connection, ConnectionId, Error, Header, Http3Connection, Http3Event, Http3SettingsExt,
-    PacketInfo, Result, StreamId, TlsContext, TransportParamsExt, nghttp3_settings,
-    ngtcp2_transport_params,
+    Connection, ConnectionId, Error, Header, Http3Connection, Http3Event, Http3Settings,
+    PacketInfo, Result, StreamId, TlsContext, TransportParams,
 };
 
 use crate::{Socket, timestamp};
@@ -110,9 +111,9 @@ impl Client {
     ) -> Result<Self> {
         // ローカルアドレスにバインド
         let local_addr: SocketAddr = if remote_addr.is_ipv4() {
-            "0.0.0.0:0".parse().unwrap()
+            "0.0.0.0:0".parse().expect("literal IPv4 bind addr")
         } else {
-            "[::]:0".parse().unwrap()
+            "[::]:0".parse().expect("literal IPv6 bind addr")
         };
 
         let socket = Socket::bind(local_addr)
@@ -122,10 +123,10 @@ impl Client {
         let local_addr = socket.local_addr();
 
         // デフォルトのトランスポートパラメータ
-        let params = ngtcp2_transport_params::default_params();
+        let params = TransportParams::new().into_raw();
 
         // デフォルトの HTTP/3 設定
-        let h3_settings = nghttp3_settings::default_settings();
+        let h3_settings = Http3Settings::new().into_raw();
 
         // TLS コンテキストとセッションを作成
         let tls_ctx = TlsContext::new_client_with_options(&[b"h3"], verify_peer)?;
@@ -186,9 +187,9 @@ impl Client {
     ) -> Result<Self> {
         // ローカルアドレスにバインド
         let local_addr: SocketAddr = if remote_addr.is_ipv4() {
-            "0.0.0.0:0".parse().unwrap()
+            "0.0.0.0:0".parse().expect("literal IPv4 bind addr")
         } else {
-            "[::]:0".parse().unwrap()
+            "[::]:0".parse().expect("literal IPv6 bind addr")
         };
 
         let socket = Socket::bind(local_addr)
@@ -198,10 +199,10 @@ impl Client {
         let local_addr = socket.local_addr();
 
         // トランスポートパラメータ
-        let params = transport_params.unwrap_or_else(ngtcp2_transport_params::default_params);
+        let params = transport_params.unwrap_or_else(|| TransportParams::new().into_raw());
 
         // HTTP/3 設定
-        let h3_settings = h3_settings.unwrap_or_else(nghttp3_settings::default_settings);
+        let h3_settings = h3_settings.unwrap_or_else(|| Http3Settings::new().into_raw());
 
         // TLS コンテキストとセッションを作成
         let tls_ctx = TlsContext::new_client_with_options(&[b"h3"], verify_peer)?;
@@ -588,7 +589,7 @@ impl Client {
     /// ngtcp2 examples に従い、NGTCP2_WRITE_STREAM_FLAG_MORE を使用して
     /// 複数のストリームデータを 1 つのパケットにまとめる。
     fn write_h3_streams(&mut self, ts: u64) -> Result<Vec<Vec<u8>>> {
-        use shiguredo_ngtcp2::nghttp3_vec;
+        use nghttp3_sys::nghttp3_vec;
 
         let mut packets = Vec::new();
 

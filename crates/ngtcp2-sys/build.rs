@@ -10,9 +10,9 @@ fn detect_aws_lc_links_name() -> String {
             // "DEP_AWS_LC_0_38_0_INCLUDE" → "aws_lc_0_38_0"
             let middle = key
                 .strip_prefix("DEP_")
-                .unwrap()
+                .expect("build script must succeed")
                 .strip_suffix("_INCLUDE")
-                .unwrap();
+                .expect("build script must succeed");
             return middle.to_lowercase();
         }
     }
@@ -21,7 +21,8 @@ fn detect_aws_lc_links_name() -> String {
 
 /// Cargo.toml から外部依存関係のメタデータを読み取る
 fn read_external_dependency(name: &str) -> shiguredo_toml::Table {
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("build script must succeed"));
     let cargo_toml = std::fs::read_to_string(manifest_dir.join("Cargo.toml"))
         .expect("Failed to read Cargo.toml");
     let parsed = shiguredo_toml::from_str(&cargo_toml).expect("Failed to parse Cargo.toml");
@@ -37,7 +38,7 @@ fn read_external_dependency(name: &str) -> shiguredo_toml::Table {
 }
 
 fn main() {
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("build script must succeed"));
 
     // Cargo.toml からメタデータを読み取る
     let dep = read_external_dependency("ngtcp2");
@@ -65,7 +66,11 @@ fn main() {
     } else {
         // git clone
         let status = Command::new("git")
-            .args(["clone", git_url, ngtcp2_dir.to_str().unwrap()])
+            .args([
+                "clone",
+                git_url,
+                ngtcp2_dir.to_str().expect("build script must succeed"),
+            ])
             .status()
             .expect("Failed to execute git clone");
         if !status.success() {
@@ -136,8 +141,14 @@ fn main() {
     };
     // Windows のバックスラッシュを CMake が無効なエスケープとして解釈するため、
     // スラッシュに変換する
-    let ssl_lib_str = ssl_lib.to_str().unwrap().replace('\\', "/");
-    let crypto_lib_str = crypto_lib.to_str().unwrap().replace('\\', "/");
+    let ssl_lib_str = ssl_lib
+        .to_str()
+        .expect("build script must succeed")
+        .replace('\\', "/");
+    let crypto_lib_str = crypto_lib
+        .to_str()
+        .expect("build script must succeed")
+        .replace('\\', "/");
     let boringssl_libraries = format!("{ssl_lib_str};{crypto_lib_str}");
 
     let mut ngtcp2_config = shiguredo_cmake::Config::new(&ngtcp2_dir);
@@ -173,7 +184,8 @@ fn main() {
 
 #[cfg(feature = "overwrite")]
 fn overwrite_bindgen(out_dir: &PathBuf) {
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("build script must succeed"));
     // ビルド後の include ディレクトリ (version.h が生成される場所)
     let ngtcp2_installed_include = out_dir.join("include");
     // ソースの include ディレクトリ (ngtcp2.h がある場所)
@@ -185,7 +197,12 @@ fn overwrite_bindgen(out_dir: &PathBuf) {
         std::env::var(&include_env).unwrap_or_else(|_| panic!("{include_env} not set"));
 
     bindgen::Builder::default()
-        .header(manifest_dir.join("src/wrapper.h").to_str().unwrap())
+        .header(
+            manifest_dir
+                .join("src/wrapper.h")
+                .to_str()
+                .expect("build script must succeed"),
+        )
         .clang_arg(format!("-I{}", ngtcp2_installed_include.display()))
         .clang_arg(format!("-I{}", ngtcp2_source_include.display()))
         .clang_arg(format!("-I{}", aws_lc_include))

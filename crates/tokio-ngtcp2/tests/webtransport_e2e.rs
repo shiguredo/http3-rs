@@ -59,10 +59,13 @@ async fn test_webtransport_session_establishment() {
     let session_accepted_clone = session_accepted.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
     eprintln!("[test] サーバー起動: {}", server_addr);
@@ -170,10 +173,13 @@ async fn test_webtransport_multiple_sessions() {
     let session_count_clone = session_count.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
     eprintln!("[test] サーバー起動: {}", server_addr);
@@ -262,10 +268,13 @@ async fn test_webtransport_session_reject() {
     let (cert_path, key_path) = generate_test_certs();
 
     // サーバーを起動 (すべてのセッションを拒否)
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
     eprintln!("[test] サーバー起動: {}", server_addr);
@@ -324,10 +333,13 @@ async fn test_webtransport_handshake_only() {
     let (cert_path, key_path) = generate_test_certs();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -386,10 +398,13 @@ async fn test_webtransport_bidi_stream_send_recv() {
     let received_data_clone = received_data_on_server.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
     eprintln!("[test] サーバー起動: {}", server_addr);
@@ -417,7 +432,7 @@ async fn test_webtransport_bidi_stream_send_recv() {
                                 session_id, stream_id, String::from_utf8_lossy(data)
                             );
                             data_received_clone.store(true, Ordering::SeqCst);
-                            received_data_clone.lock().unwrap().extend_from_slice(data);
+                            received_data_clone.lock().expect("test must succeed").extend_from_slice(data);
                         }
                         _ => {
                             eprintln!("[server] イベント: {:?}", event);
@@ -482,7 +497,7 @@ async fn test_webtransport_bidi_stream_send_recv() {
                 data_received_on_server.load(Ordering::SeqCst),
                 "サーバーがデータを受信するべき"
             );
-            let data = received_data_on_server.lock().unwrap();
+            let data = received_data_on_server.lock().expect("test must succeed");
             let received_str = String::from_utf8_lossy(&data);
             eprintln!("[test] サーバーが受信したデータ: {}", received_str);
             assert!(
@@ -504,10 +519,13 @@ async fn test_webtransport_datagram_server_to_client() {
     let (cert_path, key_path) = generate_test_certs();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
     eprintln!("[test] サーバー起動: {}", server_addr);
@@ -629,10 +647,13 @@ async fn test_webtransport_uni_stream() {
     let received_data_clone = received_data.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
     eprintln!("[test] サーバー起動: {}", server_addr);
@@ -657,7 +678,7 @@ async fn test_webtransport_uni_stream() {
                                 sid, stream_id, String::from_utf8_lossy(data)
                             );
                             data_received_clone.store(true, Ordering::SeqCst);
-                            received_data_clone.lock().unwrap().extend_from_slice(data);
+                            received_data_clone.lock().expect("test must succeed").extend_from_slice(data);
                         }
                         _ => {
                             eprintln!("[server] イベント: session_id = {}, {:?}", session_id, event);
@@ -722,7 +743,7 @@ async fn test_webtransport_uni_stream() {
                 data_received.load(Ordering::SeqCst),
                 "サーバーが単方向ストリームデータを受信するべき"
             );
-            let data = received_data.lock().unwrap();
+            let data = received_data.lock().expect("test must succeed");
             eprintln!(
                 "[test] サーバーが受信したデータ: {:?}",
                 String::from_utf8_lossy(&data)
@@ -750,10 +771,13 @@ async fn test_webtransport_bidi_stream_echo() {
     let (cert_path, key_path) = generate_test_certs();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -873,10 +897,13 @@ async fn test_webtransport_large_data_transfer() {
     let received_data_clone = received_data.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -891,7 +918,10 @@ async fn test_webtransport_large_data_transfer() {
                                 return true;
                             }
                             Http3Event::WebTransportData { data, .. } => {
-                                received_data_clone.lock().unwrap().extend_from_slice(data);
+                                received_data_clone
+                                    .lock()
+                                    .expect("test must succeed")
+                                    .extend_from_slice(data);
                             }
                             _ => {}
                         }
@@ -942,7 +972,7 @@ async fn test_webtransport_large_data_transfer() {
 
     assert!(client_result.is_ok(), "テストがタイムアウトしないこと");
 
-    let received = received_data.lock().unwrap();
+    let received = received_data.lock().expect("test must succeed");
     assert_eq!(
         received.len(),
         data_size,
@@ -969,10 +999,13 @@ async fn test_webtransport_streaming_multiple_writes() {
     let received_data_clone = received_data.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -987,7 +1020,10 @@ async fn test_webtransport_streaming_multiple_writes() {
                                 return true;
                             }
                             Http3Event::WebTransportData { data, .. } => {
-                                received_data_clone.lock().unwrap().extend_from_slice(data);
+                                received_data_clone
+                                    .lock()
+                                    .expect("test must succeed")
+                                    .extend_from_slice(data);
                             }
                             _ => {}
                         }
@@ -1048,7 +1084,7 @@ async fn test_webtransport_streaming_multiple_writes() {
 
     assert!(client_result.is_ok(), "テストがタイムアウトしないこと");
 
-    let received = received_data.lock().unwrap();
+    let received = received_data.lock().expect("test must succeed");
     let expected: String = messages.join("");
     assert_eq!(
         String::from_utf8_lossy(&received),
@@ -1066,10 +1102,13 @@ async fn test_webtransport_bidi_stream_interleaved() {
     let (cert_path, key_path) = generate_test_certs();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -1216,10 +1255,13 @@ async fn test_webtransport_multiple_datagrams() {
     let received_datagrams_clone = received_datagrams.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -1245,7 +1287,10 @@ async fn test_webtransport_multiple_datagrams() {
 
                 if let Some(addr) = client_addr {
                     while let Some(data) = server.recv_datagram_for(&addr) {
-                        received_datagrams_clone.lock().unwrap().push(data);
+                        received_datagrams_clone
+                            .lock()
+                            .expect("test must succeed")
+                            .push(data);
                     }
                 }
             }
@@ -1286,7 +1331,7 @@ async fn test_webtransport_multiple_datagrams() {
 
     assert!(client_result.is_ok(), "テストがタイムアウトしないこと");
 
-    let datagrams = received_datagrams.lock().unwrap();
+    let datagrams = received_datagrams.lock().expect("test must succeed");
     assert!(
         !datagrams.is_empty(),
         "サーバーが少なくとも 1 個の DATAGRAM を受信するべき"
@@ -1324,10 +1369,13 @@ async fn test_webtransport_mixed_streams_and_datagrams() {
     let datagram_data_clone = datagram_data.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -1352,14 +1400,14 @@ async fn test_webtransport_mixed_streams_and_datagrams() {
                                 if (*stream_id & 0x2) != 0 {
                                     uni_data_clone
                                         .lock()
-                                        .unwrap()
+                                        .expect("test must succeed")
                                         .entry(*stream_id)
                                         .or_default()
                                         .extend_from_slice(data);
                                 } else {
                                     bidi_data_clone
                                         .lock()
-                                        .unwrap()
+                                        .expect("test must succeed")
                                         .entry(*stream_id)
                                         .or_default()
                                         .extend_from_slice(data);
@@ -1378,7 +1426,10 @@ async fn test_webtransport_mixed_streams_and_datagrams() {
                 // DATAGRAM を受信
                 if let Some(addr) = client_addr {
                     while let Some(data) = server.recv_datagram_for(&addr) {
-                        datagram_data_clone.lock().unwrap().push(data);
+                        datagram_data_clone
+                            .lock()
+                            .expect("test must succeed")
+                            .push(data);
                     }
                 }
             }
@@ -1434,7 +1485,7 @@ async fn test_webtransport_mixed_streams_and_datagrams() {
     match client_result {
         Ok((bidi_stream, uni_stream)) => {
             // bidi ストリームのデータ検証
-            let bidi = bidi_data.lock().unwrap();
+            let bidi = bidi_data.lock().expect("test must succeed");
             let bidi_content = bidi
                 .get(&bidi_stream)
                 .expect("bidi ストリームのデータが存在するべき");
@@ -1445,7 +1496,7 @@ async fn test_webtransport_mixed_streams_and_datagrams() {
             );
 
             // uni ストリームのデータ検証
-            let uni = uni_data.lock().unwrap();
+            let uni = uni_data.lock().expect("test must succeed");
             let uni_content = uni
                 .get(&uni_stream)
                 .expect("uni ストリームのデータが存在するべき");
@@ -1456,7 +1507,7 @@ async fn test_webtransport_mixed_streams_and_datagrams() {
             );
 
             // DATAGRAM のデータ検証
-            let dgrams = datagram_data.lock().unwrap();
+            let dgrams = datagram_data.lock().expect("test must succeed");
             assert!(
                 !dgrams.is_empty(),
                 "DATAGRAM が少なくとも 1 個受信されるべき"
@@ -1482,10 +1533,13 @@ async fn test_webtransport_server_multiple_streams() {
     let (cert_path, key_path) = generate_test_certs();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -1645,10 +1699,13 @@ async fn test_webtransport_many_streams() {
     let received_streams_clone = received_streams.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -1667,7 +1724,7 @@ async fn test_webtransport_many_streams() {
                             } => {
                                 received_streams_clone
                                     .lock()
-                                    .unwrap()
+                                    .expect("test must succeed")
                                     .entry(*stream_id)
                                     .or_default()
                                     .extend_from_slice(data);
@@ -1725,7 +1782,7 @@ async fn test_webtransport_many_streams() {
 
     match client_result {
         Ok(stream_ids) => {
-            let streams = received_streams.lock().unwrap();
+            let streams = received_streams.lock().expect("test must succeed");
             assert_eq!(
                 streams.len(),
                 stream_count,

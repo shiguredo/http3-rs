@@ -39,7 +39,6 @@ pub struct StreamHeader {
 }
 
 /// ストリームヘッダーデコードエラー
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamHeaderDecodeError {
     /// バッファ不足
@@ -481,7 +480,7 @@ mod tests {
         varint::encode_into_vec(&mut buf, VarInt::ZERO); // session_id = 0 (0 % 4 == 0)
         let expected_offset = buf.len();
         buf.extend_from_slice(b"payload");
-        let result = classify_uni_stream_checked(&buf).unwrap();
+        let result = classify_uni_stream_checked(&buf).expect("test must succeed");
         assert_eq!(
             result,
             ClassifiedUniStream::WebTransport {
@@ -506,7 +505,7 @@ mod tests {
         let mut buf = Vec::new();
         varint::encode_into_vec(&mut buf, VarInt::ZERO);
         buf.extend_from_slice(b"data");
-        let result = classify_uni_stream_checked(&buf).unwrap();
+        let result = classify_uni_stream_checked(&buf).expect("test must succeed");
         assert_eq!(
             result,
             ClassifiedUniStream::Http3 {

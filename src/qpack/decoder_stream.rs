@@ -297,7 +297,7 @@ mod tests {
         let mut receiver = DecoderStreamReceiver::new();
         receiver.receive(&[0x03]);
 
-        let result = receiver.process(5).unwrap();
+        let result = receiver.process(5).expect("test must succeed");
         assert_eq!(
             result,
             Some(DecoderInstruction::InsertCountIncrement { increment: 3 })

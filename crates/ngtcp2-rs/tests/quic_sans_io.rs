@@ -8,9 +8,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ngtcp2_sys::ngtcp2_transport_params;
 use rcgen::{CertificateParams, KeyPair};
-use shiguredo_ngtcp2::{Connection, ConnectionId, PacketInfo, TlsContext, TransportParamsExt};
+use shiguredo_ngtcp2::{Connection, ConnectionId, PacketInfo, TlsContext, TransportParams};
 
 /// テスト用の証明書と秘密鍵を動的に生成
 fn generate_test_certs() -> (PathBuf, PathBuf) {
@@ -47,17 +46,17 @@ fn timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .expect("test must succeed")
         .as_nanos() as u64
 }
 
 /// クライアント接続を作成し、Initial パケットを生成する
 #[test]
 fn test_client_initial_packet_generation() {
-    let dcid = ConnectionId::random(16).unwrap();
-    let scid = ConnectionId::random(16).unwrap();
-    let local_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-    let remote_addr: SocketAddr = "127.0.0.1:4433".parse().unwrap();
+    let dcid = ConnectionId::random(16).expect("test must succeed");
+    let scid = ConnectionId::random(16).expect("test must succeed");
+    let local_addr: SocketAddr = "127.0.0.1:12345".parse().expect("test must succeed");
+    let remote_addr: SocketAddr = "127.0.0.1:4433".parse().expect("test must succeed");
 
     // TLS コンテキストを作成 (証明書検証なし)
     let tls_ctx =
@@ -65,7 +64,7 @@ fn test_client_initial_packet_generation() {
     let tls_session = tls_ctx.create_session().expect("TLS セッション作成失敗");
 
     // トランスポートパラメータを設定
-    let params = ngtcp2_transport_params::default_params().with_datagram(65535);
+    let params = TransportParams::new().with_datagram(65535).into_raw();
 
     let ts = timestamp();
 
@@ -107,10 +106,10 @@ fn test_server_connection_creation() {
     let (cert_path, key_path) = generate_test_certs();
 
     // クライアントの DCID をサーバーの SCID として使用
-    let client_dcid = ConnectionId::random(16).unwrap();
-    let server_scid = ConnectionId::random(16).unwrap();
-    let local_addr: SocketAddr = "127.0.0.1:4433".parse().unwrap();
-    let remote_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+    let client_dcid = ConnectionId::random(16).expect("test must succeed");
+    let server_scid = ConnectionId::random(16).expect("test must succeed");
+    let local_addr: SocketAddr = "127.0.0.1:4433".parse().expect("test must succeed");
+    let remote_addr: SocketAddr = "127.0.0.1:12345".parse().expect("test must succeed");
 
     // TLS コンテキストを作成
     let tls_ctx =
@@ -118,9 +117,10 @@ fn test_server_connection_creation() {
     let tls_session = tls_ctx.create_session().expect("TLS セッション作成失敗");
 
     // トランスポートパラメータを設定
-    let params = ngtcp2_transport_params::default_params()
+    let params = TransportParams::new()
         .with_datagram(65535)
-        .with_original_dcid(&client_dcid);
+        .with_original_dcid(&client_dcid)
+        .into_raw();
 
     let ts = timestamp();
 
@@ -149,12 +149,12 @@ fn test_quic_handshake() {
     let (cert_path, key_path) = generate_test_certs();
 
     // 接続 ID を生成
-    let client_dcid = ConnectionId::random(16).unwrap();
-    let client_scid = ConnectionId::random(16).unwrap();
-    let server_scid = ConnectionId::random(16).unwrap();
+    let client_dcid = ConnectionId::random(16).expect("test must succeed");
+    let client_scid = ConnectionId::random(16).expect("test must succeed");
+    let server_scid = ConnectionId::random(16).expect("test must succeed");
 
-    let client_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-    let server_addr: SocketAddr = "127.0.0.1:4433".parse().unwrap();
+    let client_addr: SocketAddr = "127.0.0.1:12345".parse().expect("test must succeed");
+    let server_addr: SocketAddr = "127.0.0.1:4433".parse().expect("test must succeed");
 
     let ts = timestamp();
 
@@ -165,7 +165,7 @@ fn test_quic_handshake() {
         .create_session()
         .expect("クライアント TLS セッション作成失敗");
 
-    let client_params = ngtcp2_transport_params::default_params().with_datagram(65535);
+    let client_params = TransportParams::new().with_datagram(65535).into_raw();
 
     let mut client = Connection::client_new(
         &client_dcid,
@@ -209,9 +209,10 @@ fn test_quic_handshake() {
                     .create_session()
                     .expect("サーバー TLS セッション作成失敗");
 
-                let server_params = ngtcp2_transport_params::default_params()
+                let server_params = TransportParams::new()
                     .with_datagram(65535)
-                    .with_original_dcid(&client_dcid);
+                    .with_original_dcid(&client_dcid)
+                    .into_raw();
 
                 server = Some(
                     Connection::server_new(
@@ -303,12 +304,12 @@ fn test_stream_open_after_handshake() {
     let (cert_path, key_path) = generate_test_certs();
 
     // 接続 ID を生成
-    let client_dcid = ConnectionId::random(16).unwrap();
-    let client_scid = ConnectionId::random(16).unwrap();
-    let server_scid = ConnectionId::random(16).unwrap();
+    let client_dcid = ConnectionId::random(16).expect("test must succeed");
+    let client_scid = ConnectionId::random(16).expect("test must succeed");
+    let server_scid = ConnectionId::random(16).expect("test must succeed");
 
-    let client_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-    let server_addr: SocketAddr = "127.0.0.1:4433".parse().unwrap();
+    let client_addr: SocketAddr = "127.0.0.1:12345".parse().expect("test must succeed");
+    let server_addr: SocketAddr = "127.0.0.1:4433".parse().expect("test must succeed");
 
     let ts = timestamp();
 
@@ -319,7 +320,7 @@ fn test_stream_open_after_handshake() {
         .create_session()
         .expect("クライアント TLS セッション作成失敗");
 
-    let client_params = ngtcp2_transport_params::default_params().with_datagram(65535);
+    let client_params = TransportParams::new().with_datagram(65535).into_raw();
 
     let mut client = Connection::client_new(
         &client_dcid,
@@ -355,9 +356,10 @@ fn test_stream_open_after_handshake() {
                     .create_session()
                     .expect("サーバー TLS セッション作成失敗");
 
-                let server_params = ngtcp2_transport_params::default_params()
+                let server_params = TransportParams::new()
                     .with_datagram(65535)
-                    .with_original_dcid(&client_dcid);
+                    .with_original_dcid(&client_dcid)
+                    .into_raw();
 
                 server = Some(
                     Connection::server_new(
@@ -445,12 +447,12 @@ fn test_connection_state() {
     let (cert_path, key_path) = generate_test_certs();
 
     // 接続 ID を生成
-    let client_dcid = ConnectionId::random(16).unwrap();
-    let client_scid = ConnectionId::random(16).unwrap();
-    let server_scid = ConnectionId::random(16).unwrap();
+    let client_dcid = ConnectionId::random(16).expect("test must succeed");
+    let client_scid = ConnectionId::random(16).expect("test must succeed");
+    let server_scid = ConnectionId::random(16).expect("test must succeed");
 
-    let client_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-    let server_addr: SocketAddr = "127.0.0.1:4433".parse().unwrap();
+    let client_addr: SocketAddr = "127.0.0.1:12345".parse().expect("test must succeed");
+    let server_addr: SocketAddr = "127.0.0.1:4433".parse().expect("test must succeed");
 
     let ts = timestamp();
 
@@ -461,7 +463,7 @@ fn test_connection_state() {
         .create_session()
         .expect("クライアント TLS セッション作成失敗");
 
-    let client_params = ngtcp2_transport_params::default_params().with_datagram(65535);
+    let client_params = TransportParams::new().with_datagram(65535).into_raw();
 
     let mut client = Connection::client_new(
         &client_dcid,
@@ -496,9 +498,10 @@ fn test_connection_state() {
                     .create_session()
                     .expect("サーバー TLS セッション作成失敗");
 
-                let server_params = ngtcp2_transport_params::default_params()
+                let server_params = TransportParams::new()
                     .with_datagram(65535)
-                    .with_original_dcid(&client_dcid);
+                    .with_original_dcid(&client_dcid)
+                    .into_raw();
 
                 server = Some(
                     Connection::server_new(

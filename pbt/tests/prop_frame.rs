@@ -85,8 +85,8 @@ prop_compose! {
                 } else {
                     value
                 };
-                Setting::from_wire(VarInt::new(id).unwrap(), VarInt::new(normalized).unwrap())
-                    .unwrap()
+                Setting::from_wire(VarInt::new(id).expect("test must succeed"), VarInt::new(normalized).expect("test must succeed"))
+                    .expect("test must succeed")
             })
             .collect()
     }
@@ -108,7 +108,7 @@ proptest! {
             "Frame type {:?} (0x{:02x}) should be recognized",
             frame_type, type_value
         );
-        prop_assert_eq!(parsed.unwrap(), frame_type);
+        prop_assert_eq!(parsed.expect("test must succeed"), frame_type);
     }
 
     /// Property: HTTP/2 専用フレームタイプは is_http2_only で検出される
@@ -145,10 +145,10 @@ proptest! {
     fn prop_data_frame_roundtrip(payload in valid_payload()) {
         let frame = Frame::Data(DataPayload::new(payload.clone()));
 
-        let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
-        let encoded_len = encode_frame(&mut buf, &frame).unwrap();
+        let mut buf = vec![0u8; encoded_frame_len(&frame).expect("test must succeed")];
+        let encoded_len = encode_frame(&mut buf, &frame).expect("test must succeed");
 
-        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
+        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).expect("test must succeed");
 
         prop_assert_eq!(encoded_len, decoded_len, "Encoded/decoded length mismatch");
 
@@ -171,14 +171,14 @@ proptest! {
         // ランタイム値の `VarInt::new` を使って整合性を取る (const 文脈ではないので
         // `from_static` は使わない)。
         let expected_len = shiguredo_http3::VarInt::new(FrameType::Data as u64)
-            .unwrap()
+            .expect("test must succeed")
             .encoded_len()
             + shiguredo_http3::VarInt::new(payload.len() as u64)
-                .unwrap()
+                .expect("test must succeed")
                 .encoded_len()
             + payload.len();
 
-        let actual_len = encoded_frame_len(&frame).unwrap();
+        let actual_len = encoded_frame_len(&frame).expect("test must succeed");
 
         prop_assert_eq!(
             actual_len, expected_len,
@@ -197,10 +197,10 @@ proptest! {
     fn prop_headers_frame_roundtrip(encoded_block in valid_encoded_headers()) {
         let frame = Frame::Headers(HeadersPayload::new(encoded_block.clone()));
 
-        let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
-        let encoded_len = encode_frame(&mut buf, &frame).unwrap();
+        let mut buf = vec![0u8; encoded_frame_len(&frame).expect("test must succeed")];
+        let encoded_len = encode_frame(&mut buf, &frame).expect("test must succeed");
 
-        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
+        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).expect("test must succeed");
 
         prop_assert_eq!(encoded_len, decoded_len);
 
@@ -226,14 +226,14 @@ proptest! {
         // valid_settings_entries() は重複 ID を除外済みのため `add` は必ず Ok
         let mut payload = SettingsPayload::new();
         for setting in &entries {
-            payload.add(*setting).unwrap();
+            payload.add(*setting).expect("test must succeed");
         }
         let frame = Frame::Settings(payload);
 
-        let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
-        let encoded_len = encode_frame(&mut buf, &frame).unwrap();
+        let mut buf = vec![0u8; encoded_frame_len(&frame).expect("test must succeed")];
+        let encoded_len = encode_frame(&mut buf, &frame).expect("test must succeed");
 
-        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
+        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).expect("test must succeed");
 
         prop_assert_eq!(encoded_len, decoded_len);
 
@@ -252,10 +252,10 @@ proptest! {
     fn prop_empty_settings_frame_valid(_dummy in Just(())) {
         let frame = Frame::Settings(SettingsPayload::new());
 
-        let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
-        let encoded_len = encode_frame(&mut buf, &frame).unwrap();
+        let mut buf = vec![0u8; encoded_frame_len(&frame).expect("test must succeed")];
+        let encoded_len = encode_frame(&mut buf, &frame).expect("test must succeed");
 
-        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
+        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).expect("test must succeed");
 
         prop_assert_eq!(encoded_len, decoded_len);
 
@@ -275,13 +275,13 @@ proptest! {
     /// Property: GOAWAY フレームのエンコード/デコードラウンドトリップ
     #[test]
     fn prop_goaway_frame_roundtrip(id in valid_goaway_id()) {
-        let id = VarInt::new(id).unwrap();
+        let id = VarInt::new(id).expect("test must succeed");
         let frame = Frame::Goaway(GoawayPayload::new(id));
 
-        let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
-        let encoded_len = encode_frame(&mut buf, &frame).unwrap();
+        let mut buf = vec![0u8; encoded_frame_len(&frame).expect("test must succeed")];
+        let encoded_len = encode_frame(&mut buf, &frame).expect("test must succeed");
 
-        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
+        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).expect("test must succeed");
 
         prop_assert_eq!(encoded_len, decoded_len);
 
@@ -313,15 +313,15 @@ proptest! {
         ),
         payload in valid_payload(),
     ) {
-        let frame_type = VarInt::new(unknown_type).unwrap();
+        let frame_type = VarInt::new(unknown_type).expect("test must succeed");
         let unknown = UnknownFrame::new(frame_type, payload.clone())
             .expect("生成範囲は既知タイプでも HTTP/2 専用でもない");
         let frame = Frame::Unknown(unknown);
 
-        let mut buf = vec![0u8; encoded_frame_len(&frame).unwrap()];
-        let encoded_len = encode_frame(&mut buf, &frame).unwrap();
+        let mut buf = vec![0u8; encoded_frame_len(&frame).expect("test must succeed")];
+        let encoded_len = encode_frame(&mut buf, &frame).expect("test must succeed");
 
-        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).unwrap();
+        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).expect("test must succeed");
 
         prop_assert_eq!(encoded_len, decoded_len);
 
@@ -344,9 +344,9 @@ proptest! {
     fn prop_encoded_frame_len_accurate(payload in valid_payload()) {
         let frame = Frame::Data(DataPayload::new(payload));
 
-        let predicted_len = encoded_frame_len(&frame).unwrap();
+        let predicted_len = encoded_frame_len(&frame).expect("test must succeed");
         let mut buf = vec![0u8; predicted_len + 100]; // 余裕を持たせる
-        let actual_len = encode_frame(&mut buf, &frame).unwrap();
+        let actual_len = encode_frame(&mut buf, &frame).expect("test must succeed");
 
         prop_assert_eq!(
             predicted_len, actual_len,
@@ -364,7 +364,7 @@ proptest! {
     /// (`const fn` 検査とランタイム検査のロジック一致)
     #[test]
     fn prop_goaway_from_static_matches_new(value in 0u64..=VarInt::MAX.get()) {
-        let via_new = GoawayPayload::new(VarInt::new(value).unwrap());
+        let via_new = GoawayPayload::new(VarInt::new(value).expect("test must succeed"));
         let via_static = GoawayPayload::from_static(value);
         prop_assert_eq!(via_new, via_static);
     }

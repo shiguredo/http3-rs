@@ -10,7 +10,7 @@ use interop_h3::{generate_shared_certificate, start_quinn_server};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_http3_request_response() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
     let (port_tx, port_rx) = std::sync::mpsc::channel();
     let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
@@ -23,14 +23,18 @@ async fn test_http3_request_response() {
         }
     });
 
-    let port = port_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let port = port_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("test must succeed");
     eprintln!("[test] サーバーポート: {}", port);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // s2n-quic クライアントでリクエスト
     let client_result = tokio::time::timeout(Duration::from_secs(10), async {
-        let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+        let addr: SocketAddr = format!("127.0.0.1:{}", port)
+            .parse()
+            .expect("test must succeed");
         let config = ClientConfig::new(addr, "localhost").ca_cert(&cert_pem);
         let mut client = H3Client::connect(config).await?;
 

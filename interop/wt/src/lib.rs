@@ -202,7 +202,9 @@ pub async fn start_quinn_wt_server(
     let endpoint = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse()?)?;
     let local_addr = endpoint.local_addr()?;
     eprintln!("[quinn wt server] started: port = {}", local_addr.port());
-    port_tx.send(local_addr.port()).unwrap();
+    port_tx
+        .send(local_addr.port())
+        .expect("port channel receiver is alive");
 
     let timeout = tokio::time::sleep(Duration::from_secs(10));
     tokio::pin!(timeout);
@@ -353,7 +355,7 @@ pub async fn run_quinn_wt_client(
             .method("CONNECT")
             .uri(format!("https://localhost:{}{}", port, path))
             .body(())
-            .unwrap();
+            .expect("interop setup must succeed");
         req.extensions_mut()
             .insert(h3::ext::Protocol::WEB_TRANSPORT);
         req

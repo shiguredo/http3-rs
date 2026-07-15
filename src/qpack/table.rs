@@ -258,19 +258,19 @@ mod tests {
 
     #[test]
     fn test_get_static_entry() {
-        let entry = get_static_entry(0).unwrap();
+        let entry = get_static_entry(0).expect("test must succeed");
         assert_eq!(entry.name(), b":authority");
         assert_eq!(entry.value(), b"");
 
-        let entry = get_static_entry(17).unwrap();
+        let entry = get_static_entry(17).expect("test must succeed");
         assert_eq!(entry.name(), b":method");
         assert_eq!(entry.value(), b"GET");
 
-        let entry = get_static_entry(25).unwrap();
+        let entry = get_static_entry(25).expect("test must succeed");
         assert_eq!(entry.name(), b":status");
         assert_eq!(entry.value(), b"200");
 
-        let entry = get_static_entry(98).unwrap();
+        let entry = get_static_entry(98).expect("test must succeed");
         assert_eq!(entry.name(), b"x-frame-options");
         assert_eq!(entry.value(), b"sameorigin");
 

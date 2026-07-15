@@ -10,7 +10,7 @@ use shiguredo_http3::frame::SettingsPayload;
 use shiguredo_http3::{Setting, SettingError, Settings, VarInt, webtransport};
 
 fn vi(value: u64) -> VarInt {
-    VarInt::new(value).unwrap()
+    VarInt::new(value).expect("test must succeed")
 }
 
 // `arbitrary_settings` / `arbitrary_wt_settings` で生成する範囲は中規模 (`1 << 30`)
@@ -201,11 +201,11 @@ proptest! {
         } else {
             value
         };
-        let setting = Setting::from_wire(id, value).unwrap();
+        let setting = Setting::from_wire(id, value).expect("test must succeed");
         let (id2, value2) = setting.as_wire();
         prop_assert_eq!(id, id2);
         prop_assert_eq!(value, value2);
-        let restored = Setting::from_wire(id2, value2).unwrap();
+        let restored = Setting::from_wire(id2, value2).expect("test must succeed");
         prop_assert_eq!(setting, restored);
     }
 }
@@ -238,7 +238,7 @@ proptest! {
     fn prop_settings_payload_add_duplicate_rejected(setting in arbitrary_setting()) {
         use shiguredo_http3::frame::SettingsPayload;
         let mut payload = SettingsPayload::new();
-        payload.add(setting).unwrap();
+        payload.add(setting).expect("test must succeed");
         let err = payload.add(setting).unwrap_err();
         prop_assert_eq!(err, SettingError::DuplicateId { id: setting.id() });
     }

@@ -5,26 +5,28 @@ use shiguredo_http3::{
 /// GOAWAY テスト用のクライアント・サーバーペアを構築する
 fn setup_pair() -> (ClientConnection, ServerConnection) {
     let mut client = ClientConnection::new(Settings::default());
-    client.set_control_stream_id(2).unwrap();
+    client.set_control_stream_id(2).expect("test must succeed");
     let mut server = ServerConnection::new(Settings::default());
-    server.set_control_stream_id(3).unwrap();
+    server.set_control_stream_id(3).expect("test must succeed");
 
     // サーバー制御ストリームデータ（ストリームタイプ + SETTINGS）をクライアントに feed
-    let (server_ctrl, _) = server.take_stream_data(3).unwrap();
-    client.feed_stream(3, &server_ctrl, false).unwrap();
+    let (server_ctrl, _) = server.take_stream_data(3).expect("test must succeed");
+    client
+        .feed_stream(3, &server_ctrl, false)
+        .expect("test must succeed");
 
     // SETTINGS イベントを消費
-    while let Some(_ev) = client.poll_event().unwrap() {}
+    while let Some(_ev) = client.poll_event().expect("test must succeed") {}
 
     (client, server)
 }
 
 fn request_headers() -> Vec<Header> {
     vec![
-        Header::new(b":method", b"GET").unwrap(),
-        Header::new(b":path", b"/").unwrap(),
-        Header::new(b":scheme", b"https").unwrap(),
-        Header::new(b":authority", b"example.com").unwrap(),
+        Header::new(b":method", b"GET").expect("test must succeed"),
+        Header::new(b":path", b"/").expect("test must succeed"),
+        Header::new(b":scheme", b"https").expect("test must succeed"),
+        Header::new(b":authority", b"example.com").expect("test must succeed"),
     ]
 }
 
@@ -35,16 +37,22 @@ fn send_request_after_goaway_returns_stream_error() {
     let headers = request_headers();
 
     // 1 本目のリクエスト送信 (stream_id=0, next_stream_id は 4 になる)
-    let stream_id = client.send_request(&headers, true).unwrap();
+    let stream_id = client
+        .send_request(&headers, true)
+        .expect("test must succeed");
     assert_eq!(stream_id, 0);
 
     // サーバーが GOAWAY(4) を送信: stream_id >= 4 は受け付けない
-    server.send_goaway(VarInt::new(4).unwrap()).unwrap();
-    let (goaway_data, _) = server.take_stream_data(3).unwrap();
-    client.feed_stream(3, &goaway_data, false).unwrap();
+    server
+        .send_goaway(VarInt::new(4).expect("test must succeed"))
+        .expect("test must succeed");
+    let (goaway_data, _) = server.take_stream_data(3).expect("test must succeed");
+    client
+        .feed_stream(3, &goaway_data, false)
+        .expect("test must succeed");
 
     // GoawayReceived イベントを消費
-    let event = client.poll_event().unwrap();
+    let event = client.poll_event().expect("test must succeed");
     assert!(
         matches!(event, Some(Event::GoawayReceived { .. })),
         "GoawayReceived イベントが発生すること"
@@ -65,19 +73,27 @@ fn send_request_below_goaway_boundary_succeeds() {
     let headers = request_headers();
 
     // サーバーが GOAWAY(8) を送信: stream_id >= 8 は受け付けない
-    server.send_goaway(VarInt::new(8).unwrap()).unwrap();
-    let (goaway_data, _) = server.take_stream_data(3).unwrap();
-    client.feed_stream(3, &goaway_data, false).unwrap();
+    server
+        .send_goaway(VarInt::new(8).expect("test must succeed"))
+        .expect("test must succeed");
+    let (goaway_data, _) = server.take_stream_data(3).expect("test must succeed");
+    client
+        .feed_stream(3, &goaway_data, false)
+        .expect("test must succeed");
 
     // GoawayReceived イベントを消費
-    while let Some(_ev) = client.poll_event().unwrap() {}
+    while let Some(_ev) = client.poll_event().expect("test must succeed") {}
 
     // stream_id=0 (next=4): 4 < 8 なので送信できる
-    let stream_id = client.send_request(&headers, true).unwrap();
+    let stream_id = client
+        .send_request(&headers, true)
+        .expect("test must succeed");
     assert_eq!(stream_id, 0, "境界値未満のリクエストは送信できること");
 
     // stream_id=4 (next=8): 8 >= 8 なので次は拒否される
-    let stream_id2 = client.send_request(&headers, true).unwrap();
+    let stream_id2 = client
+        .send_request(&headers, true)
+        .expect("test must succeed");
     assert_eq!(stream_id2, 4, "境界値直前のリクエストも送信できること");
 
     // stream_id=8 (next=12): 8 >= 8 で拒否
@@ -95,14 +111,20 @@ fn connection_maintained_after_stream_error() {
     let headers = request_headers();
 
     // 1 本目のリクエスト送信 (fin=false でストリームを開いたまま)
-    let stream_id = client.send_request(&headers, false).unwrap();
+    let stream_id = client
+        .send_request(&headers, false)
+        .expect("test must succeed");
     assert_eq!(stream_id, 0);
 
     // サーバーが GOAWAY(4) を送信
-    server.send_goaway(VarInt::new(4).unwrap()).unwrap();
-    let (goaway_data, _) = server.take_stream_data(3).unwrap();
-    client.feed_stream(3, &goaway_data, false).unwrap();
-    while let Some(_ev) = client.poll_event().unwrap() {}
+    server
+        .send_goaway(VarInt::new(4).expect("test must succeed"))
+        .expect("test must succeed");
+    let (goaway_data, _) = server.take_stream_data(3).expect("test must succeed");
+    client
+        .feed_stream(3, &goaway_data, false)
+        .expect("test must succeed");
+    while let Some(_ev) = client.poll_event().expect("test must succeed") {}
 
     // 新規リクエストは拒否される
     let err = client.send_request(&headers, true).unwrap_err();

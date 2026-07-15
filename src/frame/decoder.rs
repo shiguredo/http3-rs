@@ -201,14 +201,14 @@ mod tests {
     fn test_decode_frame_header() {
         // Type=0 (DATA), Length=5
         let buf = [0x00, 0x05];
-        let header = decode_frame_header(&buf).unwrap();
+        let header = decode_frame_header(&buf).expect("test must succeed");
         assert_eq!(header.frame_type().get(), 0);
         assert_eq!(header.payload_len().get(), 5);
         assert_eq!(header.header_len(), 2);
 
         // Type=4 (SETTINGS), Length=10
         let buf = [0x04, 0x0a];
-        let header = decode_frame_header(&buf).unwrap();
+        let header = decode_frame_header(&buf).expect("test must succeed");
         assert_eq!(header.frame_type().get(), 4);
         assert_eq!(header.payload_len().get(), 10);
     }
@@ -244,7 +244,7 @@ mod tests {
             result,
             Err(FrameDecodeError::InvalidSetting(
                 SettingError::Http2OnlyId {
-                    id: VarInt::new(0x02).unwrap()
+                    id: VarInt::new(0x02).expect("test must succeed")
                 }
             ))
         );
@@ -274,13 +274,13 @@ mod tests {
         // wire 上で type=0 を 2 バイト (0x40 0x00)、payload_len=3 を 1 バイト (0x03) で
         // エンコードしたフレーム + payload 3 バイトを decode できることを確認する。
         let buf = [0x40, 0x00, 0x03, 0xaa, 0xbb, 0xcc];
-        let header = decode_frame_header(&buf).unwrap();
+        let header = decode_frame_header(&buf).expect("test must succeed");
         assert_eq!(header.frame_type().get(), 0); // DATA
         assert_eq!(header.payload_len().get(), 3);
         assert_eq!(header.header_len(), 3); // 2 バイト + 1 バイト
         assert_eq!(header.total_len(), Some(6));
 
-        let (frame, consumed) = decode_frame(&buf).unwrap();
+        let (frame, consumed) = decode_frame(&buf).expect("test must succeed");
         assert_eq!(consumed, 6);
         match frame {
             Frame::Data(p) => assert_eq!(p.data(), &[0xaa, 0xbb, 0xcc][..]),
@@ -300,7 +300,7 @@ mod tests {
             result,
             Err(FrameDecodeError::InvalidSetting(
                 SettingError::DuplicateId {
-                    id: VarInt::new(0x01).unwrap()
+                    id: VarInt::new(0x01).expect("test must succeed")
                 }
             ))
         );
@@ -334,8 +334,8 @@ mod tests {
             result,
             Err(FrameDecodeError::InvalidSetting(
                 SettingError::InvalidBooleanValue {
-                    id: VarInt::new(0x08).unwrap(),
-                    value: VarInt::new(0x02).unwrap(),
+                    id: VarInt::new(0x08).expect("test must succeed"),
+                    value: VarInt::new(0x02).expect("test must succeed"),
                 }
             ))
         );
@@ -353,8 +353,8 @@ mod tests {
             result,
             Err(FrameDecodeError::InvalidSetting(
                 SettingError::InvalidBooleanValue {
-                    id: VarInt::new(0x33).unwrap(),
-                    value: VarInt::new(0x05).unwrap(),
+                    id: VarInt::new(0x33).expect("test must succeed"),
+                    value: VarInt::new(0x05).expect("test must succeed"),
                 }
             ))
         );
@@ -388,7 +388,7 @@ mod tests {
         // MAX_PUSH_ID (0x0d): サーバープッシュ非対応でも control stream 上では
         // 受信できなければならない (RFC 9114 Section 7.2.7)。デコード自体は成功する。
         let buf = [0x0d, 0x01, 0x05];
-        let result = decode_frame(&buf).unwrap();
+        let result = decode_frame(&buf).expect("test must succeed");
         assert_eq!(result, (Frame::MaxPushId(VarInt::from_static(5)), 3));
     }
 

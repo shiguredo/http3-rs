@@ -6,10 +6,11 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
+use nghttp3_sys::nghttp3_settings;
+use ngtcp2_sys::ngtcp2_transport_params;
 use shiguredo_ngtcp2::{
-    Connection, ConnectionId, Error, Header, Http3Connection, Http3Event, Http3SettingsExt,
-    PacketInfo, Result, SessionId, StreamId, TlsContext, TransportParamsExt, nghttp3_settings,
-    ngtcp2_transport_params, varint,
+    Connection, ConnectionId, Error, Header, Http3Connection, Http3Event, Http3Settings,
+    PacketInfo, Result, SessionId, StreamId, TlsContext, TransportParams, varint,
 };
 
 use crate::{Socket, timestamp};
@@ -84,9 +85,9 @@ impl ClientWebTransportSession {
     ) -> Result<Self> {
         // ローカルアドレスにバインド
         let local_addr: SocketAddr = if remote_addr.is_ipv4() {
-            "0.0.0.0:0".parse().unwrap()
+            "0.0.0.0:0".parse().expect("literal IPv4 bind addr")
         } else {
-            "[::]:0".parse().unwrap()
+            "[::]:0".parse().expect("literal IPv6 bind addr")
         };
 
         let socket = Socket::bind(local_addr)
@@ -96,10 +97,10 @@ impl ClientWebTransportSession {
         let local_addr = socket.local_addr();
 
         // WebTransport 用のトランスポートパラメータ
-        let params = ngtcp2_transport_params::default_params().with_datagram(65535);
+        let params = TransportParams::new().with_datagram(65535).into_raw();
 
         // WebTransport 用の HTTP/3 設定
-        let h3_settings = nghttp3_settings::default_settings().with_webtransport();
+        let h3_settings = Http3Settings::new().with_webtransport().into_raw();
 
         // TLS コンテキストとセッションを作成
         let tls_ctx = TlsContext::new_client_with_options(&[b"h3"], verify_peer)?;
@@ -693,7 +694,7 @@ impl ClientWebTransportSession {
     ///
     /// send_stream_data の輻輳制御ループ内で使用する。
     fn write_h3_streams_tracked(&mut self, ts: u64) -> Result<(Vec<Vec<u8>>, Vec<StreamId>)> {
-        use shiguredo_ngtcp2::nghttp3_vec;
+        use nghttp3_sys::nghttp3_vec;
 
         let mut packets = Vec::new();
         let mut blocked = Vec::new();
@@ -761,7 +762,7 @@ impl ClientWebTransportSession {
     ///
     /// ngtcp2 examples に従い、特定のエラーをハンドリング
     fn write_h3_streams(&mut self, ts: u64) -> Result<Vec<Vec<u8>>> {
-        use shiguredo_ngtcp2::nghttp3_vec;
+        use nghttp3_sys::nghttp3_vec;
 
         let mut packets = Vec::new();
 
@@ -871,10 +872,10 @@ impl ServerWebTransportSession {
         let tls_ctx = TlsContext::new_server(cert_path, key_path, &[b"h3"])?;
 
         // WebTransport 用のトランスポートパラメータ (DATAGRAM 有効)
-        let transport_params = ngtcp2_transport_params::default_params().with_datagram(65535);
+        let transport_params = TransportParams::new().with_datagram(65535).into_raw();
 
         // WebTransport 用の HTTP/3 設定
-        let h3_settings = nghttp3_settings::default_settings().with_webtransport();
+        let h3_settings = Http3Settings::new().with_webtransport().into_raw();
 
         Ok(Self {
             socket,
@@ -1054,7 +1055,9 @@ impl ServerWebTransportSession {
 
         // サーバー用のトランスポートパラメータを作成
         // original_dcid はクライアントからの最初の Initial パケットの DCID
-        let params = self.transport_params.with_original_dcid(&original_dcid);
+        let params = TransportParams::from_raw(self.transport_params)
+            .with_original_dcid(&original_dcid)
+            .into_raw();
 
         // server_new の引数:
         // - dcid: クライアントの SCID (サーバーがクライアントに送るパケットの DCID になる)
@@ -1356,7 +1359,7 @@ fn write_h3_streams_for_wt_connection(
     send_buf: &mut [u8],
     ts: u64,
 ) -> Result<Vec<Vec<u8>>> {
-    use shiguredo_ngtcp2::nghttp3_vec;
+    use nghttp3_sys::nghttp3_vec;
 
     let mut packets = Vec::new();
 

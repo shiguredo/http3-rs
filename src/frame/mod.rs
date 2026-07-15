@@ -108,13 +108,11 @@ impl Frame {
 
 /// [`Frame::Unknown`] 構築時の検査エラー
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum UnknownFrameError {
     /// 既知の HTTP/3 フレームタイプを `Unknown` で構築しようとした
     ///
     /// RFC 9114 Section 7.2 で定義された 7 タイプ (DATA / HEADERS / CANCEL_PUSH /
     /// SETTINGS / PUSH_PROMISE / GOAWAY / MAX_PUSH_ID) は専用 variant で表現する。
-    #[non_exhaustive]
     KnownFrameType {
         /// 該当フレームタイプ ID
         frame_type: VarInt,
@@ -123,7 +121,6 @@ pub enum UnknownFrameError {
     ///
     /// RFC 9114 Section 11.2.1 Table 2 で Reserved 登録、Section 7.2.8 で受信時
     /// H3_FRAME_UNEXPECTED 必須。
-    #[non_exhaustive]
     Http2OnlyFrameType {
         /// 該当フレームタイプ ID
         frame_type: VarInt,

@@ -298,7 +298,7 @@ mod tests {
     use super::*;
 
     fn v(n: u64) -> VarInt {
-        VarInt::new(n).unwrap()
+        VarInt::new(n).expect("test must succeed")
     }
 
     #[test]
@@ -419,7 +419,7 @@ mod tests {
     #[test]
     fn test_from_payload_wt_setting() {
         // WebTransport variant のみ反映され、非 WT / Unknown は無視されることを検証
-        let unknown = Setting::from_wire(v(0xdead), v(1)).unwrap();
+        let unknown = Setting::from_wire(v(0xdead), v(1)).expect("test must succeed");
         let entries = [
             Setting::WtEnabled(v(1)),
             Setting::WtInitialMaxStreamsUni(v(100)),
@@ -431,7 +431,7 @@ mod tests {
             Setting::H3Datagram(true), // 非 WT、無視される
             unknown,                   // Unknown、無視される
         ];
-        let wt = Settings::from_payload(&entries).unwrap();
+        let wt = Settings::from_payload(&entries).expect("test must succeed");
         assert_eq!(wt.wt_enabled, v(1));
         assert_eq!(wt.wt_initial_max_streams_uni, v(100));
         assert_eq!(wt.wt_initial_max_streams_bidi, v(50));

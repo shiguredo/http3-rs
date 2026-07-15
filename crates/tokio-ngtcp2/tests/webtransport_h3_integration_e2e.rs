@@ -62,10 +62,13 @@ async fn test_h3_datagram_encode_decode_over_ngtcp2() {
     let datagram_received_clone = datagram_received.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -94,7 +97,10 @@ async fn test_h3_datagram_encode_decode_over_ngtcp2() {
                 if let Some(addr) = client_addr
                     && let Some(data) = server.recv_datagram_for(&addr)
                 {
-                    received_raw_clone.lock().unwrap().extend_from_slice(&data);
+                    received_raw_clone
+                        .lock()
+                        .expect("test must succeed")
+                        .extend_from_slice(&data);
                     datagram_received_clone.store(true, Ordering::SeqCst);
                 }
             }
@@ -121,7 +127,8 @@ async fn test_h3_datagram_encode_decode_over_ngtcp2() {
 
         // shiguredo_http3 の Datagram を使って検証用データを構築
         let original_payload = b"H3 Datagram payload test data";
-        let datagram = Datagram::new(session_id as u64, original_payload.to_vec()).unwrap();
+        let datagram =
+            Datagram::new(session_id as u64, original_payload.to_vec()).expect("test must succeed");
 
         // Quarter Stream ID が正しく計算されることを検証
         assert_eq!(datagram.quarter_stream_id(), session_id as u64 / 4);
@@ -149,7 +156,7 @@ async fn test_h3_datagram_encode_decode_over_ngtcp2() {
                 "サーバーが DATAGRAM を受信するべき"
             );
             // サーバーの recv_datagram_for はペイロードのみを返す
-            let raw = received_raw.lock().unwrap();
+            let raw = received_raw.lock().expect("test must succeed");
             assert_eq!(
                 raw.as_slice(),
                 original_payload.as_slice(),
@@ -173,10 +180,13 @@ async fn test_h3_datagram_roundtrip_over_ngtcp2() {
     let (cert_path, key_path) = generate_test_certs();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -261,7 +271,8 @@ async fn test_h3_datagram_roundtrip_over_ngtcp2() {
         );
 
         // Datagram 構造体を使って session_id との紐付けを検証
-        let h3_datagram = Datagram::new(session_id as u64, received.clone()).unwrap();
+        let h3_datagram =
+            Datagram::new(session_id as u64, received.clone()).expect("test must succeed");
         assert_eq!(h3_datagram.session_id, session_id as u64);
         assert_eq!(h3_datagram.quarter_stream_id(), session_id as u64 / 4);
 
@@ -296,10 +307,13 @@ async fn test_h3_session_state_with_ngtcp2_streams() {
     let received_stream_count_clone = received_stream_count.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -432,10 +446,13 @@ async fn test_h3_stream_header_bidi_over_ngtcp2() {
     let data_received_clone = data_received.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -450,7 +467,10 @@ async fn test_h3_stream_header_bidi_over_ngtcp2() {
                                 return true;
                             }
                             Http3Event::WebTransportData { data, .. } => {
-                                received_data_clone.lock().unwrap().extend_from_slice(data);
+                                received_data_clone
+                                    .lock()
+                                    .expect("test must succeed")
+                                    .extend_from_slice(data);
                                 data_received_clone.store(true, Ordering::SeqCst);
                             }
                             _ => {}
@@ -515,7 +535,7 @@ async fn test_h3_stream_header_bidi_over_ngtcp2() {
                 "サーバーがデータを受信するべき"
             );
 
-            let raw = received_data.lock().unwrap();
+            let raw = received_data.lock().expect("test must succeed");
 
             // 受信データから StreamHeader をデコード
             let (decoded_header, consumed) = StreamHeader::decode_bidirectional(&raw)
@@ -558,10 +578,13 @@ async fn test_h3_stream_header_uni_over_ngtcp2() {
     let data_received_clone = data_received.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -576,7 +599,10 @@ async fn test_h3_stream_header_uni_over_ngtcp2() {
                                 return true;
                             }
                             Http3Event::WebTransportData { data, .. } => {
-                                received_data_clone.lock().unwrap().extend_from_slice(data);
+                                received_data_clone
+                                    .lock()
+                                    .expect("test must succeed")
+                                    .extend_from_slice(data);
                                 data_received_clone.store(true, Ordering::SeqCst);
                             }
                             _ => {}
@@ -641,7 +667,7 @@ async fn test_h3_stream_header_uni_over_ngtcp2() {
                 "サーバーがデータを受信するべき"
             );
 
-            let raw = received_data.lock().unwrap();
+            let raw = received_data.lock().expect("test must succeed");
 
             // 受信データから StreamHeader をデコード
             let (decoded_header, consumed) = StreamHeader::decode_unidirectional(&raw)
@@ -678,10 +704,13 @@ async fn test_h3_connect_validation_with_ngtcp2_session() {
     let (cert_path, key_path) = generate_test_certs();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -777,10 +806,13 @@ async fn test_h3_error_code_conversion_with_ngtcp2() {
     let (cert_path, key_path) = generate_test_certs();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -871,10 +903,13 @@ async fn test_h3_session_lifecycle_with_ngtcp2() {
     let (cert_path, key_path) = generate_test_certs();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -983,10 +1018,13 @@ async fn test_h3_stream_byte_tracking_with_ngtcp2() {
     let (cert_path, key_path) = generate_test_certs();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -1148,10 +1186,13 @@ async fn test_h3_all_capsule_types_over_ngtcp2() {
     let data_received_clone = data_received.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -1166,7 +1207,10 @@ async fn test_h3_all_capsule_types_over_ngtcp2() {
                                 return true;
                             }
                             Http3Event::WebTransportData { data, .. } => {
-                                received_data_clone.lock().unwrap().extend_from_slice(data);
+                                received_data_clone
+                                    .lock()
+                                    .expect("test must succeed")
+                                    .extend_from_slice(data);
                                 data_received_clone.store(true, Ordering::SeqCst);
                             }
                             _ => {}
@@ -1252,7 +1296,7 @@ async fn test_h3_all_capsule_types_over_ngtcp2() {
     );
 
     // 受信バイト列から全 Capsule を順次デコード
-    let raw = received_data.lock().unwrap();
+    let raw = received_data.lock().expect("test must succeed");
     let mut offset = 0;
     let mut decoded_capsules = Vec::new();
 
@@ -1288,10 +1332,13 @@ async fn test_h3_multiple_datagrams_roundtrip_over_ngtcp2() {
     let received_datagrams_clone = received_datagrams.clone();
 
     // サーバーを起動
-    let mut server =
-        ServerWebTransportSession::bind("127.0.0.1:0".parse().unwrap(), &cert_path, &key_path)
-            .await
-            .expect("サーバー作成失敗");
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
 
     let server_addr = server.local_addr();
 
@@ -1317,7 +1364,10 @@ async fn test_h3_multiple_datagrams_roundtrip_over_ngtcp2() {
 
                 if let Some(addr) = client_addr {
                     while let Some(data) = server.recv_datagram_for(&addr) {
-                        received_datagrams_clone.lock().unwrap().push(data);
+                        received_datagrams_clone
+                            .lock()
+                            .expect("test must succeed")
+                            .push(data);
                     }
                 }
             }
@@ -1360,7 +1410,7 @@ async fn test_h3_multiple_datagrams_roundtrip_over_ngtcp2() {
 
     match client_result {
         Ok(session_id) => {
-            let datagrams = received_datagrams.lock().unwrap();
+            let datagrams = received_datagrams.lock().expect("test must succeed");
             assert!(
                 !datagrams.is_empty(),
                 "サーバーが少なくとも 1 個の DATAGRAM を受信するべき"
@@ -1368,7 +1418,8 @@ async fn test_h3_multiple_datagrams_roundtrip_over_ngtcp2() {
 
             // 受信した各ペイロードで Datagram エンコード/デコードのラウンドトリップを検証
             for payload in datagrams.iter() {
-                let datagram = Datagram::new(session_id as u64, payload.clone()).unwrap();
+                let datagram =
+                    Datagram::new(session_id as u64, payload.clone()).expect("test must succeed");
 
                 // Quarter Stream ID の検証
                 assert_eq!(

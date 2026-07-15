@@ -1065,7 +1065,7 @@ mod tests {
         // 増加は OK
         session
             .process_capsule(&Capsule::MaxData { maximum: 1000 })
-            .unwrap();
+            .expect("test must succeed");
         assert_eq!(session.remote_limits().max_data, 1000);
 
         // 減少はエラー
@@ -1084,7 +1084,7 @@ mod tests {
                 bidirectional: true,
                 maximum: 100,
             })
-            .unwrap();
+            .expect("test must succeed");
         assert_eq!(session.remote_limits().max_streams_bidi, 100);
 
         // 単方向ストリーム
@@ -1093,7 +1093,7 @@ mod tests {
                 bidirectional: false,
                 maximum: 50,
             })
-            .unwrap();
+            .expect("test must succeed");
         assert_eq!(session.remote_limits().max_streams_uni, 50);
     }
 
@@ -1141,7 +1141,7 @@ mod tests {
 
         session
             .process_capsule(&Capsule::MaxData { maximum: 1000 })
-            .unwrap();
+            .expect("test must succeed");
 
         // 無効時は無視される
         assert_eq!(session.remote_limits().max_data, 0);
@@ -1274,7 +1274,7 @@ mod tests {
                 error_code: 0,
                 message: String::new(),
             })
-            .unwrap();
+            .expect("test must succeed");
 
         assert!(session.is_close_session_received());
         assert!(session.is_closed());
@@ -1304,7 +1304,7 @@ mod tests {
                 error_code: 1,
                 message: "error".to_string(),
             })
-            .unwrap();
+            .expect("test must succeed");
         assert!(session.is_close_session_received());
 
         // CONNECT ストリームが再度クローズされても既に受信済みフラグは変わらない
@@ -1384,7 +1384,7 @@ mod tests {
                 bidirectional: false,
                 maximum: 10,
             })
-            .unwrap();
+            .expect("test must succeed");
 
         // 値が減少した場合はセッションエラー
         let result = session.process_capsule(&Capsule::MaxStreams {
@@ -1592,7 +1592,7 @@ mod tests {
                 bidirectional: true,
                 maximum: 2,
             })
-            .unwrap();
+            .expect("test must succeed");
 
         // もう 1 本開ける
         assert!(session.try_open_stream(true));

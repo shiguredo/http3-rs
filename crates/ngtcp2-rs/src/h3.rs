@@ -15,7 +15,7 @@ pub struct Http3Connection {
     // Box で VecDeque のメタデータをヒープに固定し、
     // Http3Connection が move されてもポインタが無効にならないことを保証する。
     // VecDeque で FIFO 順序を保証する。
-    #[allow(clippy::box_collection)]
+    #[expect(clippy::box_collection)]
     events: Box<VecDeque<Http3Event>>,
     // コールバック用のユーザーデータ
     user_data: Box<Http3UserData>,

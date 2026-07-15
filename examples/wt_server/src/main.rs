@@ -209,7 +209,8 @@ async fn handle_connection(
             let len_size = payload_len.encoded_len();
             let len_start = buf.len();
             buf.resize(len_start + len_size, 0);
-            shiguredo_http3::varint::encode(&mut buf[len_start..], payload_len).unwrap();
+            shiguredo_http3::varint::encode(&mut buf[len_start..], payload_len)
+                .expect("buffer sized for VarInt");
             buf.extend_from_slice(&capsule_bytes);
         }
 
@@ -578,7 +579,7 @@ fn parse_args() -> Args {
         .default("127.0.0.1:4443")
         .take(&mut args)
         .then(|o| Ok::<_, std::convert::Infallible>(o.value().to_string()))
-        .unwrap();
+        .expect("listen option conversion is infallible");
 
     let reject_connect: bool = noargs::flag("reject-connect")
         .doc("Reject every WebTransport CONNECT with 404 (for testing WtSessionRequest::reject)")

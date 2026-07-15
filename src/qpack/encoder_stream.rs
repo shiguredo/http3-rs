@@ -425,7 +425,7 @@ mod tests {
     fn test_encode_set_capacity() {
         let mut stream = EncoderStream::new();
         stream.set_max_table_capacity(4096);
-        stream.encode_set_capacity(220).unwrap();
+        stream.encode_set_capacity(220).expect("test must succeed");
 
         // 001xxxxx with 5-bit prefix
         // 220 = 31 + 189, 189 = 0xbd
@@ -462,7 +462,7 @@ mod tests {
         // Static table index 0 (:authority), value "www.example.com"
         stream
             .encode_insert_with_name_ref(true, 0, b"www.example.com")
-            .unwrap();
+            .expect("test must succeed");
 
         let data = stream.get_data();
         // 0xc0 = 11000000 (static, index 0)
@@ -494,7 +494,7 @@ mod tests {
         stream.set_max_table_capacity(4096);
         stream
             .encode_insert_with_literal_name(b"custom-key", b"custom-value")
-            .unwrap();
+            .expect("test must succeed");
 
         let data = stream.get_data();
         // 01xxxxxx prefix
@@ -505,7 +505,7 @@ mod tests {
     fn test_encode_duplicate() {
         let mut stream = EncoderStream::new();
         stream.set_max_table_capacity(4096);
-        stream.encode_duplicate(5).unwrap();
+        stream.encode_duplicate(5).expect("test must succeed");
 
         // 000xxxxx with 5-bit prefix
         assert_eq!(stream.get_data(), &[0x05]);
@@ -525,7 +525,10 @@ mod tests {
         data.extend_from_slice(b"www.example.com");
         receiver.receive(&data);
 
-        let instruction = receiver.process(&mut table).unwrap().unwrap();
+        let instruction = receiver
+            .process(&mut table)
+            .expect("test must succeed")
+            .expect("test must succeed");
         match instruction {
             EncoderInstruction::InsertWithNameReference {
                 is_static,
@@ -541,7 +544,7 @@ mod tests {
 
         // テーブルにエントリが追加されている
         assert_eq!(table.len(), 1);
-        let entry = table.get_by_absolute_index(0).unwrap();
+        let entry = table.get_by_absolute_index(0).expect("test must succeed");
         assert_eq!(entry.name, b":authority");
         assert_eq!(entry.value, b"www.example.com");
     }

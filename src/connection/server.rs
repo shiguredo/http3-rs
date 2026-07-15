@@ -156,10 +156,10 @@ mod tests {
     #[test]
     fn test_server_connection() {
         let mut server = ServerConnection::with_default_settings();
-        server.set_control_stream_id(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
 
         // 制御ストリームの送信データを取得
-        let (data, fin) = server.get_stream_data(3).unwrap();
+        let (data, fin) = server.get_stream_data(3).expect("test must succeed");
         assert!(!data.is_empty());
         assert!(!fin);
     }

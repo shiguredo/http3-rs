@@ -11,7 +11,7 @@ mod h3;
 mod types;
 pub mod varint;
 
-pub use config::{Http3SettingsExt, TransportParamsExt};
+pub use config::{Http3Settings, TransportParams};
 pub use conn::{Connection, Datagram, StreamData};
 pub use crypto::{TlsContext, TlsSession};
 pub use error::{Error, Result};
@@ -20,10 +20,6 @@ pub use types::{
     ConnectionId, Header, Http3Event, PacketInfo, PathInfo, QuicVersion, SessionId,
     StreamDirection, StreamId, StreamType,
 };
-
-// ngtcp2-sys / nghttp3-sys の型を再エクスポート
-pub use nghttp3_sys::{nghttp3_settings, nghttp3_vec};
-pub use ngtcp2_sys::ngtcp2_transport_params;
 
 /// ngtcp2 のバージョン文字列を取得
 pub fn ngtcp2_version() -> &'static str {
@@ -69,14 +65,14 @@ mod tests {
 
     #[test]
     fn test_connection_id_new() {
-        let cid = ConnectionId::new(&[1, 2, 3, 4]).unwrap();
+        let cid = ConnectionId::new(&[1, 2, 3, 4]).expect("valid connection id");
         assert_eq!(cid.len(), 4);
         assert_eq!(cid.as_bytes(), &[1, 2, 3, 4]);
     }
 
     #[test]
     fn test_connection_id_random() {
-        let cid = ConnectionId::random(16).unwrap();
+        let cid = ConnectionId::random(16).expect("random connection id");
         assert_eq!(cid.len(), 16);
     }
 
@@ -130,28 +126,28 @@ mod tests {
 
     #[test]
     fn test_transport_params_default() {
-        let params = ngtcp2_transport_params::default_params();
+        let params = TransportParams::new().into_raw();
         assert_eq!(params.initial_max_streams_bidi, 100);
         assert_eq!(params.initial_max_data, 10 * 1024 * 1024);
     }
 
     #[test]
     fn test_http3_settings_default() {
-        let settings = nghttp3_settings::default_settings();
+        let settings = Http3Settings::new().into_raw();
         assert_eq!(settings.max_field_section_size, 64 * 1024);
         assert_eq!(settings.enable_connect_protocol, 0);
     }
 
     #[test]
     fn test_http3_settings_webtransport() {
-        let settings = nghttp3_settings::default_settings().with_webtransport();
+        let settings = Http3Settings::new().with_webtransport().into_raw();
         assert_eq!(settings.enable_connect_protocol, 1);
         assert_eq!(settings.h3_datagram, 1);
     }
 
     #[test]
     fn test_transport_params_datagram() {
-        let params = ngtcp2_transport_params::default_params().with_datagram(65535);
+        let params = TransportParams::new().with_datagram(65535).into_raw();
         assert_eq!(params.max_datagram_frame_size, 65535);
     }
 

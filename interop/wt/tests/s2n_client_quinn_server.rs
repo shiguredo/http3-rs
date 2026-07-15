@@ -15,7 +15,7 @@ use tokio_s2n_quic::{ClientConfig, DraftVersion, WtClient};
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_webtransport_session() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
     let (port_tx, port_rx) = std::sync::mpsc::channel();
     let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
@@ -29,14 +29,18 @@ async fn test_webtransport_session() {
         }
     });
 
-    let port = port_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let port = port_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("test must succeed");
     eprintln!("[test] server port: {}", port);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // s2n-quic クライアントで WT セッション確立
     let client_result = timeout(Duration::from_secs(10), async {
-        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port)
+            .parse()
+            .expect("test must succeed");
         let config = ClientConfig::new(addr, "localhost")
             .ca_cert(&cert_pem_for_client)
             .enable_webtransport(interop_wt::test_wt_settings())

@@ -8,12 +8,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use nghttp3_sys::nghttp3_vec;
-use ngtcp2_sys::ngtcp2_transport_params;
 use rcgen::{CertificateParams, KeyPair};
 
 use shiguredo_ngtcp2::{
-    Connection, ConnectionId, Header, Http3Connection, Http3Event, Http3SettingsExt, PacketInfo,
-    TlsContext, TransportParamsExt,
+    Connection, ConnectionId, Header, Http3Connection, Http3Event, Http3Settings, PacketInfo,
+    TlsContext, TransportParams,
 };
 
 /// テスト用の証明書と秘密鍵を動的に生成
@@ -51,7 +50,7 @@ fn timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .expect("test must succeed")
         .as_nanos() as u64
 }
 
@@ -107,9 +106,7 @@ fn complete_quic_handshake(
 /// HTTP/3 クライアント接続を作成する
 #[test]
 fn test_h3_client_creation() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings();
+    let settings = Http3Settings::new().into_raw();
     let h3_conn = Http3Connection::client_new(&settings);
 
     assert!(h3_conn.is_ok(), "HTTP/3 クライアント接続を作成できるべき");
@@ -118,9 +115,7 @@ fn test_h3_client_creation() {
 /// HTTP/3 サーバー接続を作成する
 #[test]
 fn test_h3_server_creation() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings();
+    let settings = Http3Settings::new().into_raw();
     let h3_conn = Http3Connection::server_new(&settings);
 
     assert!(h3_conn.is_ok(), "HTTP/3 サーバー接続を作成できるべき");
@@ -129,9 +124,7 @@ fn test_h3_server_creation() {
 /// HTTP/3 制御ストリームとQPACK ストリームのバインド
 #[test]
 fn test_h3_stream_binding() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings();
+    let settings = Http3Settings::new().into_raw();
     let mut h3_conn = Http3Connection::client_new(&settings).expect("HTTP/3 接続作成失敗");
 
     // 制御ストリームをバインド (クライアント単方向ストリーム: 2, 6, 10, ...)
@@ -150,14 +143,14 @@ fn test_h3_stream_binding() {
 /// HTTP/3 リクエスト送信テスト
 #[test]
 fn test_h3_submit_request() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings();
+    let settings = Http3Settings::new().into_raw();
     let mut h3_conn = Http3Connection::client_new(&settings).expect("HTTP/3 接続作成失敗");
 
     // 制御ストリームと QPACK ストリームをバインド
-    h3_conn.bind_control_stream(2).unwrap();
-    h3_conn.bind_qpack_streams(6, 10).unwrap();
+    h3_conn.bind_control_stream(2).expect("test must succeed");
+    h3_conn
+        .bind_qpack_streams(6, 10)
+        .expect("test must succeed");
 
     // リクエストヘッダー
     let headers = vec![
@@ -198,15 +191,15 @@ fn test_h3_submit_request() {
 /// HTTP/3 レスポンス送信テスト
 #[test]
 fn test_h3_submit_response() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings();
+    let settings = Http3Settings::new().into_raw();
     let mut h3_conn = Http3Connection::server_new(&settings).expect("HTTP/3 接続作成失敗");
 
     // 制御ストリームと QPACK ストリームをバインド (サーバー側)
     // サーバー開始の単方向ストリーム: 3, 7, 11, ...
-    h3_conn.bind_control_stream(3).unwrap();
-    h3_conn.bind_qpack_streams(7, 11).unwrap();
+    h3_conn.bind_control_stream(3).expect("test must succeed");
+    h3_conn
+        .bind_qpack_streams(7, 11)
+        .expect("test must succeed");
 
     // レスポンスヘッダー
     let headers = vec![Header::status(200)];
@@ -223,9 +216,7 @@ fn test_h3_submit_response() {
 /// HTTP/3 イベントポーリングテスト
 #[test]
 fn test_h3_poll_event() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings();
+    let settings = Http3Settings::new().into_raw();
     let mut h3_conn = Http3Connection::client_new(&settings).expect("HTTP/3 接続作成失敗");
 
     // 初期状態ではイベントがない
@@ -239,12 +230,12 @@ fn test_quic_h3_integration() {
     let (cert_path, key_path) = generate_test_certs();
 
     // 接続 ID を生成
-    let client_dcid = ConnectionId::random(16).unwrap();
-    let client_scid = ConnectionId::random(16).unwrap();
-    let server_scid = ConnectionId::random(16).unwrap();
+    let client_dcid = ConnectionId::random(16).expect("test must succeed");
+    let client_scid = ConnectionId::random(16).expect("test must succeed");
+    let server_scid = ConnectionId::random(16).expect("test must succeed");
 
-    let client_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
-    let server_addr: SocketAddr = "127.0.0.1:4433".parse().unwrap();
+    let client_addr: SocketAddr = "127.0.0.1:12345".parse().expect("test must succeed");
+    let server_addr: SocketAddr = "127.0.0.1:4433".parse().expect("test must succeed");
 
     let ts = timestamp();
 
@@ -254,7 +245,7 @@ fn test_quic_h3_integration() {
     let client_tls_session = client_tls_ctx
         .create_session()
         .expect("TLS セッション作成失敗");
-    let client_params = ngtcp2_transport_params::default_params().with_datagram(65535);
+    let client_params = TransportParams::new().with_datagram(65535).into_raw();
 
     let mut quic_client = Connection::client_new(
         &client_dcid,
@@ -274,9 +265,10 @@ fn test_quic_h3_integration() {
     let server_tls_session = server_tls_ctx
         .create_session()
         .expect("TLS セッション作成失敗");
-    let server_params = ngtcp2_transport_params::default_params()
+    let server_params = TransportParams::new()
         .with_datagram(65535)
-        .with_original_dcid(&client_dcid);
+        .with_original_dcid(&client_dcid)
+        .into_raw();
 
     let mut quic_server = Connection::server_new(
         &client_scid,
@@ -301,9 +293,8 @@ fn test_quic_h3_integration() {
     eprintln!("QUIC ハンドシェイク完了");
 
     // HTTP/3 接続を作成
-    use nghttp3_sys::nghttp3_settings;
 
-    let h3_settings = nghttp3_settings::default_settings();
+    let h3_settings = Http3Settings::new().into_raw();
     let mut h3_client =
         Http3Connection::client_new(&h3_settings).expect("HTTP/3 クライアント作成失敗");
     let mut h3_server = Http3Connection::server_new(&h3_settings).expect("HTTP/3 サーバー作成失敗");
@@ -401,14 +392,14 @@ fn test_quic_h3_integration() {
 /// HTTP/3 ヘッダー受信テスト
 #[test]
 fn test_h3_headers_receive() {
-    use nghttp3_sys::nghttp3_settings;
-
-    let settings = nghttp3_settings::default_settings();
+    let settings = Http3Settings::new().into_raw();
     let mut h3_server = Http3Connection::server_new(&settings).expect("HTTP/3 サーバー作成失敗");
 
     // 制御ストリームと QPACK ストリームをバインド
-    h3_server.bind_control_stream(3).unwrap();
-    h3_server.bind_qpack_streams(7, 11).unwrap();
+    h3_server.bind_control_stream(3).expect("test must succeed");
+    h3_server
+        .bind_qpack_streams(7, 11)
+        .expect("test must succeed");
 
     // HTTP/3 HEADERS フレームのモックデータ
     // 実際のフレームデータは QPACK エンコードされているため、

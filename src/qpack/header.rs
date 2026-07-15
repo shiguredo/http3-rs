@@ -4,7 +4,7 @@
 //!
 //! # 二段の構築 API
 //!
-//! - `Header::new(name, value).unwrap()`: ランタイム値の検査つき構築 (`Result<Self, HeaderError>`)
+//! - `Header::new(name, value).expect("infallible: implementation bug if this panics")`: ランタイム値の検査つき構築 (`Result<Self, HeaderError>`)
 //! - `Header::from_static(name, value)`: `&'static [u8]` の `const fn` 構築。
 //!   不正リテラルは `const` / `static` 宣言内ではコンパイル時に検出される
 //!
@@ -32,7 +32,6 @@
 use std::borrow::Cow;
 
 /// ヘッダーフィールドの構築時検査エラー
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeaderError {
     /// field-name が空
@@ -579,14 +578,14 @@ mod tests {
 
     #[test]
     fn test_new_simple_header() {
-        let h = Header::new(b":method", b"GET").unwrap();
+        let h = Header::new(b":method", b"GET").expect("test must succeed");
         assert_eq!(h.name(), b":method");
         assert_eq!(h.value(), b"GET");
     }
 
     #[test]
     fn test_new_empty_value_allowed() {
-        let h = Header::new(b":authority", b"").unwrap();
+        let h = Header::new(b":authority", b"").expect("test must succeed");
         assert_eq!(h.value(), b"");
     }
 
@@ -699,7 +698,7 @@ mod tests {
 
     #[test]
     fn test_size() {
-        let h = Header::new(b":method", b"GET").unwrap();
+        let h = Header::new(b":method", b"GET").expect("test must succeed");
         assert_eq!(h.size(), 7 + 3 + 32);
     }
 

@@ -8,28 +8,28 @@ use shiguredo_http3::varint;
 prop_compose! {
     /// 1 バイトエンコード範囲の値を生成 (0-63)
     fn one_byte_value()(value in 0u64..64) -> VarInt {
-        VarInt::new(value).unwrap()
+        VarInt::new(value).expect("test must succeed")
     }
 }
 
 prop_compose! {
     /// 2 バイトエンコード範囲の値を生成 (64-16383)
     fn two_byte_value()(value in 64u64..16384) -> VarInt {
-        VarInt::new(value).unwrap()
+        VarInt::new(value).expect("test must succeed")
     }
 }
 
 prop_compose! {
     /// 4 バイトエンコード範囲の値を生成 (16384-1073741823)
     fn four_byte_value()(value in 16384u64..1073741824) -> VarInt {
-        VarInt::new(value).unwrap()
+        VarInt::new(value).expect("test must succeed")
     }
 }
 
 prop_compose! {
     /// 8 バイトエンコード範囲の値を生成 (1073741824-MAX)
     fn eight_byte_value()(value in 1073741824u64..=VarInt::MAX.get()) -> VarInt {
-        VarInt::new(value).unwrap()
+        VarInt::new(value).expect("test must succeed")
     }
 }
 
@@ -38,8 +38,8 @@ proptest! {
     #[test]
     fn prop_roundtrip_preserves_value(value in valid_varint()) {
         let mut buf = [0u8; 8];
-        let encoded_len = varint::encode(&mut buf, value).unwrap();
-        let (decoded, decoded_len) = varint::decode(&buf).unwrap();
+        let encoded_len = varint::encode(&mut buf, value).expect("test must succeed");
+        let (decoded, decoded_len) = varint::decode(&buf).expect("test must succeed");
 
         prop_assert_eq!(value, decoded, "Roundtrip failed for value {}", value);
         prop_assert_eq!(encoded_len, decoded_len, "Length mismatch for value {}", value);
@@ -50,7 +50,7 @@ proptest! {
     fn prop_encoded_len_matches_actual(value in valid_varint()) {
         let expected_len = value.encoded_len();
         let mut buf = [0u8; 8];
-        let actual_len = varint::encode(&mut buf, value).unwrap();
+        let actual_len = varint::encode(&mut buf, value).expect("test must succeed");
 
         prop_assert_eq!(expected_len, actual_len, "encoded_len mismatch for {}", value);
     }
@@ -85,7 +85,7 @@ proptest! {
         prop_assert_eq!(len, 1, "Value {} should encode to 1 byte", value);
 
         let mut buf = [0u8; 8];
-        varint::encode(&mut buf, value).unwrap();
+        varint::encode(&mut buf, value).expect("test must succeed");
         // 上位 2 ビットは 00
         prop_assert_eq!(buf[0] >> 6, 0, "1-byte prefix should be 00");
     }
@@ -97,7 +97,7 @@ proptest! {
         prop_assert_eq!(len, 2, "Value {} should encode to 2 bytes", value);
 
         let mut buf = [0u8; 8];
-        varint::encode(&mut buf, value).unwrap();
+        varint::encode(&mut buf, value).expect("test must succeed");
         // 上位 2 ビットは 01
         prop_assert_eq!(buf[0] >> 6, 1, "2-byte prefix should be 01");
     }
@@ -109,7 +109,7 @@ proptest! {
         prop_assert_eq!(len, 4, "Value {} should encode to 4 bytes", value);
 
         let mut buf = [0u8; 8];
-        varint::encode(&mut buf, value).unwrap();
+        varint::encode(&mut buf, value).expect("test must succeed");
         // 上位 2 ビットは 10
         prop_assert_eq!(buf[0] >> 6, 2, "4-byte prefix should be 10");
     }
@@ -121,7 +121,7 @@ proptest! {
         prop_assert_eq!(len, 8, "Value {} should encode to 8 bytes", value);
 
         let mut buf = [0u8; 8];
-        varint::encode(&mut buf, value).unwrap();
+        varint::encode(&mut buf, value).expect("test must succeed");
         // 上位 2 ビットは 11
         prop_assert_eq!(buf[0] >> 6, 3, "8-byte prefix should be 11");
     }
@@ -130,8 +130,8 @@ proptest! {
     #[test]
     fn prop_peek_len_matches_decode_len(value in valid_varint()) {
         let mut buf = [0u8; 8];
-        let encoded_len = varint::encode(&mut buf, value).unwrap();
-        let peeked_len = varint::peek_len(&buf).unwrap();
+        let encoded_len = varint::encode(&mut buf, value).expect("test must succeed");
+        let peeked_len = varint::peek_len(&buf).expect("test must succeed");
 
         prop_assert_eq!(encoded_len, peeked_len, "peek_len mismatch for {}", value);
     }
@@ -140,7 +140,7 @@ proptest! {
     #[test]
     fn prop_encoding_is_big_endian(value in two_byte_value()) {
         let mut buf = [0u8; 8];
-        varint::encode(&mut buf, value).unwrap();
+        varint::encode(&mut buf, value).expect("test must succeed");
 
         // 2 バイトエンコードの場合、値は 0x4000 | value として格納
         let raw = value.get();
@@ -178,7 +178,7 @@ proptest! {
         let result = VarInt::try_from(value);
         if value <= VarInt::MAX.get() {
             prop_assert!(result.is_ok());
-            prop_assert_eq!(result.unwrap().get(), value);
+            prop_assert_eq!(result.expect("test must succeed").get(), value);
         } else {
             prop_assert!(result.is_err());
         }
@@ -194,7 +194,7 @@ proptest! {
     /// ランタイム検査のロジック一致)
     #[test]
     fn prop_from_static_matches_new(value in 0u64..=VarInt::MAX.get()) {
-        let via_new = VarInt::new(value).unwrap();
+        let via_new = VarInt::new(value).expect("test must succeed");
         let via_static = VarInt::from_static(value);
         prop_assert_eq!(via_new, via_static);
     }

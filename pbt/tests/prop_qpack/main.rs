@@ -159,7 +159,7 @@ proptest! {
     fn prop_set_capacity_roundtrip(capacity in 1u64..=4096) {
         let mut sender = EncoderStream::new();
         sender.set_max_table_capacity(4096);
-        sender.encode_set_capacity(capacity).unwrap();
+        sender.encode_set_capacity(capacity).expect("test must succeed");
         let encoded = sender.get_data().to_vec();
 
         let mut receiver = EncoderStreamReceiver::new();
@@ -167,7 +167,7 @@ proptest! {
         receiver.receive(&encoded);
 
         let mut table = DynamicTable::new();
-        let instruction = receiver.process(&mut table).unwrap();
+        let instruction = receiver.process(&mut table).expect("test must succeed");
 
         prop_assert_eq!(
             instruction,
@@ -184,7 +184,7 @@ proptest! {
     ) {
         let mut sender = EncoderStream::new();
         sender.set_max_table_capacity(4096);
-        sender.encode_insert_with_literal_name(&name, &value).unwrap();
+        sender.encode_insert_with_literal_name(&name, &value).expect("test must succeed");
         let encoded = sender.get_data().to_vec();
 
         let mut receiver = EncoderStreamReceiver::new();
@@ -192,7 +192,7 @@ proptest! {
         receiver.receive(&encoded);
 
         let mut table = DynamicTable::with_capacity(4096);
-        let instruction = receiver.process(&mut table).unwrap();
+        let instruction = receiver.process(&mut table).expect("test must succeed");
 
         if let Some(EncoderInstruction::InsertWithLiteralName { name: n, value: v }) = instruction {
             prop_assert_eq!(n, name, "Name mismatch");
@@ -207,7 +207,7 @@ proptest! {
     fn prop_duplicate_roundtrip(index in 0u64..10) {
         let mut sender = EncoderStream::new();
         sender.set_max_table_capacity(4096);
-        sender.encode_duplicate(index).unwrap();
+        sender.encode_duplicate(index).expect("test must succeed");
         let encoded = sender.get_data().to_vec();
 
         let mut receiver = EncoderStreamReceiver::new();
@@ -220,7 +220,7 @@ proptest! {
             table.insert(format!("name{}", i).into_bytes(), b"value".to_vec());
         }
 
-        let instruction = receiver.process(&mut table).unwrap();
+        let instruction = receiver.process(&mut table).expect("test must succeed");
 
         prop_assert_eq!(
             instruction,
@@ -243,7 +243,7 @@ proptest! {
 
         let mut receiver = DecoderStreamReceiver::new();
         receiver.receive(&encoded);
-        let instruction = receiver.process(u64::MAX).unwrap();
+        let instruction = receiver.process(u64::MAX).expect("test must succeed");
 
         prop_assert_eq!(
             instruction,
@@ -260,7 +260,7 @@ proptest! {
 
         let mut receiver = DecoderStreamReceiver::new();
         receiver.receive(&encoded);
-        let instruction = receiver.process(u64::MAX).unwrap();
+        let instruction = receiver.process(u64::MAX).expect("test must succeed");
 
         prop_assert_eq!(
             instruction,
@@ -277,7 +277,7 @@ proptest! {
 
         let mut receiver = DecoderStreamReceiver::new();
         receiver.receive(&encoded);
-        let instruction = receiver.process(u64::MAX).unwrap();
+        let instruction = receiver.process(u64::MAX).expect("test must succeed");
 
         prop_assert_eq!(
             instruction,
@@ -299,7 +299,7 @@ proptest! {
             receiver.receive(sender.get_data());
             sender.consume_data(sender.get_data().len());
 
-            let _ = receiver.process(u64::MAX).unwrap();
+            let _ = receiver.process(u64::MAX).expect("test must succeed");
             expected_count += inc;
 
             prop_assert_eq!(
@@ -326,8 +326,8 @@ proptest! {
         sender.set_max_table_capacity(4096);
 
         // 複数の命令をエンコード
-        sender.encode_set_capacity(1024).unwrap();
-        sender.encode_insert_with_literal_name(&name, &value).unwrap();
+        sender.encode_set_capacity(1024).expect("test must succeed");
+        sender.encode_insert_with_literal_name(&name, &value).expect("test must succeed");
 
         let encoded = sender.get_data().to_vec();
 
@@ -338,7 +338,7 @@ proptest! {
         let mut table = DynamicTable::new();
 
         // 最初の命令: Set Capacity
-        let inst1 = receiver.process(&mut table).unwrap();
+        let inst1 = receiver.process(&mut table).expect("test must succeed");
         if let Some(EncoderInstruction::SetDynamicTableCapacity { capacity }) = inst1 {
             prop_assert_eq!(capacity, 1024);
         } else {
@@ -346,7 +346,7 @@ proptest! {
         }
 
         // 2 番目の命令: Insert with Literal Name
-        let inst2 = receiver.process(&mut table).unwrap();
+        let inst2 = receiver.process(&mut table).expect("test must succeed");
         let is_insert_literal = matches!(inst2, Some(EncoderInstruction::InsertWithLiteralName { .. }));
         prop_assert!(is_insert_literal, "Expected InsertWithLiteralName instruction");
 
@@ -372,26 +372,26 @@ proptest! {
         let mut receiver = DecoderStreamReceiver::new();
         receiver.receive(&encoded);
 
-        let inst1 = receiver.process(u64::MAX).unwrap();
+        let inst1 = receiver.process(u64::MAX).expect("test must succeed");
         prop_assert_eq!(
             inst1,
             Some(DecoderInstruction::SectionAcknowledgment { stream_id: stream_id1 })
         );
 
-        let inst2 = receiver.process(u64::MAX).unwrap();
+        let inst2 = receiver.process(u64::MAX).expect("test must succeed");
         prop_assert_eq!(
             inst2,
             Some(DecoderInstruction::StreamCancellation { stream_id: stream_id2 })
         );
 
-        let inst3 = receiver.process(u64::MAX).unwrap();
+        let inst3 = receiver.process(u64::MAX).expect("test must succeed");
         prop_assert_eq!(
             inst3,
             Some(DecoderInstruction::InsertCountIncrement { increment })
         );
 
         // バッファが空
-        let inst4 = receiver.process(u64::MAX).unwrap();
+        let inst4 = receiver.process(u64::MAX).expect("test must succeed");
         prop_assert!(inst4.is_none());
     }
 }
@@ -419,7 +419,7 @@ proptest! {
         let mut encoded = vec![0u8; encoded_len];
         huffman::encode(&mut encoded, &data);
 
-        let decoded = huffman::decode(&encoded).unwrap();
+        let decoded = huffman::decode(&encoded).expect("test must succeed");
         prop_assert_eq!(decoded, data);
     }
 
@@ -428,7 +428,7 @@ proptest! {
     fn prop_huffman_encoded_len_accurate(data in printable_ascii()) {
         let predicted_len = huffman::encoded_len(&data);
         let mut encoded = vec![0u8; predicted_len + 10];
-        let actual_len = huffman::encode(&mut encoded, &data).unwrap();
+        let actual_len = huffman::encode(&mut encoded, &data).expect("test must succeed");
 
         prop_assert_eq!(predicted_len, actual_len);
     }
@@ -464,9 +464,9 @@ proptest! {
         ];
 
         let mut buf = vec![0u8; 1024];
-        let encoded_len = encoder.encode(&mut buf, &headers).unwrap();
+        let encoded_len = encoder.encode(&mut buf, &headers).expect("test must succeed");
 
-        let decoded = decoder.decode(&buf[..encoded_len]).unwrap();
+        let decoded = decoder.decode(&buf[..encoded_len]).expect("test must succeed");
 
         prop_assert_eq!(decoded.len(), 2);
         prop_assert_eq!(&decoded[0].name(), b":method");
@@ -487,9 +487,9 @@ proptest! {
         let headers = vec![wire_header(&name, &value)];
 
         let mut buf = vec![0u8; 1024];
-        let encoded_len = encoder.encode(&mut buf, &headers).unwrap();
+        let encoded_len = encoder.encode(&mut buf, &headers).expect("test must succeed");
 
-        let decoded = decoder.decode(&buf[..encoded_len]).unwrap();
+        let decoded = decoder.decode(&buf[..encoded_len]).expect("test must succeed");
 
         prop_assert_eq!(decoded.len(), 1);
         prop_assert_eq!(&decoded[0].name(), &name);
@@ -513,9 +513,9 @@ proptest! {
             .collect();
 
         let mut buf = vec![0u8; 4096];
-        let encoded_len = encoder.encode(&mut buf, &headers).unwrap();
+        let encoded_len = encoder.encode(&mut buf, &headers).expect("test must succeed");
 
-        let decoded = decoder.decode(&buf[..encoded_len]).unwrap();
+        let decoded = decoder.decode(&buf[..encoded_len]).expect("test must succeed");
 
         prop_assert_eq!(decoded.len(), headers.len());
         for (orig, dec) in headers_data.iter().zip(decoded.iter()) {
@@ -573,7 +573,7 @@ proptest! {
         value in valid_header_value(),
     ) {
         let mut table = DynamicTable::with_capacity(4096);
-        let idx = table.insert(name.clone(), value.clone()).unwrap();
+        let idx = table.insert(name.clone(), value.clone()).expect("test must succeed");
 
         let (exact, name_only) = table.find_entry(&name, &value);
 
@@ -589,7 +589,7 @@ proptest! {
         value2 in valid_header_value(),
     ) {
         let mut table = DynamicTable::with_capacity(4096);
-        let idx = table.insert(name.clone(), value1.clone()).unwrap();
+        let idx = table.insert(name.clone(), value1.clone()).expect("test must succeed");
 
         // 異なる値で検索
         let (exact, name_only) = table.find_entry(&name, &value2);
@@ -609,13 +609,13 @@ proptest! {
         value in valid_header_value(),
     ) {
         let mut table = DynamicTable::with_capacity(4096);
-        table.insert(name.clone(), value.clone()).unwrap();
+        table.insert(name.clone(), value.clone()).expect("test must succeed");
 
         // relative_index 0 は最新エントリ
-        let dup_idx = table.duplicate(0).unwrap();
+        let dup_idx = table.duplicate(0).expect("test must succeed");
 
-        let original = table.get_by_absolute_index(0).unwrap();
-        let duplicated = table.get_by_absolute_index(dup_idx).unwrap();
+        let original = table.get_by_absolute_index(0).expect("test must succeed");
+        let duplicated = table.get_by_absolute_index(dup_idx).expect("test must succeed");
 
         prop_assert_eq!(&original.name, &duplicated.name);
         prop_assert_eq!(&original.value, &duplicated.value);
@@ -641,7 +641,7 @@ proptest! {
         for entry in table.iter() {
             let retrieved = table.get_by_absolute_index(entry.absolute_index);
             prop_assert!(retrieved.is_some());
-            prop_assert_eq!(&retrieved.unwrap().name, &entry.name);
+            prop_assert_eq!(&retrieved.expect("test must succeed").name, &entry.name);
         }
     }
 
@@ -664,7 +664,7 @@ proptest! {
         // 相対インデックス 0 は最新エントリ (absolute = insert_count - 1)
         let newest = table.get_by_relative_index_encoder(0);
         prop_assert!(newest.is_some());
-        prop_assert_eq!(newest.unwrap().absolute_index, insert_count - 1);
+        prop_assert_eq!(newest.expect("test must succeed").absolute_index, insert_count - 1);
     }
 }
 
@@ -681,7 +681,7 @@ proptest! {
     ) {
         let mut sender = EncoderStream::new();
         sender.set_max_table_capacity(4096);
-        sender.encode_insert_with_name_ref(true, static_idx, &value).unwrap();
+        sender.encode_insert_with_name_ref(true, static_idx, &value).expect("test must succeed");
         let encoded = sender.get_data().to_vec();
 
         let mut receiver = EncoderStreamReceiver::new();
@@ -689,7 +689,7 @@ proptest! {
         receiver.receive(&encoded);
 
         let mut table = DynamicTable::with_capacity(4096);
-        let instruction = receiver.process(&mut table).unwrap();
+        let instruction = receiver.process(&mut table).expect("test must succeed");
 
         if let Some(EncoderInstruction::InsertWithNameReference {
             is_static,
@@ -716,7 +716,7 @@ proptest! {
     ) {
         let mut sender = EncoderStream::new();
         sender.set_max_table_capacity(4096);
-        sender.encode_insert_with_literal_name(&name, &value).unwrap();
+        sender.encode_insert_with_literal_name(&name, &value).expect("test must succeed");
         let encoded = sender.get_data().to_vec();
 
         // 1 バイトずつ受信
@@ -731,13 +731,13 @@ proptest! {
             if i < encoded.len() - 1 {
                 // 途中は Ok(None) でなければならない
                 prop_assert_eq!(
-                    result.unwrap(), None,
+                    result.expect("test must succeed"), None,
                     "Partial data at byte {} should return Ok(None)",
                     i
                 );
             } else {
                 // 最後のバイトで完全な命令が得られる
-                let instruction = result.unwrap();
+                let instruction = result.expect("test must succeed");
                 prop_assert!(instruction.is_some(), "Complete data should return instruction");
                 if let Some(EncoderInstruction::InsertWithLiteralName { name: n, value: v }) = instruction {
                     prop_assert_eq!(n, name.clone());
@@ -763,12 +763,12 @@ proptest! {
 
             if i < encoded.len() - 1 {
                 prop_assert_eq!(
-                    result.unwrap(), None,
+                    result.expect("test must succeed"), None,
                     "Partial data at byte {} should return Ok(None)",
                     i
                 );
             } else {
-                let instruction = result.unwrap();
+                let instruction = result.expect("test must succeed");
                 prop_assert_eq!(
                     instruction,
                     Some(DecoderInstruction::SectionAcknowledgment { stream_id }),
@@ -791,14 +791,14 @@ proptest! {
         let mut sender = EncoderStream::new();
         sender.set_max_table_capacity(4096);
         // 動的テーブルの relative_index 0 を参照
-        sender.encode_insert_with_name_ref(false, 0, &value2).unwrap();
+        sender.encode_insert_with_name_ref(false, 0, &value2).expect("test must succeed");
         let encoded = sender.get_data().to_vec();
 
         let mut receiver = EncoderStreamReceiver::new();
         receiver.set_max_table_capacity(4096);
         receiver.receive(&encoded);
 
-        let instruction = receiver.process(&mut table).unwrap();
+        let instruction = receiver.process(&mut table).expect("test must succeed");
 
         if let Some(EncoderInstruction::InsertWithNameReference {
             is_static,
@@ -815,7 +815,7 @@ proptest! {
 
         // テーブルに新しいエントリが追加されている
         prop_assert_eq!(table.len(), 2);
-        let new_entry = table.get_by_absolute_index(1).unwrap();
+        let new_entry = table.get_by_absolute_index(1).expect("test must succeed");
         prop_assert_eq!(&new_entry.name, &name);
         prop_assert_eq!(&new_entry.value, &value2);
     }
@@ -951,7 +951,7 @@ proptest! {
         name in valid_header_name(),
         value in valid_header_value(),
     ) {
-        let via_new = Header::new(&name, &value).unwrap();
+        let via_new = Header::new(&name, &value).expect("test must succeed");
         let static_name: &'static [u8] = Box::leak(name.clone().into_boxed_slice());
         let static_value: &'static [u8] = Box::leak(value.clone().into_boxed_slice());
         let via_static = Header::from_static(static_name, static_value);
@@ -967,7 +967,7 @@ proptest! {
         name in valid_header_name(),
         value in valid_header_value(),
     ) {
-        let via_new = Header::new(&name, &value).unwrap();
+        let via_new = Header::new(&name, &value).expect("test must succeed");
         let via_wire = wire_header(&name, &value);
         prop_assert_eq!(via_new, via_wire);
     }
@@ -980,13 +980,13 @@ proptest! {
         name in valid_header_name(),
         value in valid_header_value(),
     ) {
-        let original = Header::new(&name, &value).unwrap();
+        let original = Header::new(&name, &value).expect("test must succeed");
         let encoder = Encoder::new();
         let decoder = Decoder::new();
         let headers = vec![original.clone()];
         let mut buf = vec![0u8; 8192];
-        let encoded_len = encoder.encode(&mut buf, &headers).unwrap();
-        let decoded = decoder.decode(&buf[..encoded_len]).unwrap();
+        let encoded_len = encoder.encode(&mut buf, &headers).expect("test must succeed");
+        let decoded = decoder.decode(&buf[..encoded_len]).expect("test must succeed");
         prop_assert_eq!(decoded.len(), 1);
         prop_assert_eq!(decoded[0].name(), original.name());
         prop_assert_eq!(decoded[0].value(), original.value());

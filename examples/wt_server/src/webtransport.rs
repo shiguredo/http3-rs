@@ -264,7 +264,7 @@ impl WtSessionRequest {
         let mut decoder_send = handle.open_send_stream().await.map_err(Error::transport)?;
 
         let init_data = {
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock().expect("mutex should not be poisoned");
             let data = s.h3_conn.init_h3_streams(
                 control_send.id(),
                 encoder_send.id(),
@@ -294,7 +294,7 @@ impl WtSessionRequest {
         // s2n-quic は DATAGRAM (RFC 9221) をサポートするため max_datagram_frame_size > 0
         // reset_stream_at はピアがサポートしている場合のみ true (draft-02 では不要)
         {
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock().expect("mutex should not be poisoned");
             // TODO: ピアの transport parameters から reset_stream_at サポートを確認する
             let reset_stream_at_supported = false;
             // s2n-quic は DATAGRAM (RFC 9221) をサポートするため max_datagram_frame_size > 0
@@ -307,7 +307,7 @@ impl WtSessionRequest {
         // ── Phase 4: クライアントの制御ストリームデータを H3 に注入する ──
 
         let delayed_control_data = {
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock().expect("mutex should not be poisoned");
             s.feed_stream_only(client_control_id, &client_control_buf, false)?;
             for event in s.drain_events()? {
                 tracing::info!("WebTransport: client control stream event: {event:?}");
@@ -361,14 +361,14 @@ impl WtSessionRequest {
                             data.len()
                         );
                         {
-                            let mut s = state.lock().unwrap();
+                            let mut s = state.lock().expect("mutex should not be poisoned");
                             let _ = s.feed_stream_only(cid, &data, false);
                         }
                         notify.notify_one();
                     }
                     tracing::debug!("WebTransport: client control stream {} closed", cid);
                     {
-                        let mut s = state.lock().unwrap();
+                        let mut s = state.lock().expect("mutex should not be poisoned");
                         let _ = s.feed_stream_only(cid, &[], true);
                     }
                     notify.notify_one();
@@ -434,7 +434,7 @@ impl WtSessionRequest {
         let (mut recv_stream, send_stream) = stream.split();
 
         {
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock().expect("mutex should not be poisoned");
             let _ = s.h3_conn.feed_stream(connect_stream_id, &[], false);
             for event in s.drain_events()? {
                 tracing::debug!("WebTransport: bidi stream init event: {event:?}");
@@ -450,7 +450,10 @@ impl WtSessionRequest {
             // QPACK エンコーダーストリームのデータが先に処理されて
             // notify_one() が取りこぼされる場合に備え、毎回 drain_events を確認する
             {
-                let events = state.lock().unwrap().drain_events()?;
+                let events = state
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .drain_events()?;
                 for event in events {
                     match event {
                         Event::Header { name, value, .. } => {
@@ -499,7 +502,7 @@ impl WtSessionRequest {
                         }
                     };
                     let events = {
-                        let mut s = state.lock().unwrap();
+                        let mut s = state.lock().expect("mutex should not be poisoned");
                         s.process_stream_data(connect_stream_id, &data, fin)?
                     };
                     for event in events {
@@ -1076,7 +1079,10 @@ async fn route_uni_stream_with_initial(
         match recv_stream.receive().await {
             Ok(Some(data)) => type_buf.extend_from_slice(&data),
             Ok(None) => {
-                let _ = state.lock().unwrap().feed_stream_only(stream_id, &[], true);
+                let _ = state
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .feed_stream_only(stream_id, &[], true);
                 notify.notify_one();
                 return;
             }
@@ -1122,7 +1128,10 @@ async fn route_uni_stream(
                 }
             }
             Ok(None) => {
-                let _ = state.lock().unwrap().feed_stream_only(stream_id, &[], true);
+                let _ = state
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .feed_stream_only(stream_id, &[], true);
                 notify.notify_one();
                 return;
             }
@@ -1170,7 +1179,7 @@ async fn route_classified_stream(
                 &type_buf[..std::cmp::min(type_buf.len(), 64)]
             );
             {
-                let mut s = state.lock().unwrap();
+                let mut s = state.lock().expect("mutex should not be poisoned");
                 let _ = s.feed_stream_only(stream_id, &type_buf, false);
                 // drain_events は呼ばない: QPACK ブロック解除は drain_events 内で
                 // 遅延実行される。ここで drain すると CONNECT ヘッダー待ちループが
@@ -1179,13 +1188,13 @@ async fn route_classified_stream(
             notify.notify_one();
             while let Ok(Some(data)) = recv_stream.receive().await {
                 {
-                    let mut s = state.lock().unwrap();
+                    let mut s = state.lock().expect("mutex should not be poisoned");
                     let _ = s.feed_stream_only(stream_id, &data, false);
                 }
                 notify.notify_one();
             }
             {
-                let mut s = state.lock().unwrap();
+                let mut s = state.lock().expect("mutex should not be poisoned");
                 let _ = s.feed_stream_only(stream_id, &[], true);
             }
             notify.notify_one();

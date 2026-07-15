@@ -695,7 +695,7 @@ mod tests {
 
         // Required Insert Count (0) + Delta Base (0) + Indexed Field (17 = :method GET)
         let data = [0x00, 0x00, 0xd1]; // 0xd1 = 0xc0 | 17
-        let headers = decoder.decode(&data).unwrap();
+        let headers = decoder.decode(&data).expect("test must succeed");
 
         assert_eq!(headers.len(), 1);
         assert_eq!(headers[0].name(), b":method");
@@ -716,7 +716,7 @@ mod tests {
         // 0x03 = length 3 (not huffman)
         // "201" = value
         let data = [0x00, 0x00, 0x5f, 0x09, 0x03, b'2', b'0', b'1'];
-        let headers = decoder.decode(&data).unwrap();
+        let headers = decoder.decode(&data).expect("test must succeed");
 
         assert_eq!(headers.len(), 1);
         assert_eq!(headers[0].name(), b":status");
@@ -729,15 +729,17 @@ mod tests {
         let decoder = Decoder::new();
 
         let original = vec![
-            Header::new(b":method", b"GET").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":path", b"/").unwrap(),
+            Header::new(b":method", b"GET").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":path", b"/").expect("test must succeed"),
         ];
 
         let mut buf = vec![0u8; 128];
-        let len = encoder.encode(&mut buf, &original).unwrap();
+        let len = encoder
+            .encode(&mut buf, &original)
+            .expect("test must succeed");
 
-        let decoded = decoder.decode(&buf[..len]).unwrap();
+        let decoded = decoder.decode(&buf[..len]).expect("test must succeed");
 
         assert_eq!(decoded.len(), original.len());
         for (dec, orig) in decoded.iter().zip(original.iter()) {
@@ -752,14 +754,16 @@ mod tests {
         let decoder = Decoder::new();
 
         let original = vec![
-            Header::new(b":method", b"GET").unwrap(),
-            Header::new(b":authority", b"www.example.com").unwrap(),
+            Header::new(b":method", b"GET").expect("test must succeed"),
+            Header::new(b":authority", b"www.example.com").expect("test must succeed"),
         ];
 
         let mut buf = vec![0u8; 128];
-        let len = encoder.encode(&mut buf, &original).unwrap();
+        let len = encoder
+            .encode(&mut buf, &original)
+            .expect("test must succeed");
 
-        let decoded = decoder.decode(&buf[..len]).unwrap();
+        let decoded = decoder.decode(&buf[..len]).expect("test must succeed");
 
         assert_eq!(decoded.len(), original.len());
         assert_eq!(decoded[0].name(), b":method");
@@ -789,7 +793,8 @@ mod tests {
 
         // Required Insert Count (0) + Delta Base (0) + Indexed Field (17 = :method GET)
         let data = [0x00, 0x00, 0xd1]; // 0xd1 = 0xc0 | 17
-        let DecodeOutput::Decoded(headers) = decoder.decode(&data).unwrap() else {
+        let DecodeOutput::Decoded(headers) = decoder.decode(&data).expect("test must succeed")
+        else {
             panic!("unexpected Blocked");
         };
 
@@ -816,12 +821,17 @@ mod tests {
         decoder.insert(b":authority".to_vec(), b"www.example.com".to_vec());
 
         // エンコード
-        let headers = vec![Header::new(b":authority", b"www.example.com").unwrap()];
+        let headers =
+            vec![Header::new(b":authority", b"www.example.com").expect("test must succeed")];
         let mut buf = vec![0u8; 64];
-        let len = encoder.encode(&mut buf, &headers, 0).unwrap();
+        let len = encoder
+            .encode(&mut buf, &headers, 0)
+            .expect("test must succeed");
 
         // デコード
-        let DecodeOutput::Decoded(decoded) = decoder.decode(&buf[..len]).unwrap() else {
+        let DecodeOutput::Decoded(decoded) =
+            decoder.decode(&buf[..len]).expect("test must succeed")
+        else {
             panic!("unexpected Blocked");
         };
 
@@ -848,7 +858,8 @@ mod tests {
         // enc = (1 % (2 * 128)) + 1 = 2
         // Indexed dynamic: 0x80 | 0 = 0x80 (relative index 0, T=0)
         let data = [0x02, 0x00, 0x80];
-        let DecodeOutput::Decoded(headers) = decoder.decode(&data).unwrap() else {
+        let DecodeOutput::Decoded(headers) = decoder.decode(&data).expect("test must succeed")
+        else {
             panic!("unexpected Blocked");
         };
 
@@ -869,7 +880,7 @@ mod tests {
         // Required Insert Count = 1 を要求するエンコード済みデータ
         // enc_insert_count = 2 (Required Insert Count = 1 の場合)
         let data = [0x02, 0x00, 0x80];
-        let result = decoder.decode(&data).unwrap();
+        let result = decoder.decode(&data).expect("test must succeed");
 
         // insert_count (0) < required_insert_count (1) なのでブロック
         assert!(matches!(result, DecodeOutput::Blocked));

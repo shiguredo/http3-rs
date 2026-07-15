@@ -26,7 +26,6 @@
 use crate::varint::{self, VarInt};
 
 /// `Datagram::new` のバリデーションエラー
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatagramError {
     /// `session_id` が client-initiated bidirectional stream ID ではない
@@ -134,27 +133,27 @@ mod tests {
 
     #[test]
     fn test_datagram_quarter_stream_id() {
-        let d = Datagram::new(0, vec![]).unwrap();
+        let d = Datagram::new(0, vec![]).expect("test must succeed");
         assert_eq!(d.quarter_stream_id(), 0);
 
-        let d = Datagram::new(4, vec![]).unwrap();
+        let d = Datagram::new(4, vec![]).expect("test must succeed");
         assert_eq!(d.quarter_stream_id(), 1);
 
-        let d = Datagram::new(8, vec![]).unwrap();
+        let d = Datagram::new(8, vec![]).expect("test must succeed");
         assert_eq!(d.quarter_stream_id(), 2);
 
-        let d = Datagram::new(400, vec![]).unwrap();
+        let d = Datagram::new(400, vec![]).expect("test must succeed");
         assert_eq!(d.quarter_stream_id(), 100);
     }
 
     #[test]
     fn test_datagram_encode_decode_empty_payload() {
-        let d = Datagram::new(4, vec![]).unwrap();
+        let d = Datagram::new(4, vec![]).expect("test must succeed");
 
         let mut buf = Vec::new();
         d.encode(&mut buf);
 
-        let (decoded, consumed) = Datagram::decode(&buf).unwrap();
+        let (decoded, consumed) = Datagram::decode(&buf).expect("test must succeed");
         assert_eq!(consumed, buf.len());
         assert_eq!(decoded.session_id, 4);
         assert_eq!(decoded.payload, vec![] as Vec<u8>);
@@ -163,12 +162,12 @@ mod tests {
     #[test]
     fn test_datagram_encode_decode_with_payload() {
         let payload = vec![1, 2, 3, 4, 5];
-        let d = Datagram::new(8, payload.clone()).unwrap();
+        let d = Datagram::new(8, payload.clone()).expect("test must succeed");
 
         let mut buf = Vec::new();
         d.encode(&mut buf);
 
-        let (decoded, consumed) = Datagram::decode(&buf).unwrap();
+        let (decoded, consumed) = Datagram::decode(&buf).expect("test must succeed");
         assert_eq!(consumed, buf.len());
         assert_eq!(decoded.session_id, 8);
         assert_eq!(decoded.payload, payload);
@@ -184,10 +183,10 @@ mod tests {
         // WebTransport セッション ID はクライアント開始双方向ストリーム (4 の倍数)
         for i in 0u64..100 {
             let session_id = i * 4;
-            let d = Datagram::new(session_id, b"test".to_vec()).unwrap();
+            let d = Datagram::new(session_id, b"test".to_vec()).expect("test must succeed");
             let mut buf = Vec::new();
             d.encode(&mut buf);
-            let (decoded, _) = Datagram::decode(&buf).unwrap();
+            let (decoded, _) = Datagram::decode(&buf).expect("test must succeed");
             assert_eq!(decoded.session_id, session_id);
         }
     }

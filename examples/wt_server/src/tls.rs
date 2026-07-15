@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use base64::Engine;
+use base64ct::{Base64, Encoding};
 use s2n_quic::provider::tls::rustls as s2n_rustls;
 
 use crate::error::Error;
@@ -61,12 +61,8 @@ fn load_cached_cert() -> Option<(rustls::pki_types::CertificateDer<'static>, Vec
         return None;
     }
 
-    let cert_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&cert_b64)
-        .ok()?;
-    let key_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&key_b64)
-        .ok()?;
+    let cert_bytes = Base64::decode_vec(&cert_b64).ok()?;
+    let key_bytes = Base64::decode_vec(&key_b64).ok()?;
 
     let path = cache_path();
     tracing::info!(
@@ -112,8 +108,8 @@ fn generate_and_cache_cert() -> Result<(rustls::pki_types::CertificateDer<'stati
     let key_bytes = signing_key.serialize_der();
 
     // JSONC でキャッシュに保存する
-    let cert_b64 = base64::engine::general_purpose::STANDARD.encode(cert_der.as_ref());
-    let key_b64 = base64::engine::general_purpose::STANDARD.encode(&key_bytes);
+    let cert_b64 = Base64::encode_string(cert_der.as_ref());
+    let key_b64 = Base64::encode_string(&key_bytes);
     let created_at = now.unix_timestamp();
 
     let jsonc = format!(
@@ -155,7 +151,7 @@ pub fn generate_tls_server() -> Result<s2n_rustls::Server, Error> {
 
     // 証明書の SHA-256 ハッシュを base64 で出力する (serverCertificateHashes 用)
     let hash = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, cert_der.as_ref());
-    let hash_base64 = base64::engine::general_purpose::STANDARD.encode(hash.as_ref());
+    let hash_base64 = Base64::encode_string(hash.as_ref());
     tracing::info!("Certificate hash (SHA-256, base64): {hash_base64}");
 
     let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(

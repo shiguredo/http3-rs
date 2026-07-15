@@ -62,11 +62,16 @@ pub async fn start_quiche_server(
     let socket = UdpSocket::bind("127.0.0.1:0").await?;
     let local_addr = socket.local_addr()?;
     eprintln!("[quiche server] サーバー起動: port = {}", local_addr.port());
-    port_tx.send(local_addr.port()).unwrap();
+    port_tx
+        .send(local_addr.port())
+        .expect("port channel receiver is alive");
 
     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
-    config.load_cert_chain_from_pem_file(cert_path.to_str().unwrap())?;
-    config.load_priv_key_from_pem_file(key_path.to_str().unwrap())?;
+    config.load_cert_chain_from_pem_file(
+        cert_path.to_str().expect("temp cert path is valid UTF-8"),
+    )?;
+    config
+        .load_priv_key_from_pem_file(key_path.to_str().expect("temp cert path is valid UTF-8"))?;
     config.set_application_protos(&[b"h3"])?;
     config.set_max_idle_timeout(10000);
     config.set_max_recv_udp_payload_size(MAX_DATAGRAM_SIZE);
@@ -460,7 +465,9 @@ pub async fn start_quinn_server(
     let endpoint = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse()?)?;
     let local_addr = endpoint.local_addr()?;
     eprintln!("[quinn server] サーバー起動: port = {}", local_addr.port());
-    port_tx.send(local_addr.port()).unwrap();
+    port_tx
+        .send(local_addr.port())
+        .expect("port channel receiver is alive");
 
     let timeout = tokio::time::sleep(Duration::from_secs(10));
     tokio::pin!(timeout);
@@ -505,7 +512,7 @@ pub async fn start_quinn_server(
                         .status(200)
                         .header("content-type", "text/plain; charset=utf-8")
                         .body(())
-                        .unwrap();
+                        .expect("interop setup must succeed");
 
                     stream.send_response(response).await?;
                     stream
@@ -569,7 +576,7 @@ pub async fn run_quinn_client(port: u16) -> Result<Vec<u8>, Box<dyn Error + Send
         .method("GET")
         .uri(format!("https://localhost:{}/", port))
         .body(())
-        .unwrap();
+        .expect("interop setup must succeed");
 
     let mut stream = send_request.send_request(req).await?;
     stream.finish().await?;
@@ -694,10 +701,10 @@ mod tquic_impl {
 
         fn on_conn_established(&mut self, conn: &mut tquic::Connection) {
             eprintln!("[tquic server] connection established");
-            let h3_config = tquic::h3::Http3Config::new().unwrap();
+            let h3_config = tquic::h3::Http3Config::new().expect("tquic Http3Config::new");
             self.h3_conn = Some(
                 tquic::h3::connection::Http3Connection::new_with_quic_conn(conn, &h3_config)
-                    .unwrap(),
+                    .expect("interop setup must succeed"),
             );
         }
 
@@ -739,7 +746,9 @@ mod tquic_impl {
             "[tquic server] server started: port = {}",
             local_addr.port()
         );
-        port_tx.send(local_addr.port()).unwrap();
+        port_tx
+            .send(local_addr.port())
+            .expect("port channel receiver is alive");
         socket.set_nonblocking(true)?;
 
         let mut config = tquic::Config::new()?;
@@ -752,8 +761,8 @@ mod tquic_impl {
         config.set_initial_max_streams_uni(100);
 
         let tls_config = tquic::TlsConfig::new_server_config(
-            cert_path.to_str().unwrap(),
-            key_path.to_str().unwrap(),
+            cert_path.to_str().expect("temp cert path is valid UTF-8"),
+            key_path.to_str().expect("temp cert path is valid UTF-8"),
             vec![b"h3".to_vec()],
             false,
         )?;
@@ -907,11 +916,11 @@ mod tquic_impl {
 
         fn on_conn_established(&mut self, conn: &mut tquic::Connection) {
             eprintln!("[tquic client] connection established");
-            let h3_config = tquic::h3::Http3Config::new().unwrap();
+            let h3_config = tquic::h3::Http3Config::new().expect("tquic Http3Config::new");
             let mut state = self.state.borrow_mut();
             state.h3_conn = Some(
                 tquic::h3::connection::Http3Connection::new_with_quic_conn(conn, &h3_config)
-                    .unwrap(),
+                    .expect("interop setup must succeed"),
             );
             tquic_client_process_h3(&mut state, conn);
         }

@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] 公開エラー型 / 設定型などから `#[non_exhaustive]` を撤去し、`match` の網羅性チェックを利用側で保てるようにする
+  - @voluntas
+- [CHANGE] `shiguredo_ngtcp2` の `Http3SettingsExt` / `TransportParamsExt` トレイトを `Http3Settings` / `TransportParams` newtype に置き換え、`nghttp3_sys` / `ngtcp2_sys` 型の再エクスポートを廃止する
+  - @voluntas
 - [CHANGE] `Connection::peer_goaway_request_boundary` の戻り値型を `Option<u64>` から `Option<VarInt>` に変更し、GOAWAY ID の値域を型で保証する
   - @voluntas
 - [CHANGE] `FrameDecodeError::Http2Frame` / `FrameDecodeError::ServerPushNotSupported` のフィールド型を `u64` から `VarInt` に変更し、HTTP/3 frame type の値域 (RFC 9000 Section 16) を型で保証する
@@ -43,11 +47,9 @@
   - @voluntas
 - [ADD] `webtransport::stream::StreamHeaderDecodeError::SessionIdOutOfRange` を追加し、`StreamHeader::new` に session_id の VarInt 範囲検査を導入する
   - @voluntas
-- [ADD] `varint::DecodeError` / `varint::EncodeError` / `webtransport::DatagramError` / `webtransport::stream::StreamHeaderDecodeError` に `#[non_exhaustive]` を付与し、将来のバリアント追加を後方互換にする
-  - @voluntas
 - [ADD] `qpack::Header::from_static` を `const fn` で追加し、リテラル定数の RFC 9114 / RFC 9110 違反を `const` / `static` 宣言時にコンパイル時 panic として検出可能にする
   - @voluntas
-- [ADD] `qpack::HeaderError` を新設し、`Header::new` のバリデーションエラーを構造化する (`#[non_exhaustive]`)
+- [ADD] `qpack::HeaderError` を新設し、`Header::new` のバリデーションエラーを構造化する
   - @voluntas
 - [ADD] `validation` に `:protocol` 値検査 (RFC 8441 Section 4 / RFC 9220 Section 3 / RFC 9110 Section 7.8 の HTTP Upgrade Token 構文) を追加する
   - @voluntas
@@ -55,14 +57,14 @@
   - @voluntas
 - [ADD] `internal-test` フィーチャーを追加し、PBT / fuzz / 統合テストから検査バイパス API (`Header::from_validated_parts`) を利用できるようにする (通常のアプリケーションでは有効化しない)
   - @voluntas
-- [ADD] `Setting` enum を新設し、SETTINGS パラメータの ID と型安全な値 (`VarInt` または `bool`) を一体で表現する (`#[non_exhaustive]`)
+- [ADD] `Setting` enum を新設し、SETTINGS パラメータの ID と型安全な値 (`VarInt` または `bool`) を一体で表現する
   - @voluntas
 - [ADD] `UnknownSetting` 構造体を新設し、`Setting::Unknown(UnknownSetting)` のフィールドを
   private 化することで HTTP/2 専用 ID / 予約 ID が `Setting::Unknown` 経由で構築できない
   不変条件を保証する
   - @voluntas
 - [ADD] `SettingError` を新設し、`Setting::from_wire` / `SettingsPayload::add` の検査エラー
-  (HTTP/2 専用 ID / 予約 ID / bool 値域外 / 重複 ID) を構造化エラーで通知する (`#[non_exhaustive]`)
+  (HTTP/2 専用 ID / 予約 ID / bool 値域外 / 重複 ID) を構造化エラーで通知する
   - @voluntas
 - [ADD] `GoawayPayload::from_static` を `const fn` で追加し、不正リテラルの GOAWAY ID
   (RFC 9000 Section 16 の VarInt 範囲外) をコンパイル時 panic として検出可能にする
@@ -87,7 +89,7 @@
   - @voluntas
 - [CHANGE] `qpack::Header::new` を `Result<Self, HeaderError>` 化し、field-name / field-value / 疑似ヘッダー名・値の構築時検査を強制する
   - @voluntas
-- [CHANGE] `qpack::Header` のフィールドを private 化し、`name()` / `value()` / `size()` アクセサを提供する。内部表現を `Cow<'static, [u8]>` に変更する (将来 issue 0059 の `Bytes` 化と統合予定)
+- [CHANGE] `qpack::Header` のフィールドを private 化し、`name()` / `value()` / `size()` アクセサを提供する。内部表現を `Cow<'static, [u8]>` に変更する (将来の `Bytes` 化と統合予定)
   - @voluntas
 - [CHANGE] `qpack::DecodedHeader` を削除し、`qpack::Decoder::decode` / `DynamicDecoder::decode` の戻り値型を `Vec<Header>` / `DecodeOutput::Decoded(Vec<Header>)` に統一する
   - @voluntas
@@ -133,9 +135,6 @@
   `InvalidSetting(SettingError)` で HTTP/2 専用 / 予約 / bool 値域外 / 重複 ID の各 SETTINGS
   検査エラーを単一バリアントで伝播する形に変更する。`core::error::Error::source()` 経由で
   `SettingError` を辿れるようにする
-  - @voluntas
-- [CHANGE] `error::Error` および `error::FrameDecodeError` に `#[non_exhaustive]` を付与し、
-  将来のバリアント追加を後方互換に保つ
   - @voluntas
 - [CHANGE] `webtransport::Settings::flow_control_enabled` と
   `webtransport::Settings::allows_multiple_sessions_with_peer` を削除する
@@ -242,4 +241,11 @@
 - [FIX] STOP_SENDING 受信時のクリティカルストリーム判定を受信側から送信側 (`control_send` / ローカル QPACK encoder・decoder) に修正し、送信側クリティカルストリームへの STOP_SENDING を `H3_CLOSED_CRITICAL_STREAM` とする (RFC 9114 Section 6.2.1, RFC 9204 Section 4.2)
   - @voluntas
 - [FIX] payload が欠落した GOAWAY フレームのデコードエラーを `BufferTooShort` から `InvalidLength` に変更し、`H3_FRAME_ERROR` に集約されるよう修正する (RFC 9114 Section 7.1)
+  - @voluntas
+
+### misc
+
+- [UPDATE] `examples/wt_server` の Base64 依存を `base64` から `base64ct` に切り替える
+  - @voluntas
+- [UPDATE] shiguredo-rust 規約に合わせ `.unwrap()` を `.expect(...)` に、手書きの `#[allow]` を `#[expect]` に置き換える
   - @voluntas

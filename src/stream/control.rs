@@ -74,7 +74,7 @@ impl ControlStreamSend {
         let frame = Frame::Settings(payload);
         // SETTINGS の id / value はアプリ層が `Settings` 経由で構築するため、
         // 本 issue 時点では VarInt 範囲内であることをアプリ層責務として扱う。
-        // 後続 issue 0086 で `Setting` enum に昇格して型レベルに移す。
+        // 将来 `Setting` enum に昇格して型レベルに移す。
         let frame_len =
             frame::encoded_frame_len(&frame).expect("SETTINGS frame fields fit in VarInt");
         buf.resize(1 + frame_len, 0);
@@ -323,7 +323,10 @@ mod tests {
         let data = [0x00, 0x04, 0x00];
         stream.receive(&data);
 
-        let frame = stream.process().unwrap().unwrap();
+        let frame = stream
+            .process()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(frame, Frame::Settings(_)));
         assert!(stream.is_ready());
     }
@@ -335,7 +338,10 @@ mod tests {
         // ストリームタイプ + SETTINGS フレーム (1 回目)
         let data = [0x00, 0x04, 0x00];
         stream.receive(&data);
-        stream.process().unwrap().unwrap();
+        stream
+            .process()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(stream.is_ready());
 
         // 2 回目の SETTINGS フレームは接続エラー (RFC 9114 Section 7.2.4)
@@ -358,7 +364,10 @@ mod tests {
         // ストリームタイプ + SETTINGS フレーム
         let data = [0x00, 0x04, 0x00];
         stream.receive(&data);
-        stream.process().unwrap().unwrap();
+        stream
+            .process()
+            .expect("test must succeed")
+            .expect("test must succeed");
 
         // DATA フレームは制御ストリームで接続エラー (RFC 9114 Section 7.2)
         let data = [0x00, 0x03, 0x01, 0x02, 0x03];
@@ -380,7 +389,10 @@ mod tests {
         // ストリームタイプ + SETTINGS フレーム
         let data = [0x00, 0x04, 0x00];
         stream.receive(&data);
-        stream.process().unwrap().unwrap();
+        stream
+            .process()
+            .expect("test must succeed")
+            .expect("test must succeed");
 
         // HTTP/2 PING フレーム (0x06) は接続エラー (RFC 9114 Section 7.2.8)
         let data = [0x06, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];

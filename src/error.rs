@@ -127,7 +127,6 @@ impl fmt::Display for ErrorCode {
 }
 
 /// HTTP/3 エラー
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// 接続エラー (接続をクローズすべき)
@@ -185,7 +184,6 @@ impl core::error::Error for Error {
 }
 
 /// フレームデコードエラー
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameDecodeError {
     /// バッファ不足

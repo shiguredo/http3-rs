@@ -3,7 +3,7 @@
 use shiguredo_http3::{ClientConnection, Event, Header, ServerConnection, Settings, VarInt};
 
 fn vi(value: u64) -> VarInt {
-    VarInt::new(value).unwrap()
+    VarInt::new(value).expect("test must succeed")
 }
 
 /// クライアントからサーバーへのリクエスト・レスポンス交換をシミュレート
@@ -22,42 +22,44 @@ fn test_client_server_exchange() -> Result<(), Box<dyn std::error::Error>> {
     // === Phase 1: 制御ストリームの SETTINGS 交換 ===
 
     // クライアントの制御ストリームデータを取得
-    let (client_ctrl_data, _) = client.take_stream_data(2).unwrap();
+    let (client_ctrl_data, _) = client.take_stream_data(2).expect("test must succeed");
 
     // サーバーの制御ストリームデータを取得
-    let (server_ctrl_data, _) = server.take_stream_data(3).unwrap();
+    let (server_ctrl_data, _) = server.take_stream_data(3).expect("test must succeed");
 
     // 制御ストリームデータを相互に送信
     server.feed_stream(2, &client_ctrl_data, false)?;
     client.feed_stream(3, &server_ctrl_data, false)?;
 
     // SETTINGS イベントを確認
-    let client_event = client.poll_event()?.unwrap();
+    let client_event = client.poll_event()?.expect("test must succeed");
     assert!(matches!(client_event, Event::SettingsReceived { .. }));
 
-    let server_event = server.poll_event()?.unwrap();
+    let server_event = server.poll_event()?.expect("test must succeed");
     assert!(matches!(server_event, Event::SettingsReceived { .. }));
 
     // === Phase 2: リクエスト送信 ===
 
     // クライアントがリクエストを送信
     let request_headers = vec![
-        Header::new(b":method", b"GET").unwrap(),
-        Header::new(b":path", b"/index.html").unwrap(),
-        Header::new(b":scheme", b"https").unwrap(),
-        Header::new(b":authority", b"example.com").unwrap(),
-        Header::new(b"user-agent", b"shiguredo-http3/1.0").unwrap(),
+        Header::new(b":method", b"GET").expect("test must succeed"),
+        Header::new(b":path", b"/index.html").expect("test must succeed"),
+        Header::new(b":scheme", b"https").expect("test must succeed"),
+        Header::new(b":authority", b"example.com").expect("test must succeed"),
+        Header::new(b"user-agent", b"shiguredo-http3/1.0").expect("test must succeed"),
     ];
 
     let stream_id = client.send_request(&request_headers, true)?;
     assert_eq!(stream_id, 0); // 最初のクライアント双方向ストリーム
 
     // リクエストデータを取得
-    let (request_data, _request_fin) = client.take_stream_data(stream_id).unwrap();
+    let (request_data, _request_fin) = client
+        .take_stream_data(stream_id)
+        .expect("test must succeed");
 
     // データ消費後、FIN を確認
     let fin_check = client.get_stream_data(stream_id);
-    assert!(fin_check.is_none() || fin_check.unwrap().1); // データなし or FIN=true
+    assert!(fin_check.is_none() || fin_check.expect("test must succeed").1); // データなし or FIN=true
 
     // サーバーがリクエストを受信
     server.feed_stream(stream_id, &request_data, true)?;
@@ -103,16 +105,18 @@ fn test_client_server_exchange() -> Result<(), Box<dyn std::error::Error>> {
 
     // サーバーがレスポンスを送信
     let response_headers = vec![
-        Header::new(b":status", b"200").unwrap(),
-        Header::new(b"content-type", b"text/html").unwrap(),
-        Header::new(b"content-length", b"13").unwrap(),
+        Header::new(b":status", b"200").expect("test must succeed"),
+        Header::new(b"content-type", b"text/html").expect("test must succeed"),
+        Header::new(b"content-length", b"13").expect("test must succeed"),
     ];
 
     server.send_response(stream_id, &response_headers, false)?;
     server.send_body(stream_id, b"Hello, World!", true)?;
 
     // レスポンスデータを取得
-    let (response_data, _response_fin) = server.take_stream_data(stream_id).unwrap();
+    let (response_data, _response_fin) = server
+        .take_stream_data(stream_id)
+        .expect("test must succeed");
 
     // クライアントがレスポンスを受信
     client.feed_stream(stream_id, &response_data, true)?;
@@ -158,8 +162,8 @@ fn test_goaway_exchange() -> Result<(), Box<dyn std::error::Error>> {
     server.set_control_stream_id(3)?;
 
     // 制御ストリームを交換
-    let (client_ctrl, _) = client.take_stream_data(2).unwrap();
-    let (server_ctrl, _) = server.take_stream_data(3).unwrap();
+    let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+    let (server_ctrl, _) = server.take_stream_data(3).expect("test must succeed");
 
     server.feed_stream(2, &client_ctrl, false)?;
     client.feed_stream(3, &server_ctrl, false)?;
@@ -172,12 +176,12 @@ fn test_goaway_exchange() -> Result<(), Box<dyn std::error::Error>> {
     server.send_goaway(vi(0))?;
 
     // GOAWAY データを取得して送信
-    let (goaway_data, _) = server.take_stream_data(3).unwrap();
+    let (goaway_data, _) = server.take_stream_data(3).expect("test must succeed");
 
     client.feed_stream(3, &goaway_data, false)?;
 
     // クライアントが GOAWAY を受信
-    let event = client.poll_event()?.unwrap();
+    let event = client.poll_event()?.expect("test must succeed");
     let Event::GoawayReceived { id } = event else {
         panic!("expected Event::GoawayReceived, got {event:?}");
     };
@@ -218,8 +222,8 @@ fn test_multiple_requests() -> Result<(), Box<dyn std::error::Error>> {
     server.set_control_stream_id(3)?;
 
     // 制御ストリームを交換
-    let (client_ctrl, _) = client.take_stream_data(2).unwrap();
-    let (server_ctrl, _) = server.take_stream_data(3).unwrap();
+    let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+    let (server_ctrl, _) = server.take_stream_data(3).expect("test must succeed");
 
     server.feed_stream(2, &client_ctrl, false)?;
     client.feed_stream(3, &server_ctrl, false)?;
@@ -230,17 +234,17 @@ fn test_multiple_requests() -> Result<(), Box<dyn std::error::Error>> {
 
     // 複数のリクエストを送信
     let headers1 = vec![
-        Header::new(b":method", b"GET").unwrap(),
-        Header::new(b":path", b"/page1").unwrap(),
-        Header::new(b":scheme", b"https").unwrap(),
-        Header::new(b":authority", b"example.com").unwrap(),
+        Header::new(b":method", b"GET").expect("test must succeed"),
+        Header::new(b":path", b"/page1").expect("test must succeed"),
+        Header::new(b":scheme", b"https").expect("test must succeed"),
+        Header::new(b":authority", b"example.com").expect("test must succeed"),
     ];
 
     let headers2 = vec![
-        Header::new(b":method", b"GET").unwrap(),
-        Header::new(b":path", b"/page2").unwrap(),
-        Header::new(b":scheme", b"https").unwrap(),
-        Header::new(b":authority", b"example.com").unwrap(),
+        Header::new(b":method", b"GET").expect("test must succeed"),
+        Header::new(b":path", b"/page2").expect("test must succeed"),
+        Header::new(b":scheme", b"https").expect("test must succeed"),
+        Header::new(b":authority", b"example.com").expect("test must succeed"),
     ];
 
     let stream_id1 = client.send_request(&headers1, true)?;
@@ -251,8 +255,12 @@ fn test_multiple_requests() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(stream_id2, 4);
 
     // リクエストデータを取得
-    let (data1, _) = client.take_stream_data(stream_id1).unwrap();
-    let (data2, _) = client.take_stream_data(stream_id2).unwrap();
+    let (data1, _) = client
+        .take_stream_data(stream_id1)
+        .expect("test must succeed");
+    let (data2, _) = client
+        .take_stream_data(stream_id2)
+        .expect("test must succeed");
 
     // サーバーに送信
     server.feed_stream(stream_id1, &data1, true)?;
@@ -281,7 +289,7 @@ fn test_custom_settings() {
         .qpack_blocked_streams(vi(100));
 
     let mut client = ClientConnection::new(settings);
-    client.set_control_stream_id(2).unwrap();
+    client.set_control_stream_id(2).expect("test must succeed");
 
     // ローカル設定を確認
     let local = client.local_settings();

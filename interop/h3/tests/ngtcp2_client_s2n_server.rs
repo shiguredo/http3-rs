@@ -174,17 +174,21 @@ async fn run_ngtcp2_client(
 
 #[tokio::test]
 async fn test_http3_request_response() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
     // s2n-quic サーバーを起動
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem);
-    let mut server = H3Server::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    );
+    let mut server = H3Server::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
     eprintln!("[test] サーバーアドレス: {}", server_addr);
 
     let server_task = tokio::spawn(async move {
-        let mut conn = server.accept().await.unwrap();
-        let request = conn.accept_request().await.unwrap();
+        let mut conn = server.accept().await.expect("test must succeed");
+        let request = conn.accept_request().await.expect("test must succeed");
         eprintln!(
             "[server] リクエスト受信: {}",
             String::from_utf8_lossy(request.path())
@@ -196,7 +200,7 @@ async fn test_http3_request_response() {
                     .body("Hello from HTTP/3 server!"),
             )
             .await
-            .unwrap();
+            .expect("test must succeed");
     });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -228,15 +232,19 @@ async fn test_http3_request_response() {
 /// s2n サーバー (shiguredo_http3) が適切に受信して 200 を返せることを確認する。
 #[tokio::test]
 async fn test_post_request_with_body() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem);
-    let mut server = H3Server::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    );
+    let mut server = H3Server::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
 
     let server_task = tokio::spawn(async move {
-        let mut conn = server.accept().await.unwrap();
-        let request = conn.accept_request().await.unwrap();
+        let mut conn = server.accept().await.expect("test must succeed");
+        let request = conn.accept_request().await.expect("test must succeed");
         eprintln!(
             "[server] POST 受信: path={}, body_len={}",
             String::from_utf8_lossy(request.path()),
@@ -249,7 +257,7 @@ async fn test_post_request_with_body() {
                     .body("OK"),
             )
             .await
-            .unwrap();
+            .expect("test must succeed");
     });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -278,15 +286,19 @@ async fn test_post_request_with_body() {
 /// ngtcp2 クライアントが正しく受信できることを確認する。
 #[tokio::test]
 async fn test_response_custom_headers() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem);
-    let mut server = H3Server::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    );
+    let mut server = H3Server::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
 
     let server_task = tokio::spawn(async move {
-        let mut conn = server.accept().await.unwrap();
-        let request = conn.accept_request().await.unwrap();
+        let mut conn = server.accept().await.expect("test must succeed");
+        let request = conn.accept_request().await.expect("test must succeed");
         eprintln!(
             "[server] リクエスト受信: {}",
             String::from_utf8_lossy(request.path())
@@ -300,7 +312,7 @@ async fn test_response_custom_headers() {
                     .body("Hello"),
             )
             .await
-            .unwrap();
+            .expect("test must succeed");
     });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -343,15 +355,19 @@ async fn test_response_custom_headers() {
 /// ngtcp2 クライアントが正しくステータスコードを受信できることを確認する。
 #[tokio::test]
 async fn test_status_404() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem);
-    let mut server = H3Server::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    );
+    let mut server = H3Server::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
 
     let server_task = tokio::spawn(async move {
-        let mut conn = server.accept().await.unwrap();
-        let request = conn.accept_request().await.unwrap();
+        let mut conn = server.accept().await.expect("test must succeed");
+        let request = conn.accept_request().await.expect("test must succeed");
         let path = request.path().to_vec();
         eprintln!(
             "[server] リクエスト受信: {}",
@@ -365,7 +381,7 @@ async fn test_status_404() {
                 "OK"
             }))
             .await
-            .unwrap();
+            .expect("test must succeed");
     });
 
     tokio::time::sleep(Duration::from_millis(100)).await;

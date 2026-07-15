@@ -62,7 +62,8 @@ pub mod strategies {
 
     /// RFC 9000 Section 16: VarInt の値域 (0..=2^62 - 1)
     pub fn valid_varint() -> impl Strategy<Value = VarInt> {
-        (0u64..=VarInt::MAX.get()).prop_map(|v| VarInt::new(v).unwrap())
+        (0u64..=VarInt::MAX.get())
+            .prop_map(|v| VarInt::new(v).expect("value is within VarInt::MAX"))
     }
 
     /// `VarInt::new` / `VarInt::try_from` が必ず `Err` を返す入力 (PBT の

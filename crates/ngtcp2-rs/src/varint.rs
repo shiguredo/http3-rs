@@ -63,7 +63,8 @@ mod tests {
         for value in [0u64, 1, 63, 64, 16383, 16384, 1073741823, 1073741824] {
             let mut buf = Vec::new();
             encode_to_vec(value, &mut buf);
-            let (decoded, consumed) = decode(&buf).unwrap();
+            let (decoded, consumed) =
+                decode(&buf).expect("infallible: implementation bug if this panics");
             assert_eq!(decoded, value);
             assert_eq!(consumed, buf.len());
         }

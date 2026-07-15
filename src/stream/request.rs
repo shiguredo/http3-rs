@@ -168,7 +168,7 @@ impl RequestStream {
         // HEADERS フレーム
         let frame = Frame::Headers(HeadersPayload::new(encoded.to_vec()));
         // HEADERS は内部で構築するペイロード長 (QPACK エンコード結果) しか扱わず、
-        // 必ず VarInt 範囲内に収まる。後続 issue 0087 で型レベルに昇格予定。
+        // 必ず VarInt 範囲内に収まる。将来型レベルに昇格予定。
         let frame_len =
             frame::encoded_frame_len(&frame).expect("HEADERS frame length fits in VarInt");
         let mut frame_buf = vec![0u8; frame_len];
@@ -507,21 +507,23 @@ mod tests {
     fn test_request_stream_send_encoded_headers() {
         let mut stream = RequestStream::new(0);
         let headers = vec![
-            Header::new(b":method", b"GET").unwrap(),
-            Header::new(b":path", b"/").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":method", b"GET").expect("test must succeed"),
+            Header::new(b":path", b"/").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
         ];
 
         // QPACK エンコード
         let encoder = QpackEncoder::new();
         let mut qpack_buf = vec![0u8; 4096];
-        let qpack_len = encoder.encode(&mut qpack_buf, &headers).unwrap();
+        let qpack_len = encoder
+            .encode(&mut qpack_buf, &headers)
+            .expect("test must succeed");
         qpack_buf.truncate(qpack_len);
 
         stream
             .send_encoded_headers(&qpack_buf, false, false)
-            .unwrap();
+            .expect("test must succeed");
         assert!(stream.has_pending_send());
 
         let (data, fin) = stream.get_send_data();
@@ -532,18 +534,20 @@ mod tests {
     #[test]
     fn test_request_stream_send_body() {
         let mut stream = RequestStream::new(0);
-        let headers = vec![Header::new(b":method", b"POST").unwrap()];
+        let headers = vec![Header::new(b":method", b"POST").expect("test must succeed")];
 
         // QPACK エンコード
         let encoder = QpackEncoder::new();
         let mut qpack_buf = vec![0u8; 4096];
-        let qpack_len = encoder.encode(&mut qpack_buf, &headers).unwrap();
+        let qpack_len = encoder
+            .encode(&mut qpack_buf, &headers)
+            .expect("test must succeed");
         qpack_buf.truncate(qpack_len);
 
         stream
             .send_encoded_headers(&qpack_buf, false, false)
-            .unwrap();
-        stream.send_body(b"hello", true).unwrap();
+            .expect("test must succeed");
+        stream.send_body(b"hello", true).expect("test must succeed");
 
         let (data, _fin) = stream.get_send_data();
         assert!(!data.is_empty());
@@ -638,9 +642,9 @@ mod tests {
         // HEADERS フレーム (QPACK: RIC=0, DeltaBase=0, Indexed :method GET)
         let data = [0x01, 0x03, 0x00, 0x00, 0xd1];
         stream.receive(&data, false);
-        let _ = stream.process_raw().unwrap(); // Headers
+        let _ = stream.process_raw().expect("test must succeed"); // Headers
         stream.receive(&[], true);
-        let result = stream.process_raw().unwrap();
+        let result = stream.process_raw().expect("test must succeed");
         assert!(
             matches!(result, Some(RawReceivedData::StreamEnd)),
             "expected StreamEnd, got {result:?}"
@@ -655,7 +659,10 @@ mod tests {
         let data = [0x01, 0x03, 0x00, 0x00, 0xd1];
         stream.receive(&data, false);
 
-        let result = stream.process_raw().unwrap().unwrap();
+        let result = stream
+            .process_raw()
+            .expect("test must succeed")
+            .expect("test must succeed");
         if let RawReceivedData::Headers(encoded) = result {
             // エンコードされたフィールドセクションが返される
             assert_eq!(encoded, vec![0x00, 0x00, 0xd1]);
@@ -673,7 +680,10 @@ mod tests {
         // 1 回目 HEADERS フレーム
         let headers_frame = [0x01, 0x03, 0x00, 0x00, 0xd1];
         stream.receive(&headers_frame, false);
-        let result = stream.process_raw().unwrap().unwrap();
+        let result = stream
+            .process_raw()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(
             matches!(result, RawReceivedData::Headers(_)),
             "expected Headers, got {result:?}"
@@ -682,7 +692,10 @@ mod tests {
         // DATA フレーム
         let data_frame = [0x00, 0x05, b'h', b'e', b'l', b'l', b'o'];
         stream.receive(&data_frame, false);
-        let result = stream.process_raw().unwrap().unwrap();
+        let result = stream
+            .process_raw()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(
             matches!(result, RawReceivedData::Data(_)),
             "expected Data, got {result:?}"
@@ -690,7 +703,10 @@ mod tests {
 
         // 2 回目 HEADERS フレーム (トレーラー)
         stream.receive(&headers_frame, false);
-        let result = stream.process_raw().unwrap().unwrap();
+        let result = stream
+            .process_raw()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(
             matches!(result, RawReceivedData::Trailers(_)),
             "expected Trailers, got {result:?}"
@@ -706,7 +722,10 @@ mod tests {
         // 1 回目 HEADERS (1xx として扱う)
         let headers_frame = [0x01, 0x03, 0x00, 0x00, 0xd1];
         stream.receive(&headers_frame, false);
-        let result = stream.process_raw().unwrap().unwrap();
+        let result = stream
+            .process_raw()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(result, RawReceivedData::Headers(_)));
 
         // 1xx 通知 (状態を WaitingHeaders に戻す)
@@ -714,7 +733,10 @@ mod tests {
 
         // 2 回目 HEADERS は最終レスポンスとして Headers を返す (Trailers ではない)
         stream.receive(&headers_frame, false);
-        let result = stream.process_raw().unwrap().unwrap();
+        let result = stream
+            .process_raw()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(
             matches!(result, RawReceivedData::Headers(_)),
             "expected Headers for final response after 1xx, got {result:?}"
@@ -723,7 +745,10 @@ mod tests {
         // DATA も正常に受信できる
         let data_frame = [0x00, 0x03, b'f', b'o', b'o'];
         stream.receive(&data_frame, false);
-        let result = stream.process_raw().unwrap().unwrap();
+        let result = stream
+            .process_raw()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(
             matches!(result, RawReceivedData::Data(_)),
             "expected Data after final response, got {result:?}"
@@ -738,11 +763,17 @@ mod tests {
         // 1 回目 HEADERS
         let headers_frame = [0x01, 0x03, 0x00, 0x00, 0xd1];
         stream.receive(&headers_frame, false);
-        let _ = stream.process_raw().unwrap().unwrap(); // Headers
+        let _ = stream
+            .process_raw()
+            .expect("test must succeed")
+            .expect("test must succeed"); // Headers
 
         // 2 回目 HEADERS (トレーラー)
         stream.receive(&headers_frame, false);
-        let _ = stream.process_raw().unwrap().unwrap(); // Trailers
+        let _ = stream
+            .process_raw()
+            .expect("test must succeed")
+            .expect("test must succeed"); // Trailers
 
         // 3 回目 HEADERS は接続エラー
         stream.receive(&headers_frame, false);

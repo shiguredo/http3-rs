@@ -19,23 +19,27 @@ use tokio_s2n_quic::{ServerConfig, WtServer};
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_webtransport_session() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
     // s2n-quic WtServer を起動
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem)
-        .enable_webtransport(interop_wt::test_wt_settings());
-    let mut server = WtServer::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    )
+    .enable_webtransport(interop_wt::test_wt_settings());
+    let mut server = WtServer::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
     eprintln!("[s2n server] started: {}", server_addr);
 
     // サーバータスク
     let server_task = tokio::spawn(async move {
-        let request = server.accept().await.unwrap();
+        let request = server.accept().await.expect("test must succeed");
         eprintln!(
             "[s2n server] session request received: path = {}",
             String::from_utf8_lossy(request.path())
         );
-        let session = request.accept().await.unwrap();
+        let session = request.accept().await.expect("test must succeed");
         eprintln!(
             "[s2n server] session established: session_id = {}",
             session.session_id()
@@ -104,21 +108,25 @@ async fn test_webtransport_session() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_unidirectional_stream() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem)
-        .enable_webtransport(interop_wt::test_wt_settings());
-    let mut server = WtServer::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    )
+    .enable_webtransport(interop_wt::test_wt_settings());
+    let mut server = WtServer::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
     eprintln!("[s2n server] started: {}", server_addr);
 
     let server_task = tokio::spawn(async move {
-        let request = server.accept().await.unwrap();
+        let request = server.accept().await.expect("test must succeed");
         eprintln!(
             "[s2n server] session request received: path = {}",
             String::from_utf8_lossy(request.path())
         );
-        let session = request.accept().await.unwrap();
+        let session = request.accept().await.expect("test must succeed");
         eprintln!(
             "[s2n server] session established: session_id = {}",
             session.session_id()
@@ -188,21 +196,25 @@ async fn test_unidirectional_stream() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_server_opens_bidi_stream() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem)
-        .enable_webtransport(interop_wt::test_wt_settings());
-    let mut server = WtServer::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    )
+    .enable_webtransport(interop_wt::test_wt_settings());
+    let mut server = WtServer::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
     eprintln!("[s2n server] started: {}", server_addr);
 
     let server_task = tokio::spawn(async move {
-        let request = server.accept().await.unwrap();
+        let request = server.accept().await.expect("test must succeed");
         eprintln!(
             "[s2n server] session request received: path = {}",
             String::from_utf8_lossy(request.path())
         );
-        let mut session = request.accept().await.unwrap();
+        let mut session = request.accept().await.expect("test must succeed");
         let session_id = session.session_id();
         eprintln!(
             "[s2n server] session established: session_id = {}",
@@ -210,15 +222,18 @@ async fn test_server_opens_bidi_stream() {
         );
 
         // サーバーから双方向ストリームを開いてデータを送信
-        let mut bi_stream = session.open_bi_stream().await.unwrap();
+        let mut bi_stream = session.open_bi_stream().await.expect("test must succeed");
         eprintln!(
             "[s2n server] bidirectional stream opened: stream_id = {}",
             bi_stream.stream_id()
         );
 
         // アプリケーションデータを送信 (open_bi_stream() が WT ヘッダーを自動送信)
-        bi_stream.send(b"Hello from server!").await.unwrap();
-        bi_stream.finish().unwrap();
+        bi_stream
+            .send(b"Hello from server!")
+            .await
+            .expect("test must succeed");
+        bi_stream.finish().expect("test must succeed");
 
         eprintln!("[s2n server] data sent");
 
@@ -301,29 +316,33 @@ async fn test_server_opens_bidi_stream() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_client_opens_bidi_stream() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem)
-        .enable_webtransport(interop_wt::test_wt_settings());
-    let mut server = WtServer::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    )
+    .enable_webtransport(interop_wt::test_wt_settings());
+    let mut server = WtServer::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
     eprintln!("[s2n server] started: {}", server_addr);
 
     // s2n-quic サーバータスク: セッション受け付け後、bidi ストリームを受信してデータを読む
     let server_task = tokio::spawn(async move {
-        let request = server.accept().await.unwrap();
+        let request = server.accept().await.expect("test must succeed");
         eprintln!(
             "[s2n server] session request received: path = {}",
             String::from_utf8_lossy(request.path())
         );
-        let mut session = request.accept().await.unwrap();
+        let mut session = request.accept().await.expect("test must succeed");
         eprintln!(
             "[s2n server] session established: session_id = {}",
             session.session_id()
         );
 
         // クライアントからの双方向ストリームを受け付ける
-        let mut bi_stream = session.accept_bi_stream().await.unwrap();
+        let mut bi_stream = session.accept_bi_stream().await.expect("test must succeed");
         eprintln!(
             "[s2n server] stream received: stream_id = {}",
             bi_stream.stream_id()
@@ -411,18 +430,22 @@ async fn test_client_opens_bidi_stream() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_path_and_authority() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem)
-        .enable_webtransport(interop_wt::test_wt_settings());
-    let mut server = WtServer::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    )
+    .enable_webtransport(interop_wt::test_wt_settings());
+    let mut server = WtServer::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
 
     let server_task = tokio::spawn(async move {
-        let request = server.accept().await.unwrap();
+        let request = server.accept().await.expect("test must succeed");
         let path = request.path().to_vec();
         let authority = request.authority().to_vec();
-        let _session = request.accept().await.unwrap();
+        let _session = request.accept().await.expect("test must succeed");
         tokio::time::sleep(Duration::from_millis(500)).await;
         (path, authority)
     });
@@ -469,18 +492,22 @@ async fn test_path_and_authority() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_bidi_stream_echo() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem)
-        .enable_webtransport(interop_wt::test_wt_settings());
-    let mut server = WtServer::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    )
+    .enable_webtransport(interop_wt::test_wt_settings());
+    let mut server = WtServer::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
 
     let server_task = tokio::spawn(async move {
-        let request = server.accept().await.unwrap();
-        let mut session = request.accept().await.unwrap();
+        let request = server.accept().await.expect("test must succeed");
+        let mut session = request.accept().await.expect("test must succeed");
 
-        let mut bi_stream = session.accept_bi_stream().await.unwrap();
+        let mut bi_stream = session.accept_bi_stream().await.expect("test must succeed");
         eprintln!(
             "[s2n server] stream received: stream_id={}",
             bi_stream.stream_id()
@@ -499,8 +526,8 @@ async fn test_bidi_stream_echo() {
         // accept_bi_stream() が WT ヘッダーを自動デコード済みなのでそのまま使う
         eprintln!("[s2n server] received: {} bytes", all_data.len());
 
-        bi_stream.send(&all_data).await.unwrap();
-        bi_stream.finish().unwrap();
+        bi_stream.send(&all_data).await.expect("test must succeed");
+        bi_stream.finish().expect("test must succeed");
         eprintln!("[s2n server] echo sent");
 
         all_data
@@ -589,20 +616,24 @@ async fn test_bidi_stream_echo() {
 async fn test_multiple_bidi_streams() {
     const NUM_STREAMS: usize = 3;
 
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem)
-        .enable_webtransport(interop_wt::test_wt_settings());
-    let mut server = WtServer::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    )
+    .enable_webtransport(interop_wt::test_wt_settings());
+    let mut server = WtServer::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
 
     let server_task = tokio::spawn(async move {
-        let request = server.accept().await.unwrap();
-        let mut session = request.accept().await.unwrap();
+        let request = server.accept().await.expect("test must succeed");
+        let mut session = request.accept().await.expect("test must succeed");
 
         let mut received = Vec::new();
         for i in 0..NUM_STREAMS {
-            let mut bi_stream = session.accept_bi_stream().await.unwrap();
+            let mut bi_stream = session.accept_bi_stream().await.expect("test must succeed");
             eprintln!(
                 "[s2n server] stream {} received: stream_id={}",
                 i,
@@ -687,18 +718,22 @@ async fn test_multiple_bidi_streams() {
 async fn test_large_data() {
     const DATA_SIZE: usize = 32 * 1024;
 
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem)
-        .enable_webtransport(interop_wt::test_wt_settings());
-    let mut server = WtServer::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    )
+    .enable_webtransport(interop_wt::test_wt_settings());
+    let mut server = WtServer::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
 
     let server_task = tokio::spawn(async move {
-        let request = server.accept().await.unwrap();
-        let mut session = request.accept().await.unwrap();
+        let request = server.accept().await.expect("test must succeed");
+        let mut session = request.accept().await.expect("test must succeed");
 
-        let mut bi_stream = session.accept_bi_stream().await.unwrap();
+        let mut bi_stream = session.accept_bi_stream().await.expect("test must succeed");
 
         let mut all_data = Vec::new();
         loop {
@@ -776,17 +811,21 @@ async fn test_large_data() {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_datagram() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
-    let config = ServerConfig::new("127.0.0.1:0".parse().unwrap(), &cert_pem, &key_pem)
-        .enable_webtransport(interop_wt::test_wt_settings());
-    let mut server = WtServer::bind(config).unwrap();
+    let config = ServerConfig::new(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_pem,
+        &key_pem,
+    )
+    .enable_webtransport(interop_wt::test_wt_settings());
+    let mut server = WtServer::bind(config).expect("test must succeed");
     let server_addr = server.local_addr();
     eprintln!("[s2n server] started: {}", server_addr);
 
     let server_task = tokio::spawn(async move {
-        let request = server.accept().await.unwrap();
-        let session = request.accept().await.unwrap();
+        let request = server.accept().await.expect("test must succeed");
+        let session = request.accept().await.expect("test must succeed");
         eprintln!(
             "[s2n server] session established: session_id = {}",
             session.session_id()

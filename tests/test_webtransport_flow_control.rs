@@ -49,7 +49,7 @@ fn test_stream_flow_control_full_cycle() {
     assert!(!client.try_open_stream(false), "should be blocked at limit");
 
     // WT_STREAMS_BLOCKED カプセルが生成されたはず
-    let capsules = transfer_capsules(&mut client, &mut server).unwrap();
+    let capsules = transfer_capsules(&mut client, &mut server).expect("test must succeed");
     assert!(
         capsules.iter().any(|c| matches!(
             c,
@@ -74,7 +74,7 @@ fn test_stream_flow_control_full_cycle() {
     }
 
     // サーバーの pending_capsules をクライアントに転送
-    let capsules = transfer_capsules(&mut server, &mut client).unwrap();
+    let capsules = transfer_capsules(&mut server, &mut client).expect("test must succeed");
     let max_streams_capsules: Vec<_> = capsules
         .iter()
         .filter(|c| {
@@ -132,7 +132,7 @@ fn test_bidi_stream_flow_control_cycle() {
     server.on_remote_stream_closed(true);
 
     // カプセル転送
-    let capsules = transfer_capsules(&mut server, &mut client).unwrap();
+    let capsules = transfer_capsules(&mut server, &mut client).expect("test must succeed");
     assert!(
         capsules.iter().any(|c| matches!(
             c,
@@ -170,7 +170,7 @@ fn test_data_flow_control_full_cycle() {
     assert!(!client.try_send_data(1));
 
     // WT_DATA_BLOCKED が生成されたはず
-    let capsules = transfer_capsules(&mut client, &mut server).unwrap();
+    let capsules = transfer_capsules(&mut client, &mut server).expect("test must succeed");
     assert!(
         capsules
             .iter()
@@ -185,7 +185,7 @@ fn test_data_flow_control_full_cycle() {
     // --- Phase 3: サーバーがデータを消費 → WT_MAX_DATA が生成される ---
     server.on_data_consumed(800);
 
-    let capsules = transfer_capsules(&mut server, &mut client).unwrap();
+    let capsules = transfer_capsules(&mut server, &mut client).expect("test must succeed");
     let max_data_capsules: Vec<_> = capsules
         .iter()
         .filter(|c| matches!(c, Capsule::MaxData { .. }))
@@ -246,9 +246,9 @@ fn test_stream_flow_control_multiple_cycles() {
         }
 
         // カプセル転送
-        transfer_capsules(&mut server, &mut client).unwrap();
+        transfer_capsules(&mut server, &mut client).expect("test must succeed");
         // STREAMS_BLOCKED も転送
-        transfer_capsules(&mut client, &mut server).unwrap();
+        transfer_capsules(&mut client, &mut server).expect("test must succeed");
     }
 
     // 5 サイクル後、合計 10 本のストリームを開いているはず
@@ -294,7 +294,7 @@ fn test_mixed_stream_and_data_flow_control() {
     server.on_remote_stream_closed(false);
 
     // カプセル転送
-    let capsules = transfer_capsules(&mut server, &mut client).unwrap();
+    let capsules = transfer_capsules(&mut server, &mut client).expect("test must succeed");
 
     // WT_MAX_DATA と WT_MAX_STREAMS (uni) が生成されたはず
     assert!(
@@ -381,7 +381,7 @@ fn test_streams_blocked_dedup_and_reset() {
             bidirectional: false,
             maximum: 3,
         })
-        .unwrap();
+        .expect("test must succeed");
 
     // 2 本開ける
     assert!(client.try_open_stream(false));

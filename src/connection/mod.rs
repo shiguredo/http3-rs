@@ -12,18 +12,18 @@
 //!
 //! // 制御ストリームの送信データを取得して QUIC で送信
 //! let ctrl_stream_id = 2; // クライアント開始の単方向ストリーム
-//! conn.set_control_stream_id(ctrl_stream_id).unwrap();
+//! conn.set_control_stream_id(ctrl_stream_id).expect("infallible: implementation bug if this panics");
 //! if let Some((data, fin)) = conn.get_stream_data(ctrl_stream_id) {
 //!     // QUIC で送信
 //! }
 //!
 //! // リクエストを送信
 //! let stream_id = conn.send_request(&[
-//!     Header::new(b":method", b"GET").unwrap(),
-//!     Header::new(b":path", b"/").unwrap(),
-//!     Header::new(b":scheme", b"https").unwrap(),
-//!     Header::new(b":authority", b"example.com").unwrap(),
-//! ], true).unwrap();
+//!     Header::new(b":method", b"GET").expect("infallible: implementation bug if this panics"),
+//!     Header::new(b":path", b"/").expect("infallible: implementation bug if this panics"),
+//!     Header::new(b":scheme", b"https").expect("infallible: implementation bug if this panics"),
+//!     Header::new(b":authority", b"example.com").expect("infallible: implementation bug if this panics"),
+//! ], true).expect("infallible: implementation bug if this panics");
 //!
 //! // QUIC からデータを受信
 //! conn.feed_stream(stream_id, &response_data, fin);
@@ -2638,7 +2638,12 @@ impl Connection {
 
         // QPACK ブロック中のストリームはフレーム解析を停止する (nghttp3 方式)
         // データはストリームの内部バッファに残り、ブロック解除時に再処理する
-        if self.streams.get(&stream_id).unwrap().is_qpack_blocked() {
+        if self
+            .streams
+            .get(&stream_id)
+            .expect("stream was just inserted")
+            .is_qpack_blocked()
+        {
             return Ok(());
         }
 
@@ -2653,7 +2658,10 @@ impl Connection {
     fn process_stream_frames(&mut self, stream_id: u64) -> Result<(), Error> {
         loop {
             let received = {
-                let stream = self.streams.get_mut(&stream_id).unwrap();
+                let stream = self
+                    .streams
+                    .get_mut(&stream_id)
+                    .expect("stream must exist while processing frames");
                 stream.process_raw()?
             };
 
@@ -4052,29 +4060,33 @@ mod tests {
     #[test]
     fn test_send_request() {
         let mut conn = Connection::client(Settings::default());
-        conn.set_control_stream_id(2).unwrap();
+        conn.set_control_stream_id(2).expect("test must succeed");
         let headers = vec![
-            Header::new(b":method", b"GET").unwrap(),
-            Header::new(b":path", b"/").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
+            Header::new(b":method", b"GET").expect("test must succeed"),
+            Header::new(b":path", b"/").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
         ];
 
-        let stream_id = conn.send_request(&headers, true).unwrap();
+        let stream_id = conn
+            .send_request(&headers, true)
+            .expect("test must succeed");
         assert_eq!(stream_id, 0);
 
         // 次のリクエスト
-        let stream_id2 = conn.send_request(&headers, true).unwrap();
+        let stream_id2 = conn
+            .send_request(&headers, true)
+            .expect("test must succeed");
         assert_eq!(stream_id2, 4);
     }
 
     #[test]
     fn test_control_stream() {
         let mut conn = Connection::client(Settings::default());
-        conn.set_control_stream_id(2).unwrap();
+        conn.set_control_stream_id(2).expect("test must succeed");
 
         // 制御ストリームの送信データを取得
-        let (data, fin) = conn.get_stream_data(2).unwrap();
+        let (data, fin) = conn.get_stream_data(2).expect("test must succeed");
         assert!(!data.is_empty());
         assert!(!fin);
         assert_eq!(data[0], 0x00); // Control stream type
@@ -4090,7 +4102,8 @@ mod tests {
         let mut conn = Connection::client(Settings::default());
         // サーバーの単方向ストリーム (ID=3) を制御ストリームとして登録
         // 制御ストリームタイプ (0x00) + SETTINGS フレーム (type=0x04, length=0x00)
-        conn.feed_stream(3, &[0x00, 0x04, 0x00], false).unwrap();
+        conn.feed_stream(3, &[0x00, 0x04, 0x00], false)
+            .expect("test must succeed");
         let err = conn.stream_reset(3, 0, 0).unwrap_err();
         assert!(matches!(
             err,
@@ -4103,7 +4116,7 @@ mod tests {
         // STOP_SENDING は送信側クリティカルストリームを対象とする。
         // ローカルの送信制御ストリーム (control_send) への STOP_SENDING は接続エラー。
         let mut conn = Connection::client(Settings::default());
-        conn.set_control_stream_id(2).unwrap();
+        conn.set_control_stream_id(2).expect("test must succeed");
         let err = conn.stop_sending(2, 0).unwrap_err();
         assert!(matches!(
             err,
@@ -4116,7 +4129,8 @@ mod tests {
         // STOP_SENDING は受信側ストリーム (peer の制御ストリーム) を対象としない。
         // こちらが送信しないストリームへの STOP_SENDING はクリティカル扱いしない。
         let mut conn = Connection::client(Settings::default());
-        conn.feed_stream(3, &[0x00, 0x04, 0x00], false).unwrap();
+        conn.feed_stream(3, &[0x00, 0x04, 0x00], false)
+            .expect("test must succeed");
         assert!(conn.stop_sending(3, 0).is_ok());
     }
 
@@ -4126,11 +4140,13 @@ mod tests {
         // STOP_SENDING はクリティカル扱いしない。stream_reset (受信側を critical 扱い) との
         // 方向の非対称が崩れていないことを固定する。
         let mut conn = Connection::client(Settings::default());
-        conn.feed_stream(3, &[0x02], false).unwrap();
+        conn.feed_stream(3, &[0x02], false)
+            .expect("test must succeed");
         assert!(conn.stop_sending(3, 0).is_ok());
 
         let mut conn = Connection::client(Settings::default());
-        conn.feed_stream(3, &[0x03], false).unwrap();
+        conn.feed_stream(3, &[0x03], false)
+            .expect("test must succeed");
         assert!(conn.stop_sending(3, 0).is_ok());
     }
 
@@ -4138,7 +4154,8 @@ mod tests {
     fn test_stream_reset_on_qpack_encoder_stream_is_closed_critical_stream() {
         let mut conn = Connection::client(Settings::default());
         // QPACK エンコーダーストリームタイプ (0x02)
-        conn.feed_stream(3, &[0x02], false).unwrap();
+        conn.feed_stream(3, &[0x02], false)
+            .expect("test must succeed");
         let err = conn.stream_reset(3, 0, 0).unwrap_err();
         assert!(matches!(
             err,
@@ -4150,7 +4167,8 @@ mod tests {
     fn test_stream_reset_on_qpack_decoder_stream_is_closed_critical_stream() {
         let mut conn = Connection::client(Settings::default());
         // QPACK デコーダーストリームタイプ (0x03)
-        conn.feed_stream(3, &[0x03], false).unwrap();
+        conn.feed_stream(3, &[0x03], false)
+            .expect("test must succeed");
         let err = conn.stream_reset(3, 0, 0).unwrap_err();
         assert!(matches!(
             err,
@@ -4162,7 +4180,7 @@ mod tests {
     fn test_stop_sending_on_qpack_encoder_stream_is_closed_critical_stream() {
         // ローカル QPACK エンコーダーストリームへの STOP_SENDING は接続エラー。
         let mut conn = Connection::client(Settings::default());
-        conn.set_encoder_stream_id(6).unwrap();
+        conn.set_encoder_stream_id(6).expect("test must succeed");
         let err = conn.stop_sending(6, 0).unwrap_err();
         assert!(matches!(
             err,
@@ -4174,7 +4192,7 @@ mod tests {
     fn test_stop_sending_on_qpack_decoder_stream_is_closed_critical_stream() {
         // ローカル QPACK デコーダーストリームへの STOP_SENDING は接続エラー。
         let mut conn = Connection::client(Settings::default());
-        conn.set_decoder_stream_id(10).unwrap();
+        conn.set_decoder_stream_id(10).expect("test must succeed");
         let err = conn.stop_sending(10, 0).unwrap_err();
         assert!(matches!(
             err,
@@ -4203,10 +4221,10 @@ mod tests {
     #[test]
     fn test_set_encoder_stream_id_writes_stream_type() {
         let mut conn = Connection::client(Settings::default());
-        conn.set_encoder_stream_id(6).unwrap();
+        conn.set_encoder_stream_id(6).expect("test must succeed");
 
         // stream type 0x02 が送信データに含まれる
-        let (data, fin) = conn.get_stream_data(6).unwrap();
+        let (data, fin) = conn.get_stream_data(6).expect("test must succeed");
         assert_eq!(data[0], 0x02);
         assert!(!fin);
     }
@@ -4214,10 +4232,10 @@ mod tests {
     #[test]
     fn test_set_decoder_stream_id_writes_stream_type() {
         let mut conn = Connection::client(Settings::default());
-        conn.set_decoder_stream_id(10).unwrap();
+        conn.set_decoder_stream_id(10).expect("test must succeed");
 
         // stream type 0x03 が送信データに含まれる
-        let (data, fin) = conn.get_stream_data(10).unwrap();
+        let (data, fin) = conn.get_stream_data(10).expect("test must succeed");
         assert_eq!(data[0], 0x03);
         assert!(!fin);
     }
@@ -4225,7 +4243,7 @@ mod tests {
     #[test]
     fn test_encoder_stream_in_writable_streams() {
         let mut conn = Connection::client(Settings::default());
-        conn.set_encoder_stream_id(6).unwrap();
+        conn.set_encoder_stream_id(6).expect("test must succeed");
 
         // writable_streams にエンコーダーストリームが含まれる
         let writable: Vec<u64> = conn.writable_streams().collect();
@@ -4238,7 +4256,7 @@ mod tests {
     #[test]
     fn test_decoder_stream_in_writable_streams() {
         let mut conn = Connection::client(Settings::default());
-        conn.set_decoder_stream_id(10).unwrap();
+        conn.set_decoder_stream_id(10).expect("test must succeed");
 
         // writable_streams にデコーダーストリームが含まれる
         let writable: Vec<u64> = conn.writable_streams().collect();
@@ -4252,11 +4270,11 @@ mod tests {
     fn test_encoder_stream_set_capacity_after_settings() {
         // SETTINGS 受信後に Set Dynamic Table Capacity 命令がエンコーダーストリームに積まれる
         let mut conn = Connection::client(Settings::default());
-        conn.set_control_stream_id(2).unwrap();
-        conn.set_encoder_stream_id(6).unwrap();
+        conn.set_control_stream_id(2).expect("test must succeed");
+        conn.set_encoder_stream_id(6).expect("test must succeed");
 
         // stream type バイトを消費
-        let (data, _) = conn.get_stream_data(6).unwrap();
+        let (data, _) = conn.get_stream_data(6).expect("test must succeed");
         let len = data.len();
         conn.consume_stream_data(6, len);
 
@@ -4271,7 +4289,7 @@ mod tests {
         // = 0x50, 0x00
         // SETTINGS frame: type=0x04, length=3, payload=[0x01, 0x50, 0x00]
         conn.feed_stream(3, &[0x00, 0x04, 0x03, 0x01, 0x50, 0x00], false)
-            .unwrap();
+            .expect("test must succeed");
 
         // エンコーダーストリームに Set Dynamic Table Capacity 命令がある
         let data = conn.get_stream_data(6);
@@ -4318,7 +4336,7 @@ mod tests {
 
     /// テスト用の VarInt 構築ショートカット
     fn vi(value: u64) -> VarInt {
-        VarInt::new(value).unwrap()
+        VarInt::new(value).expect("test must succeed")
     }
 
     /// WebTransport 有効な Settings を作成するヘルパー
@@ -4344,7 +4362,7 @@ mod tests {
     /// peer SETTINGS、transport parameter、RESET_STREAM_AT を全て設定する。
     fn wt_negotiated_client() -> Connection {
         let mut conn = Connection::client(wt_enabled_settings());
-        conn.set_control_stream_id(2).unwrap();
+        conn.set_control_stream_id(2).expect("test must succeed");
         // peer SETTINGS を注入
         conn.peer_settings = Some(wt_enabled_settings());
         // transport parameter 検証済み
@@ -4371,10 +4389,13 @@ mod tests {
         // ストリームタイプ 0x54 (varint 2 バイト: [0x40, 0x54])
         // + セッション ID 4 (varint 1 バイト: [0x04]) + データ
         conn.feed_stream(2, &[0x40, 0x54, 0x04, 0xAA, 0xBB], false)
-            .unwrap();
+            .expect("test must succeed");
 
         // WebTransportEvent::UniStreamOpen イベント
-        let event = conn.poll_event().unwrap().unwrap();
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::UniStreamOpen {
@@ -4384,7 +4405,10 @@ mod tests {
         ));
 
         // WebTransportEvent::UniStreamData イベント
-        let event = conn.poll_event().unwrap().unwrap();
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::UniStreamData {
@@ -4399,16 +4423,24 @@ mod tests {
         let mut conn = make_server_with_established_wt_session(4);
 
         // 初回: ストリームタイプ + セッション ID のみ
-        conn.feed_stream(2, &[0x40, 0x54, 0x04], false).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(2, &[0x40, 0x54, 0x04], false)
+            .expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::UniStreamOpen { .. })
         ));
 
         // 後続データ
-        conn.feed_stream(2, &[0xCC, 0xDD], false).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(2, &[0xCC, 0xDD], false)
+            .expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::UniStreamData {
@@ -4422,11 +4454,15 @@ mod tests {
     fn test_wt_uni_stream_fin() {
         let mut conn = make_server_with_established_wt_session(4);
 
-        conn.feed_stream(2, &[0x40, 0x54, 0x04], false).unwrap();
+        conn.feed_stream(2, &[0x40, 0x54, 0x04], false)
+            .expect("test must succeed");
         let _ = conn.poll_event(); // Open イベントを消費
 
-        conn.feed_stream(2, &[], true).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(2, &[], true).expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::UniStreamEnd { stream_id: 2 })
@@ -4437,7 +4473,7 @@ mod tests {
     fn test_wt_uni_stream_disabled_returns_error() {
         // WebTransport 無効な接続
         let mut conn = Connection::server(Settings::default());
-        conn.set_control_stream_id(3).unwrap();
+        conn.set_control_stream_id(3).expect("test must succeed");
 
         // ストリームタイプ 0x54 (varint 2 バイト: [0x40, 0x54])
         let err = conn.feed_stream(2, &[0x40, 0x54, 0x04], false).unwrap_err();
@@ -4452,12 +4488,17 @@ mod tests {
         let mut conn = make_server_with_established_wt_session(4);
 
         // ストリームタイプの 1 バイト目のみ (varint 未完了)
-        conn.feed_stream(2, &[0x40], false).unwrap();
-        assert!(conn.poll_event().unwrap().is_none());
+        conn.feed_stream(2, &[0x40], false)
+            .expect("test must succeed");
+        assert!(conn.poll_event().expect("test must succeed").is_none());
 
         // ストリームタイプの 2 バイト目 + セッション ID
-        conn.feed_stream(2, &[0x54, 0x04], false).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(2, &[0x54, 0x04], false)
+            .expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::UniStreamOpen {
@@ -4472,12 +4513,17 @@ mod tests {
         let mut conn = make_server_with_established_wt_session(4);
 
         // ストリームタイプのみ (セッション ID なし)
-        conn.feed_stream(2, &[0x40, 0x54], false).unwrap();
-        assert!(conn.poll_event().unwrap().is_none());
+        conn.feed_stream(2, &[0x40, 0x54], false)
+            .expect("test must succeed");
+        assert!(conn.poll_event().expect("test must succeed").is_none());
 
         // セッション ID
-        conn.feed_stream(2, &[0x04], false).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(2, &[0x04], false)
+            .expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::UniStreamOpen {
@@ -4530,9 +4576,12 @@ mod tests {
         // stream_id = 1 は server-initiated bidi
         // signal value 0x41 は varint で [0x40, 0x41] + session_id 0x00 + ペイロード
         conn.feed_stream(1, &[0x40, 0x41, 0x00, 0xAA, 0xBB], false)
-            .unwrap();
+            .expect("test must succeed");
 
-        let event = conn.poll_event().unwrap().unwrap();
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BidiStreamOpen {
@@ -4541,7 +4590,10 @@ mod tests {
             })
         ));
 
-        let event = conn.poll_event().unwrap().unwrap();
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BidiStreamData {
@@ -4556,15 +4608,23 @@ mod tests {
         // 確定済み WT bidi stream への後続データ
         let mut conn = wt_negotiated_client_with_session(0);
 
-        conn.feed_stream(1, &[0x40, 0x41, 0x00], false).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(1, &[0x40, 0x41, 0x00], false)
+            .expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BidiStreamOpen { .. })
         ));
 
-        conn.feed_stream(1, &[0xCC, 0xDD], false).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(1, &[0xCC, 0xDD], false)
+            .expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BidiStreamData {
@@ -4578,11 +4638,15 @@ mod tests {
     fn test_wt_bidi_stream_fin() {
         let mut conn = wt_negotiated_client_with_session(0);
 
-        conn.feed_stream(1, &[0x40, 0x41, 0x00], false).unwrap();
-        let _ = conn.poll_event().unwrap(); // Open
+        conn.feed_stream(1, &[0x40, 0x41, 0x00], false)
+            .expect("test must succeed");
+        let _ = conn.poll_event().expect("test must succeed"); // Open
 
-        conn.feed_stream(1, &[], true).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(1, &[], true).expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BidiStreamEnd { stream_id: 1 })
@@ -4593,7 +4657,7 @@ mod tests {
     fn test_wt_bidi_stream_rejected_when_wt_disabled() {
         // WebTransport 無効なクライアントは server-initiated bidi を拒否
         let mut conn = Connection::client(Settings::default());
-        conn.set_control_stream_id(2).unwrap();
+        conn.set_control_stream_id(2).expect("test must succeed");
 
         let err = conn.feed_stream(1, &[0x40, 0x41, 0x00], false).unwrap_err();
         assert!(matches!(
@@ -4628,12 +4692,16 @@ mod tests {
         let mut conn = wt_negotiated_client_with_session(4);
 
         // 空データ (signal value なし)
-        conn.feed_stream(1, &[], false).unwrap();
-        assert!(conn.poll_event().unwrap().is_none());
+        conn.feed_stream(1, &[], false).expect("test must succeed");
+        assert!(conn.poll_event().expect("test must succeed").is_none());
 
         // signal value + session_id
-        conn.feed_stream(1, &[0x40, 0x41, 0x04], false).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(1, &[0x40, 0x41, 0x04], false)
+            .expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BidiStreamOpen {
@@ -4649,12 +4717,17 @@ mod tests {
         let mut conn = wt_negotiated_client_with_session(4);
 
         // signal value のみ (varint 2 バイト)
-        conn.feed_stream(1, &[0x40, 0x41], false).unwrap();
-        assert!(conn.poll_event().unwrap().is_none());
+        conn.feed_stream(1, &[0x40, 0x41], false)
+            .expect("test must succeed");
+        assert!(conn.poll_event().expect("test must succeed").is_none());
 
         // session_id
-        conn.feed_stream(1, &[0x04], false).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(1, &[0x04], false)
+            .expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BidiStreamOpen {
@@ -4669,8 +4742,12 @@ mod tests {
         // session_id = 4 (2 番目の client-initiated bidi stream)
         let mut conn = wt_negotiated_client_with_session(4);
 
-        conn.feed_stream(1, &[0x40, 0x41, 0x04], false).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(1, &[0x40, 0x41, 0x04], false)
+            .expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BidiStreamOpen {
@@ -4694,9 +4771,12 @@ mod tests {
         // stream_id = 0 はクライアント開始 bidi
         // signal value 0x41 (varint [0x40, 0x41]) + session_id 0x00 + ペイロード
         conn.feed_stream(0, &[0x40, 0x41, 0x00, 0xAA, 0xBB], false)
-            .unwrap();
+            .expect("test must succeed");
 
-        let event = conn.poll_event().unwrap().unwrap();
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BidiStreamOpen {
@@ -4705,7 +4785,10 @@ mod tests {
             })
         ));
 
-        let event = conn.poll_event().unwrap().unwrap();
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BidiStreamData {
@@ -4719,7 +4802,7 @@ mod tests {
     fn test_server_client_bidi_request_not_wt() {
         // サーバー: クライアント開始の bidi stream が 0x41 でない場合はリクエストとして処理
         let mut conn = Connection::server(wt_enabled_settings());
-        conn.set_control_stream_id(3).unwrap();
+        conn.set_control_stream_id(3).expect("test must succeed");
 
         // HEADERS フレーム (type=0x01) はリクエストストリーム
         // 先頭バイト 0x01 は 1 バイト varint (値 0x01) なので WT_STREAM (0x41) ではない
@@ -4736,12 +4819,17 @@ mod tests {
         let mut conn = make_server_with_established_wt_session(0);
 
         // 2 バイト varint の先頭 1 バイトのみ
-        conn.feed_stream(0, &[0x40], false).unwrap();
-        assert!(conn.poll_event().unwrap().is_none());
+        conn.feed_stream(0, &[0x40], false)
+            .expect("test must succeed");
+        assert!(conn.poll_event().expect("test must succeed").is_none());
 
         // 2 バイト目で 0x41 確定 + session_id
-        conn.feed_stream(0, &[0x41, 0x00], false).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(0, &[0x41, 0x00], false)
+            .expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BidiStreamOpen {
@@ -4755,19 +4843,20 @@ mod tests {
     fn test_server_client_bidi_dispatch_split_varint_not_wt() {
         // サーバー: 先頭 varint が分割され、0x41 でないと判定された場合
         let mut conn = Connection::server(wt_enabled_settings());
-        conn.set_control_stream_id(3).unwrap();
+        conn.set_control_stream_id(3).expect("test must succeed");
 
         // 2 バイト varint の先頭 1 バイトのみ (0x40 prefix)
-        conn.feed_stream(0, &[0x40], false).unwrap();
-        assert!(conn.poll_event().unwrap().is_none());
+        conn.feed_stream(0, &[0x40], false)
+            .expect("test must succeed");
+        assert!(conn.poll_event().expect("test must succeed").is_none());
 
         // 2 バイト目で 0x42 (値 0x42, WT_STREAM ではない) → リクエストストリーム
         // ただし [0x40, 0x42] は varint で値 0x42 (= HEADERS フレームではない未知フレームタイプ)
         // リクエストストリームとして処理される
         conn.feed_stream(0, &[0x42, 0x02, 0xAA, 0xBB], false)
-            .unwrap();
+            .expect("test must succeed");
         // 未知フレームタイプはスキップされる (RFC 9114 Section 9)
-        assert!(conn.poll_event().unwrap().is_none());
+        assert!(conn.poll_event().expect("test must succeed").is_none());
     }
 
     #[test]
@@ -4776,12 +4865,16 @@ mod tests {
         let mut conn = make_server_with_established_wt_session(0);
 
         // 空データ
-        conn.feed_stream(0, &[], false).unwrap();
-        assert!(conn.poll_event().unwrap().is_none());
+        conn.feed_stream(0, &[], false).expect("test must succeed");
+        assert!(conn.poll_event().expect("test must succeed").is_none());
 
         // WT bidi データ
-        conn.feed_stream(0, &[0x40, 0x41, 0x00], false).unwrap();
-        let event = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(0, &[0x40, 0x41, 0x00], false)
+            .expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BidiStreamOpen {
@@ -4796,7 +4889,7 @@ mod tests {
         // サーバー: 空データ + FIN はリクエストストリームとして処理
         // (HEADERS なしで FIN = H3_MESSAGE_ERROR)
         let mut conn = Connection::server(wt_enabled_settings());
-        conn.set_control_stream_id(3).unwrap();
+        conn.set_control_stream_id(3).expect("test must succeed");
 
         let err = conn.feed_stream(0, &[], true).unwrap_err();
         assert!(matches!(err, Error::StreamError(ErrorCode::MessageError)));
@@ -4811,14 +4904,14 @@ mod tests {
     fn test_wt_connect_rejected_without_peer_settings() {
         // クライアント: peer SETTINGS 未受信の状態で WebTransport CONNECT を送信
         let mut conn = Connection::client(wt_enabled_settings());
-        conn.set_control_stream_id(2).unwrap();
+        conn.set_control_stream_id(2).expect("test must succeed");
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport-h3").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
 
         // peer SETTINGS 未受信なので InternalError
@@ -4833,18 +4926,19 @@ mod tests {
     fn test_wt_connect_rejected_when_peer_wt_disabled() {
         // クライアント: peer SETTINGS で WT 無効
         let mut conn = Connection::client(wt_enabled_settings());
-        conn.set_control_stream_id(2).unwrap();
+        conn.set_control_stream_id(2).expect("test must succeed");
 
         // peer から WT 無効な SETTINGS を受信
         // 制御ストリーム: タイプ (0x00) + SETTINGS フレーム (type=0x04, length=0x00)
-        conn.feed_stream(3, &[0x00, 0x04, 0x00], false).unwrap();
+        conn.feed_stream(3, &[0x00, 0x04, 0x00], false)
+            .expect("test must succeed");
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport-h3").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
 
         let err = conn.send_request(&headers, false).unwrap_err();
@@ -4859,18 +4953,18 @@ mod tests {
         // サーバー: peer (クライアント) SETTINGS 未受信の状態で WT CONNECT を受信
         // (draft-ietf-webtrans-http3-15 Section 7.1)
         let mut client = Connection::client(wt_enabled_settings());
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
 
         let mut server = Connection::server(wt_enabled_settings());
-        server.set_control_stream_id(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
 
         // クライアントから WT CONNECT を送信
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport-h3").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
         let stream_id = client.send_request(&headers, false).unwrap_err();
         // クライアントも peer SETTINGS 未受信なので送信失敗する
@@ -4890,15 +4984,22 @@ mod tests {
     fn test_server_wt_connect_rejected_when_peer_wt_disabled() {
         // サーバー: peer (クライアント) の SETTINGS で WT 無効
         let mut server = Connection::server(wt_enabled_settings());
-        server.set_control_stream_id(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
 
         // クライアントから WT 無効な SETTINGS を受信
         // control stream type (0x00) + SETTINGS frame: type=0x04, length=0x00
-        server.feed_stream(2, &[0x00, 0x04, 0x00], false).unwrap();
+        server
+            .feed_stream(2, &[0x00, 0x04, 0x00], false)
+            .expect("test must succeed");
 
         // peer SETTINGS は受信したが WT 無効
         assert!(server.peer_settings().is_some());
-        assert!(!server.peer_settings().unwrap().is_webtransport_enabled());
+        assert!(
+            !server
+                .peer_settings()
+                .expect("test must succeed")
+                .is_webtransport_enabled()
+        );
     }
 
     #[test]
@@ -4907,20 +5008,24 @@ mod tests {
         // クライアント・サーバー間の完全な SETTINGS 交換をテスト
         let wt_settings = wt_enabled_settings();
         let mut client = Connection::client(wt_settings);
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
 
         let mut server = Connection::server(wt_settings);
-        server.set_control_stream_id(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
 
         // 制御ストリームデータを交換
-        let (client_ctrl, _) = client.take_stream_data(2).unwrap();
-        server.feed_stream(2, &client_ctrl, false).unwrap();
-        let _ = server.poll_event().unwrap();
-        let (server_ctrl, _) = server.take_stream_data(3).unwrap();
-        client.feed_stream(3, &server_ctrl, false).unwrap();
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+        let _ = server.poll_event().expect("test must succeed");
+        let (server_ctrl, _) = server.take_stream_data(3).expect("test must succeed");
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("test must succeed");
 
         // サーバーは peer (クライアント) の WT SETTINGS を受信済み
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert!(peer.is_webtransport_enabled());
     }
 
@@ -4928,20 +5033,20 @@ mod tests {
     fn test_non_wt_connect_allowed_without_wt_settings() {
         // 通常の Extended CONNECT は WebTransport チェックの対象外
         let mut conn = Connection::client(Settings::new().enable_connect_protocol(true));
-        conn.set_control_stream_id(2).unwrap();
+        conn.set_control_stream_id(2).expect("test must succeed");
 
         // peer から ENABLE_CONNECT_PROTOCOL=1 の SETTINGS を受信
         // control stream type (0x00) + SETTINGS frame: type=0x04, length=0x02
         // + entries: [id=0x08 (ENABLE_CONNECT_PROTOCOL), value=0x01]
         conn.feed_stream(3, &[0x00, 0x04, 0x02, 0x08, 0x01], false)
-            .unwrap();
+            .expect("test must succeed");
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"websocket").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/ws").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"websocket").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/ws").expect("test must succeed"),
         ];
 
         // WebSocket 等の Extended CONNECT は WT チェックなしで通る
@@ -4952,7 +5057,9 @@ mod tests {
     fn build_headers_frame(headers: &[Header]) -> Vec<u8> {
         let encoder = crate::qpack::Encoder::new();
         let mut qpack_buf = vec![0u8; 4096];
-        let qpack_len = encoder.encode(&mut qpack_buf, headers).unwrap();
+        let qpack_len = encoder
+            .encode(&mut qpack_buf, headers)
+            .expect("test must succeed");
         qpack_buf.truncate(qpack_len);
 
         // HEADERS フレーム: type=0x01, length=varint, payload=QPACK エンコード済み
@@ -4978,10 +5085,10 @@ mod tests {
             crate::webtransport::Settings::new().webtransport_max_sessions_draft07(vi(1));
         let server_settings = Settings::new().enable_webtransport_server(server_wt);
         let mut server = Connection::server(server_settings);
-        server.set_control_stream_id(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
         server
             .set_webtransport_transport_verified(true, false)
-            .unwrap();
+            .expect("test must succeed");
 
         // draft-07 クライアントの SETTINGS: H3_DATAGRAM=1 + WEBTRANSPORT_MAX_SESSIONS=1
         // ENABLE_CONNECT_PROTOCOL は含めない (Safari と同じパターン)
@@ -4996,31 +5103,33 @@ mod tests {
                 .enable_webtransport_server(client_wt)
         };
         let mut client = Connection::client(client_settings);
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
 
         // クライアントの制御ストリームデータをサーバーに feed
-        let (client_ctrl, _) = client.take_stream_data(2).unwrap();
-        server.feed_stream(2, &client_ctrl, false).unwrap();
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
 
         // サーバーの制御ストリームデータを取得 (消費のみ)
-        let _ = server.take_stream_data(3).unwrap();
+        let _ = server.take_stream_data(3).expect("test must succeed");
 
         // サーバー側で peer SETTINGS を確認
-        let peer = server.peer_settings().unwrap();
+        let peer = server.peer_settings().expect("test must succeed");
         assert!(peer.is_webtransport_enabled());
         // クライアントは ENABLE_CONNECT_PROTOCOL を送信していない
         assert_eq!(peer.enable_connect_protocol, None);
 
         // SETTINGS イベントを消費
-        let _ = server.poll_event().unwrap();
+        let _ = server.poll_event().expect("test must succeed");
 
         // draft-07 CONNECT HEADERS フレームを手動構築
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
         let frame_data = build_headers_frame(&headers);
 
@@ -5041,10 +5150,10 @@ mod tests {
         // サーバー: draft-15 対応
         let server_settings = wt_enabled_settings();
         let mut server = Connection::server(server_settings);
-        server.set_control_stream_id(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
         server
             .set_webtransport_transport_verified(true, true)
-            .unwrap();
+            .expect("test must succeed");
 
         // draft-15 クライアント: ENABLE_CONNECT_PROTOCOL なし (正当)
         let client_wt = crate::webtransport::Settings::new().wt_enabled(vi(1));
@@ -5055,25 +5164,27 @@ mod tests {
                 .enable_webtransport_server(client_wt)
         };
         let mut client = Connection::client(client_settings);
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
 
         // クライアントの制御ストリームデータをサーバーに feed
-        let (client_ctrl, _) = client.take_stream_data(2).unwrap();
-        server.feed_stream(2, &client_ctrl, false).unwrap();
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
 
         // サーバーの制御ストリームデータを取得 (消費のみ)
-        let _ = server.take_stream_data(3).unwrap();
+        let _ = server.take_stream_data(3).expect("test must succeed");
 
         // SETTINGS イベントを消費
-        let _ = server.poll_event().unwrap();
+        let _ = server.poll_event().expect("test must succeed");
 
         // draft-15 CONNECT HEADERS フレームを手動構築
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport-h3").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
         let frame_data = build_headers_frame(&headers);
 
@@ -5107,15 +5218,17 @@ mod tests {
         let wt_settings = wt_enabled_settings();
         // クライアント制御ストリームは 6 に置く (テスト本体が stream_id 2 を WT 用に使うため)
         let mut client = Connection::client(wt_settings);
-        client.set_control_stream_id(6).unwrap();
+        client.set_control_stream_id(6).expect("test must succeed");
         let mut server = Connection::server(wt_settings);
-        server.set_control_stream_id(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
         server
             .set_webtransport_transport_verified(true, true)
-            .unwrap();
-        let (client_ctrl, _) = client.take_stream_data(6).unwrap();
-        server.feed_stream(6, &client_ctrl, false).unwrap();
-        while server.poll_event().unwrap().is_some() {}
+            .expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(6).expect("test must succeed");
+        server
+            .feed_stream(6, &client_ctrl, false)
+            .expect("test must succeed");
+        while server.poll_event().expect("test must succeed").is_some() {}
         server
     }
 
@@ -5123,27 +5236,31 @@ mod tests {
     fn setup_wt_pair() -> (Connection, Connection) {
         let wt_settings = wt_enabled_settings();
         let mut client = Connection::client(wt_settings);
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
         let mut server = Connection::server(wt_settings);
-        server.set_control_stream_id(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
 
         // QUIC transport parameter レベルの前提条件を注入
         client
             .set_webtransport_transport_verified(true, true)
-            .unwrap();
+            .expect("test must succeed");
         server
             .set_webtransport_transport_verified(true, true)
-            .unwrap();
+            .expect("test must succeed");
 
         // 制御ストリームデータ交換
-        let (client_ctrl, _) = client.take_stream_data(2).unwrap();
-        server.feed_stream(2, &client_ctrl, false).unwrap();
-        let _ = server.poll_event().unwrap();
-        let (server_ctrl, _) = server.take_stream_data(3).unwrap();
-        client.feed_stream(3, &server_ctrl, false).unwrap();
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+        let _ = server.poll_event().expect("test must succeed");
+        let (server_ctrl, _) = server.take_stream_data(3).expect("test must succeed");
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("test must succeed");
 
         // SETTINGS イベントを消費
-        let _ = client.poll_event().unwrap();
+        let _ = client.poll_event().expect("test must succeed");
 
         (client, server)
     }
@@ -5153,13 +5270,15 @@ mod tests {
         let (mut client, _server) = setup_wt_pair();
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport-h3").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
-        let stream_id = client.send_request(&headers, false).unwrap();
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
 
         // セッションが Pending 状態で登録されていること
         assert!(client.wt_sessions.contains_key(&stream_id));
@@ -5175,30 +5294,42 @@ mod tests {
 
         // クライアントが WT CONNECT を送信
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport-h3").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
-        let stream_id = client.send_request(&headers, false).unwrap();
-        let (req_data, _) = client.take_stream_data(stream_id).unwrap();
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
+        let (req_data, _) = client
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
 
         // サーバーがリクエストを受信
-        server.feed_stream(stream_id, &req_data, false).unwrap();
+        server
+            .feed_stream(stream_id, &req_data, false)
+            .expect("test must succeed");
         // サーバー側のイベントを消費
-        let _ = server.drain_events().unwrap();
+        let _ = server.drain_events().expect("test must succeed");
 
         // サーバーが 200 OK を返す
-        let response = vec![Header::new(b":status", b"200").unwrap()];
-        server.send_response(stream_id, &response, false).unwrap();
-        let (resp_data, _) = server.take_stream_data(stream_id).unwrap();
+        let response = vec![Header::new(b":status", b"200").expect("test must succeed")];
+        server
+            .send_response(stream_id, &response, false)
+            .expect("test must succeed");
+        let (resp_data, _) = server
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
 
         // クライアントが 200 OK を受信
-        client.feed_stream(stream_id, &resp_data, false).unwrap();
+        client
+            .feed_stream(stream_id, &resp_data, false)
+            .expect("test must succeed");
 
         // WebTransportEvent::SessionEstablished イベントが発火すること
-        let events = client.drain_events().unwrap();
+        let events = client.drain_events().expect("test must succeed");
         assert!(events.iter().any(|e| matches!(
             e,
             Event::WebTransport(WebTransportEvent::SessionEstablished { session_id, .. }) if *session_id == stream_id
@@ -5220,31 +5351,37 @@ mod tests {
             .wt_initial_max_data(vi(8 * 1024 * 1024));
         let client_settings = Settings::new().enable_webtransport_client(client_wt);
         let mut client = Connection::client(client_settings);
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
 
         let mut server = Connection::server(wt_multi_draft_settings_with_flow_control());
-        server.set_control_stream_id(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
         server
             .set_webtransport_transport_verified(true, true)
-            .unwrap();
+            .expect("test must succeed");
 
-        let (client_ctrl, _) = client.take_stream_data(2).unwrap();
-        server.feed_stream(2, &client_ctrl, false).unwrap();
-        let _ = server.drain_events().unwrap();
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
         let frame = build_headers_frame(&headers);
-        server.feed_stream(0, &frame, false).unwrap();
-        let _ = server.drain_events().unwrap();
+        server
+            .feed_stream(0, &frame, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
 
-        let response = vec![Header::new(b":status", b"200").unwrap()];
-        server.send_response(0, &response, false).unwrap();
+        let response = vec![Header::new(b":status", b"200").expect("test must succeed")];
+        server
+            .send_response(0, &response, false)
+            .expect("test must succeed");
 
         let capsules = server.take_wt_pending_capsules(0);
         assert_eq!(capsules.len(), 3);
@@ -5276,31 +5413,37 @@ mod tests {
             crate::webtransport::Settings::new().webtransport_max_sessions_draft07(vi(1));
         let client_settings = Settings::new().enable_webtransport_client(client_wt);
         let mut client = Connection::client(client_settings);
-        client.set_control_stream_id(2).unwrap();
+        client.set_control_stream_id(2).expect("test must succeed");
 
         let mut server = Connection::server(wt_multi_draft_settings_with_flow_control());
-        server.set_control_stream_id(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
         server
             .set_webtransport_transport_verified(true, false)
-            .unwrap();
+            .expect("test must succeed");
 
-        let (client_ctrl, _) = client.take_stream_data(2).unwrap();
-        server.feed_stream(2, &client_ctrl, false).unwrap();
-        let _ = server.drain_events().unwrap();
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
         let frame = build_headers_frame(&headers);
-        server.feed_stream(0, &frame, false).unwrap();
-        let _ = server.drain_events().unwrap();
+        server
+            .feed_stream(0, &frame, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
 
-        let response = vec![Header::new(b":status", b"200").unwrap()];
-        server.send_response(0, &response, false).unwrap();
+        let response = vec![Header::new(b":status", b"200").expect("test must succeed")];
+        server
+            .send_response(0, &response, false)
+            .expect("test must succeed");
 
         assert!(server.take_wt_pending_capsules(0).is_empty());
     }
@@ -5311,36 +5454,52 @@ mod tests {
 
         // WT CONNECT + 200 OK のハンドシェイク
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport-h3").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
-        let stream_id = client.send_request(&headers, false).unwrap();
-        let (req_data, _) = client.take_stream_data(stream_id).unwrap();
-        server.feed_stream(stream_id, &req_data, false).unwrap();
-        let _ = server.drain_events().unwrap();
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
+        let (req_data, _) = client
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
+        server
+            .feed_stream(stream_id, &req_data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
 
-        let response = vec![Header::new(b":status", b"200").unwrap()];
-        server.send_response(stream_id, &response, false).unwrap();
-        let (resp_data, _) = server.take_stream_data(stream_id).unwrap();
-        client.feed_stream(stream_id, &resp_data, false).unwrap();
-        let _ = client.drain_events().unwrap();
+        let response = vec![Header::new(b":status", b"200").expect("test must succeed")];
+        server
+            .send_response(stream_id, &response, false)
+            .expect("test must succeed");
+        let (resp_data, _) = server
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
+        client
+            .feed_stream(stream_id, &resp_data, false)
+            .expect("test must succeed");
+        let _ = client.drain_events().expect("test must succeed");
 
         // server-initiated uni stream をクライアントに送信
         // stream_id=3 は server-initiated uni, ストリームタイプ 0x54 + session_id
         let session_id = stream_id;
         let mut uni_data = vec![0x40, 0x54]; // stream type 0x54 (varint)
         uni_data.push(session_id as u8); // session_id (1 バイト varint)
-        client.feed_stream(3, &uni_data, false).unwrap();
-        let _ = client.drain_events().unwrap();
+        client
+            .feed_stream(3, &uni_data, false)
+            .expect("test must succeed");
+        let _ = client.drain_events().expect("test must succeed");
 
         // CONNECT stream を FIN で閉じる (セッション終了)
-        client.feed_stream(stream_id, &[], true).unwrap();
+        client
+            .feed_stream(stream_id, &[], true)
+            .expect("test must succeed");
 
         // WebTransportEvent::SessionClosed イベントが発火すること
-        let events = client.drain_events().unwrap();
+        let events = client.drain_events().expect("test must succeed");
         let closed_event = events.iter().find(|e| {
             matches!(e, Event::WebTransport(WebTransportEvent::SessionClosed { session_id: sid, .. }) if *sid == session_id)
         });
@@ -5359,28 +5518,42 @@ mod tests {
 
         // WT CONNECT + 200 OK のハンドシェイク
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport-h3").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
-        let stream_id = client.send_request(&headers, false).unwrap();
-        let (req_data, _) = client.take_stream_data(stream_id).unwrap();
-        server.feed_stream(stream_id, &req_data, false).unwrap();
-        let _ = server.drain_events().unwrap();
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
+        let (req_data, _) = client
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
+        server
+            .feed_stream(stream_id, &req_data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
 
-        let response = vec![Header::new(b":status", b"200").unwrap()];
-        server.send_response(stream_id, &response, false).unwrap();
-        let (resp_data, _) = server.take_stream_data(stream_id).unwrap();
-        client.feed_stream(stream_id, &resp_data, false).unwrap();
-        let _ = client.drain_events().unwrap();
+        let response = vec![Header::new(b":status", b"200").expect("test must succeed")];
+        server
+            .send_response(stream_id, &response, false)
+            .expect("test must succeed");
+        let (resp_data, _) = server
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
+        client
+            .feed_stream(stream_id, &resp_data, false)
+            .expect("test must succeed");
+        let _ = client.drain_events().expect("test must succeed");
 
         // CONNECT stream を RESET_STREAM で閉じる
-        client.stream_reset(stream_id, 0, 0).unwrap();
+        client
+            .stream_reset(stream_id, 0, 0)
+            .expect("test must succeed");
 
         // WebTransportEvent::SessionClosed イベントが発火すること
-        let events = client.drain_events().unwrap();
+        let events = client.drain_events().expect("test must succeed");
         assert!(events.iter().any(|e| matches!(
             e,
             Event::WebTransport(WebTransportEvent::SessionClosed { session_id: sid, .. }) if *sid == stream_id
@@ -5393,13 +5566,15 @@ mod tests {
     fn test_wt_session_buffering_before_established() {
         // サーバー側: セッション未確立 (CONNECT 受信前) のストリームが到着した場合のバッファリング
         let mut server = Connection::server(wt_enabled_settings());
-        server.set_control_stream_id(3).unwrap();
+        server.set_control_stream_id(3).expect("test must succeed");
         server.peer_settings = Some(wt_enabled_settings());
         server.wt_transport_verified = true;
 
         // client-initiated uni stream が先に到着 (session_id = 0)
         // ストリームタイプ 0x54 (varint [0x40, 0x54]) + session_id = 0
-        server.feed_stream(2, &[0x40, 0x54, 0x00], false).unwrap();
+        server
+            .feed_stream(2, &[0x40, 0x54, 0x00], false)
+            .expect("test must succeed");
 
         // セッション ID = 0 のセッションが自動作成されていること
         assert!(server.wt_sessions.contains_key(&0));
@@ -5420,7 +5595,7 @@ mod tests {
         // 先行 uni stream を流し込む (session_id = 0, ペイロード = 0xAA, 0xBB)
         server
             .feed_stream(2, &[0x40, 0x54, 0x00, 0xAA, 0xBB], false)
-            .unwrap();
+            .expect("test must succeed");
 
         // セッションが Pending で生成されていること
         assert_eq!(server.wt_sessions[&0].state, WtSessionState::Pending);
@@ -5428,10 +5603,10 @@ mod tests {
         let entry = server
             .wt_sessions
             .get(&0)
-            .unwrap()
+            .expect("test must succeed")
             .buffered_stream_entries
             .get(&2)
-            .unwrap();
+            .expect("test must succeed");
         assert!(!entry.is_bidi);
         assert_eq!(entry.data, vec![0xAA, 0xBB]);
         assert!(!entry.fin);
@@ -5440,14 +5615,16 @@ mod tests {
         assert!(server.events.is_empty());
 
         // 後続 Data も同様にバッファに追記される
-        server.feed_stream(2, &[0xCC], false).unwrap();
+        server
+            .feed_stream(2, &[0xCC], false)
+            .expect("test must succeed");
         let entry = server
             .wt_sessions
             .get(&0)
-            .unwrap()
+            .expect("test must succeed")
             .buffered_stream_entries
             .get(&2)
-            .unwrap();
+            .expect("test must succeed");
         assert_eq!(entry.data, vec![0xAA, 0xBB, 0xCC]);
         assert!(server.events.is_empty());
     }
@@ -5460,10 +5637,15 @@ mod tests {
 
         // server-initiated uni stream (session_id = 0 だがクライアントはセッション未開始)
         // ストリームタイプ 0x54 (varint [0x40, 0x54]) + session_id = 0
-        client.feed_stream(3, &[0x40, 0x54, 0x00], false).unwrap();
+        client
+            .feed_stream(3, &[0x40, 0x54, 0x00], false)
+            .expect("test must succeed");
 
         // WT_SESSION_GONE でストリーム拒否イベントが発生すること
-        let event = client.poll_event().unwrap().unwrap();
+        let event = client
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::BufferedStreamRejected {
@@ -5491,7 +5673,9 @@ mod tests {
                 &mut buf,
                 crate::VarInt::new(session_id).expect("session_id fits in VarInt"),
             );
-            server.feed_stream(stream_id, &buf, false).unwrap();
+            server
+                .feed_stream(stream_id, &buf, false)
+                .expect("test must succeed");
         }
         assert_eq!(server.count_pending_wt_sessions(), WT_MAX_PENDING_SESSIONS);
 
@@ -5503,11 +5687,13 @@ mod tests {
             &mut buf,
             crate::VarInt::new(overflow_session_id).expect("overflow_session_id fits in VarInt"),
         );
-        server.feed_stream(overflow_stream_id, &buf, false).unwrap();
+        server
+            .feed_stream(overflow_stream_id, &buf, false)
+            .expect("test must succeed");
 
         // 最終イベントが BufferedStreamRejected であること
         let mut last = None;
-        while let Some(ev) = server.poll_event().unwrap() {
+        while let Some(ev) = server.poll_event().expect("test must succeed") {
             last = Some(ev);
         }
         match last {
@@ -5537,7 +5723,7 @@ mod tests {
                 crate::VarInt::new(qsi).expect("qsi fits in VarInt"),
             );
             buf.extend_from_slice(b"x");
-            server.feed_datagram(&buf).unwrap();
+            server.feed_datagram(&buf).expect("test must succeed");
         }
         assert_eq!(server.count_pending_wt_sessions(), WT_MAX_PENDING_SESSIONS);
 
@@ -5549,7 +5735,7 @@ mod tests {
             crate::VarInt::new(overflow_session_id / 4).expect("quarter session id fits in VarInt"),
         );
         buf.extend_from_slice(b"x");
-        server.feed_datagram(&buf).unwrap();
+        server.feed_datagram(&buf).expect("test must succeed");
         assert_eq!(server.count_pending_wt_sessions(), WT_MAX_PENDING_SESSIONS);
         assert!(!server.wt_sessions.contains_key(&overflow_session_id));
     }
@@ -5561,14 +5747,21 @@ mod tests {
         // (draft-ietf-webtrans-http3-15 Section 4.4)
         let mut conn = make_server_with_established_wt_session(4);
         // セッション 4 に紐づく WT uni stream 2 を作成
-        conn.feed_stream(2, &[0x40, 0x54, 0x04], false).unwrap();
+        conn.feed_stream(2, &[0x40, 0x54, 0x04], false)
+            .expect("test must succeed");
         // Open イベントを消費
-        let _ = conn.poll_event().unwrap().unwrap();
+        let _ = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
 
         // WT uni stream の stream header 長 = varint(0x54) + varint(4) = 2 + 1 = 3
-        conn.stream_reset(2, 0x42, 3).unwrap();
+        conn.stream_reset(2, 0x42, 3).expect("test must succeed");
 
-        let event = conn.poll_event().unwrap().unwrap();
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::StreamReset {
@@ -5581,7 +5774,7 @@ mod tests {
         // セッションは終了していないこと
         assert!(conn.wt_sessions.contains_key(&4));
         assert!(matches!(
-            conn.wt_sessions.get(&4).unwrap().state,
+            conn.wt_sessions.get(&4).expect("test must succeed").state,
             WtSessionState::Established
         ));
         // ストリームの紐付けは解除されていること
@@ -5590,7 +5783,7 @@ mod tests {
             !conn
                 .wt_sessions
                 .get(&4)
-                .unwrap()
+                .expect("test must succeed")
                 .associated_streams
                 .contains(&2)
         );
@@ -5602,16 +5795,19 @@ mod tests {
         // (draft-ietf-webtrans-http3-15 Section 6)
         let mut conn = make_server_with_established_wt_session(0);
 
-        conn.stream_reset(0, 0x99, 0).unwrap();
+        conn.stream_reset(0, 0x99, 0).expect("test must succeed");
 
         // WebTransportEvent::SessionClosed が発行される
-        let event = conn.poll_event().unwrap().unwrap();
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::SessionClosed { session_id: 0, .. })
         ));
         assert_eq!(
-            conn.wt_sessions.get(&0).unwrap().state,
+            conn.wt_sessions.get(&0).expect("test must succeed").state,
             WtSessionState::Closed
         );
     }
@@ -5622,12 +5818,19 @@ mod tests {
         // セッションを終了させず WebTransportEvent::StreamStopSending として通知する
         let mut conn = make_server_with_established_wt_session(4);
         // signal value 0x41 + session_id = 4 で WT bidi stream 8 を作成
-        conn.feed_stream(8, &[0x40, 0x41, 0x04], false).unwrap();
-        let _ = conn.poll_event().unwrap().unwrap();
+        conn.feed_stream(8, &[0x40, 0x41, 0x04], false)
+            .expect("test must succeed");
+        let _ = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
 
-        conn.stop_sending(8, 0x55).unwrap();
+        conn.stop_sending(8, 0x55).expect("test must succeed");
 
-        let event = conn.poll_event().unwrap().unwrap();
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::StreamStopSending {
@@ -5637,7 +5840,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            conn.wt_sessions.get(&4).unwrap().state,
+            conn.wt_sessions.get(&4).expect("test must succeed").state,
             WtSessionState::Established
         ));
     }
@@ -5678,7 +5881,8 @@ mod tests {
     fn feed_drain_session_capsule(conn: &mut Connection, session_id: u64) {
         let mut payload = Vec::new();
         crate::webtransport::Capsule::DrainSession.encode(&mut payload);
-        conn.process_wt_capsule_data(session_id, &payload).unwrap();
+        conn.process_wt_capsule_data(session_id, &payload)
+            .expect("test must succeed");
     }
 
     #[test]
@@ -5690,15 +5894,20 @@ mod tests {
 
         // session_id = 0 に紐づく WT bidi stream 4 と uni stream 2 を作成
         // bidi: signal value 0x41 + session_id=0 → varint(0x41)=2 + varint(0)=1 = 3
-        conn.feed_stream(4, &[0x40, 0x41, 0x00], false).unwrap();
+        conn.feed_stream(4, &[0x40, 0x41, 0x00], false)
+            .expect("test must succeed");
         // uni: stream type 0x54 + session_id=0 → varint(0x54)=2 + varint(0)=1 = 3
-        conn.feed_stream(2, &[0x40, 0x54, 0x00], false).unwrap();
-        while conn.poll_event().unwrap().is_some() {}
+        conn.feed_stream(2, &[0x40, 0x54, 0x00], false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
 
         // CONNECT stream の RESET でセッション終了
-        conn.stream_reset(0, 0x99, 0).unwrap();
+        conn.stream_reset(0, 0x99, 0).expect("test must succeed");
 
-        let event = conn.poll_event().unwrap().unwrap();
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         let Event::WebTransport(WebTransportEvent::SessionClosed {
             session_id,
             reset_streams,
@@ -5723,12 +5932,16 @@ mod tests {
         // WT データストリームの RESET_STREAM 受信時、final_size が
         // WebTransportEvent::StreamReset イベントに反映される
         let mut conn = make_server_with_established_wt_session(4);
-        conn.feed_stream(2, &[0x40, 0x54, 0x04], false).unwrap();
-        while conn.poll_event().unwrap().is_some() {}
+        conn.feed_stream(2, &[0x40, 0x54, 0x04], false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
 
-        conn.stream_reset(2, 0xab, 42).unwrap();
+        conn.stream_reset(2, 0xab, 42).expect("test must succeed");
 
-        let event = conn.poll_event().unwrap().unwrap();
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         let Event::WebTransport(WebTransportEvent::StreamReset {
             session_id,
             stream_id,
@@ -5749,9 +5962,11 @@ mod tests {
         // wt_stream_header_len は WT データストリームについて
         // varint(stream_type/signal) + varint(session_id) を返す
         let mut conn = make_server_with_established_wt_session(4);
-        conn.feed_stream(2, &[0x40, 0x54, 0x04], false).unwrap();
-        conn.feed_stream(8, &[0x40, 0x41, 0x04], false).unwrap();
-        while conn.poll_event().unwrap().is_some() {}
+        conn.feed_stream(2, &[0x40, 0x54, 0x04], false)
+            .expect("test must succeed");
+        conn.feed_stream(8, &[0x40, 0x41, 0x04], false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
 
         // session_id=4 → varint(4)=1 byte, varint(0x54)=2, varint(0x41)=2
         assert_eq!(conn.wt_stream_header_len(2), 3);
@@ -5771,11 +5986,14 @@ mod tests {
 
         // 内部状態が Draining
         assert_eq!(
-            conn.wt_sessions.get(&0).unwrap().state,
+            conn.wt_sessions.get(&0).expect("test must succeed").state,
             WtSessionState::Draining
         );
         // Draining イベントが発行されている
-        let event = conn.poll_event().unwrap().unwrap();
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
         assert!(matches!(
             event,
             Event::WebTransport(WebTransportEvent::SessionDraining { session_id: 0 })
@@ -5791,7 +6009,7 @@ mod tests {
         let mut conn = make_server_with_established_wt_session(0);
         feed_drain_session_capsule(&mut conn, 0);
         // Draining イベントを消費
-        let _ = conn.poll_event().unwrap();
+        let _ = conn.poll_event().expect("test must succeed");
 
         // CLOSE_SESSION カプセルを feed
         let mut payload = Vec::new();
@@ -5800,10 +6018,11 @@ mod tests {
             message: String::new(),
         }
         .encode(&mut payload);
-        conn.process_wt_capsule_data(0, &payload).unwrap();
+        conn.process_wt_capsule_data(0, &payload)
+            .expect("test must succeed");
 
         assert_eq!(
-            conn.wt_sessions.get(&0).unwrap().state,
+            conn.wt_sessions.get(&0).expect("test must succeed").state,
             WtSessionState::Closed
         );
     }
@@ -5817,23 +6036,33 @@ mod tests {
 
         // クライアントが WT CONNECT を送信
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport-h3").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
-        let stream_id = client.send_request(&headers, false).unwrap();
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
         // セッション確立まで進めず Pending のままで GOAWAY を受信させる
 
         // サーバーが GOAWAY を送信
-        server.send_goaway(VarInt::new(stream_id).unwrap()).unwrap();
-        let (ctrl_data, _) = server.take_stream_data(3).unwrap();
-        client.feed_stream(3, &ctrl_data, false).unwrap();
+        server
+            .send_goaway(VarInt::new(stream_id).expect("test must succeed"))
+            .expect("test must succeed");
+        let (ctrl_data, _) = server.take_stream_data(3).expect("test must succeed");
+        client
+            .feed_stream(3, &ctrl_data, false)
+            .expect("test must succeed");
 
         // クライアントの WT セッションが Draining に遷移している
         assert_eq!(
-            client.wt_sessions.get(&stream_id).unwrap().state,
+            client
+                .wt_sessions
+                .get(&stream_id)
+                .expect("test must succeed")
+                .state,
             WtSessionState::Draining
         );
 
@@ -5847,7 +6076,7 @@ mod tests {
         // エラー状態の接続に対して feed_stream を呼んだ場合、
         // InternalError ではなく元のエラーが返ることを検証する
         let mut conn = Connection::client(Settings::default());
-        conn.set_control_stream_id(2).unwrap();
+        conn.set_control_stream_id(2).expect("test must succeed");
 
         // 接続エラー状態を直接設定する
         conn.error = Some(Error::ConnectionError(ErrorCode::ClosedCriticalStream));
@@ -5864,7 +6093,7 @@ mod tests {
     fn test_feed_stream_propagates_frame_error() {
         // 別のエラー種別でも正しく伝播されることを検証する
         let mut conn = Connection::client(Settings::default());
-        conn.set_control_stream_id(2).unwrap();
+        conn.set_control_stream_id(2).expect("test must succeed");
 
         conn.error = Some(Error::ConnectionError(ErrorCode::FrameError));
 
@@ -5882,11 +6111,11 @@ mod tests {
         let (mut client, _server) = setup_wt_pair();
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport-h3").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
 
         let err = client.send_request(&headers, true).unwrap_err();
@@ -5902,14 +6131,16 @@ mod tests {
         let (mut client, _server) = setup_wt_pair();
 
         let headers = vec![
-            Header::new(b":method", b"CONNECT").unwrap(),
-            Header::new(b":protocol", b"webtransport-h3").unwrap(),
-            Header::new(b":scheme", b"https").unwrap(),
-            Header::new(b":authority", b"example.com").unwrap(),
-            Header::new(b":path", b"/wt").unwrap(),
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
         ];
 
-        let stream_id = client.send_request(&headers, false).unwrap();
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
         assert_eq!(
             stream_id, 0,
             "WebTransport CONNECT で fin=false は成功すること"

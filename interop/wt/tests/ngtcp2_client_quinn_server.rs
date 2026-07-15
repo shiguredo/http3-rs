@@ -15,7 +15,7 @@ use tokio_ngtcp2::ClientWebTransportSession;
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_webtransport_session() {
-    let (cert_pem, key_pem) = generate_shared_certificate().unwrap();
+    let (cert_pem, key_pem) = generate_shared_certificate().expect("test must succeed");
 
     let (port_tx, port_rx) = std::sync::mpsc::channel();
     let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
@@ -27,12 +27,16 @@ async fn test_webtransport_session() {
         }
     });
 
-    let port = port_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let port = port_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("test must succeed");
     eprintln!("[test] server port: {}", port);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let server_addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+    let server_addr: std::net::SocketAddr = format!("127.0.0.1:{}", port)
+        .parse()
+        .expect("test must succeed");
 
     // ngtcp2 クライアントで WT セッション確立を試行
     let client_result = timeout(Duration::from_secs(10), async {
