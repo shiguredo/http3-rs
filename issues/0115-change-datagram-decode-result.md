@@ -2,10 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/change-datagram-decode-result
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
@@ -34,14 +33,14 @@ RFC 9297 Section 2.1 (`refs/webtrans/rfc9297.txt` L185-189):
 ## 設計方針
 
 - `Datagram::decode` の戻り値を `Result<(Self, usize), DatagramDecodeError>` に変更
-- `DatagramDecodeError` enum (`#[non_exhaustive]`) に `BufferTooShort` / `InvalidQuarterStreamId` を導入
+- `DatagramDecodeError` enum に `BufferTooShort` / `InvalidQuarterStreamId` を導入
 - `BufferTooShort` は呼び出し側が「待つ」を選択できる non-fatal、`InvalidQuarterStreamId` は H3_DATAGRAM_ERROR で接続クローズ
 - `CHANGES.md` に `[CHANGE] webtransport::Datagram::decode の戻り値型を Result に変更する` を追加
 
 ## 完了条件
 
 - `Datagram::decode` が `Result` 返却に変わる
-- `DatagramDecodeError` enum が追加され `#[non_exhaustive]` 付与される
+- `DatagramDecodeError` enum が追加される
 - `Connection` 側で `InvalidQuarterStreamId` を `H3_DATAGRAM_ERROR` で接続クローズする経路を実装
 - 既存テスト / PBT / fuzz がパスする
 - `make fmt && make clippy && make check` が通る
@@ -49,7 +48,6 @@ RFC 9297 Section 2.1 (`refs/webtrans/rfc9297.txt` L185-189):
 ## 解決方法
 
 ```rust
-#[non_exhaustive]
 #[derive(Debug)]
 pub enum DatagramDecodeError {
     BufferTooShort,

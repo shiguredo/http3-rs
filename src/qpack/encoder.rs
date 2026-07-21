@@ -83,41 +83,33 @@ impl Encoder {
 
     /// Indexed Field Line (静的テーブル) をエンコード
     ///
-    /// Format: 1TNNNNNN
+    /// Format: 1TNNNNNN (RFC 9204 Section 4.5.2)
     /// T=1 for static table
+    /// 将来の RFC 改訂で prefix 長やパターンが変更される可能性がある。
     fn encode_indexed_field(&self, buf: &mut [u8], index: usize) -> Option<usize> {
-        if index < 64 {
-            // 6-bit prefix で収まる
-            if buf.is_empty() {
-                return None;
-            }
-            buf[0] = 0xc0 | (index as u8);
-            Some(1)
-        } else {
-            // 6-bit prefix を超える場合
-            integer::encode_integer(buf, index as u64, 6, 0xc0)
-        }
+        // 0xc0 = 11000000 (T=1)
+        // DynamicEncoder::encode_indexed_field_static と同一の実装。
+        // 手書きの境界分岐は index=63 で continuation byte 欠落を引き起こすため
+        // integer::encode_integer に一本委譲する (RFC 7541 Section 5.1)。
+        integer::encode_integer(buf, index as u64, 6, 0xc0)
     }
 
     /// Literal Field Line with Name Reference (静的テーブル) をエンコード
     ///
-    /// Format: 01NTNNNN (N=never index, T=static)
+    /// Format: 01NTNNNN (RFC 9204 Section 4.5.4)
+    /// N=never index, T=static
+    /// 将来の RFC 改訂で prefix 長やパターンが変更される可能性がある。
     fn encode_literal_with_name_ref(
         &self,
         buf: &mut [u8],
         index: usize,
         value: &[u8],
     ) -> Option<usize> {
-        // Name Reference: 0101NNNN (T=1 for static, N=0)
-        let mut offset = if index < 16 {
-            if buf.is_empty() {
-                return None;
-            }
-            buf[0] = 0x50 | (index as u8);
-            1
-        } else {
-            integer::encode_integer(buf, index as u64, 4, 0x50)?
-        };
+        // 0x50 = 01010000 (N=0, T=1)
+        // DynamicEncoder::encode_literal_with_name_ref_static と同一の実装。
+        // 手書きの境界分岐は index=15 で continuation byte 欠落を引き起こすため
+        // integer::encode_integer に一本委譲する (RFC 7541 Section 5.1)。
+        let mut offset = integer::encode_integer(buf, index as u64, 4, 0x50)?;
 
         // Value
         let value_len = self.encode_string(&mut buf[offset..], value)?;

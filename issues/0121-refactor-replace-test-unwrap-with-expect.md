@@ -9,7 +9,7 @@
 
 ## 目的
 
-`tests/`, `pbt/tests/`, `pbt/src/lib.rs`, `interop/` で `.unwrap()` が 500 件以上残存している。CLAUDE.md「`.unwrap()` ではなく `.expect("MESSAGE")` を使用する」規約に基づき、すべて意図メッセージ付きの `.expect("...")` に置換する。
+`tests/`, `pbt/tests/`, `pbt/src/lib.rs`, `interop/` で `.unwrap()` が 500 件以上残存している。AGENTS.md「`.unwrap()` ではなく `.expect("MESSAGE")` を使用する」規約に基づき、すべて意図メッセージ付きの `.expect("...")` に置換する。
 
 ## 優先度根拠
 
@@ -24,7 +24,7 @@ Medium。テストパニック時のデバッグ性に直結する。テスト�
 - `pbt/src/lib.rs:65` 1 件 (`VarInt::new(v).unwrap()`)
 - `interop/h3` / `interop/wt` 約 215 件
 
-CLAUDE.md:
+AGENTS.md:
 
 > `.unwrap()` ではなく `.expect("MESSAGE")` を使用する
 
@@ -64,4 +64,4 @@ let var = VarInt::new(v).expect("Strategy が 0..=MAX 範囲を保証するた�
 
 - 修正対象: `tests/**/*.rs`, `pbt/tests/**/*.rs`, `pbt/src/lib.rs`, `interop/**/*.rs`
 - 関連 issue: 0105 (本体コードの `.unwrap()`)
-- 規約: `CLAUDE.md`
+- 規約: `AGENTS.md`

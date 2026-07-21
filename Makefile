@@ -7,10 +7,8 @@ test:
 # doctest を実行する (compile_fail ブロックを含む)
 # bindgen 生成 doc (`nghttp3-sys` / `ngtcp2-sys`) には C 言語サンプルが含まれ
 # rustc ではパースできないため `--exclude` で除外する
-# `internal-test` は本クレート (`shiguredo_http3`) の compile_fail doctest を
-# 有効化するため明示する
 doc-test:
-	cargo test --doc --workspace --exclude nghttp3-sys --exclude ngtcp2-sys --features shiguredo_http3/internal-test
+	cargo test --doc --workspace --exclude nghttp3-sys --exclude ngtcp2-sys
 
 # 全テストカバレッジ付きで実行する
 cover:

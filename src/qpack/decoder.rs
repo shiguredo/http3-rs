@@ -355,7 +355,9 @@ impl DynamicDecoder {
             required_insert_count - delta_base - 1
         } else {
             // Sign = 0: Base = ReqInsertCount + DeltaBase
-            required_insert_count + delta_base
+            required_insert_count
+                .checked_add(delta_base)
+                .ok_or(QpackError::DecodeFailed)?
         };
 
         // ヘッダーをデコード
@@ -501,7 +503,9 @@ impl DynamicDecoder {
         // absolute_index = base + post_base_index
         // RFC 9204 Section 2.2.3: absolute index >= Required Insert Count は
         // QPACK_DECOMPRESSION_FAILED
-        let absolute_index = base + post_base_index;
+        let absolute_index = base
+            .checked_add(post_base_index)
+            .ok_or(QpackError::DecodeFailed)?;
         if absolute_index >= required_insert_count {
             return Err(QpackError::DecodeFailed);
         }
@@ -582,7 +586,9 @@ impl DynamicDecoder {
         // absolute_index = base + post_base_index
         // RFC 9204 Section 2.2.3: absolute index >= Required Insert Count は
         // QPACK_DECOMPRESSION_FAILED
-        let absolute_index = base + post_base_index;
+        let absolute_index = base
+            .checked_add(post_base_index)
+            .ok_or(QpackError::DecodeFailed)?;
         if absolute_index >= required_insert_count {
             return Err(QpackError::DecodeFailed);
         }

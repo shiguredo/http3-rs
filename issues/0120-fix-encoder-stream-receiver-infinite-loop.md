@@ -2,10 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/fix-encoder-stream-receiver-infinite-loop
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
@@ -49,7 +48,6 @@ RFC 9204 Section 2.2.3:
 ## 解決方法
 
 ```rust
-#[non_exhaustive]
 pub enum QpackError {
     BufferTooShort,
     DecodeFailed,

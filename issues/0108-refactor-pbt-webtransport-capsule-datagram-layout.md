@@ -2,18 +2,17 @@
 
 - Priority: High
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/refactor-pbt-webtransport-capsule-datagram-layout
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
-`pbt/tests/prop_capsule.rs` と `pbt/tests/prop_datagram.rs` はトップレベル配置だが、対応する src モジュールはどちらも `src/webtransport/{capsule,datagram}.rs` のサブモジュール。CLAUDE.md「`src/<module>/` のようにディレクトリモジュールの場合は `pbt/tests/prop_<module>/main.rs` にサブモジュール対応で分割すること」に違反している。`prop_webtransport/capsule.rs` および `prop_webtransport/datagram.rs` に統合してファイル配置を正す。
+`pbt/tests/prop_capsule.rs` と `pbt/tests/prop_datagram.rs` はトップレベル配置だが、対応する src モジュールはどちらも `src/webtransport/{capsule,datagram}.rs` のサブモジュール。AGENTS.md「`src/<module>/` のようにディレクトリモジュールの場合は `pbt/tests/prop_<module>/main.rs` にサブモジュール対応で分割すること」に違反している。`prop_webtransport/capsule.rs` および `prop_webtransport/datagram.rs` に統合してファイル配置を正す。
 
 ## 優先度根拠
 
-High。CLAUDE.md の PBT 配置規約の明示的な違反。`pbt/tests/prop_webtransport/capsule.rs` が既に存在する一方、トップレベル `prop_capsule.rs` も存在し、capsule の PBT が 2 ファイルに分散している不整合状態にある。テスト戦略の整合性のため早期に整理が必要。
+High。AGENTS.md の PBT 配置規約の明示的な違反。`pbt/tests/prop_webtransport/capsule.rs` が既に存在する一方、トップレベル `prop_capsule.rs` も存在し、capsule の PBT が 2 ファイルに分散している不整合状態にある。テスト戦略の整合性のため早期に整理が必要。
 
 ## 現状
 
@@ -36,7 +35,7 @@ pbt/tests/
 └── ...
 ```
 
-CLAUDE.md:
+AGENTS.md:
 
 > PBT のファイル名は `pbt/tests/prop_<module>.rs` とし、`src/<module>.rs` に対応させること
 > 特定のモジュールに対応しないテストには `test_` や `prop_` プレフィックスを付けないこと
@@ -74,4 +73,4 @@ CLAUDE.md:
 - 修正元: `pbt/tests/prop_capsule.rs`, `pbt/tests/prop_datagram.rs`
 - マージ先: `pbt/tests/prop_webtransport/capsule.rs`, `pbt/tests/prop_webtransport/datagram.rs` (新規)
 - 関連: `pbt/tests/prop_webtransport/main.rs`
-- 規約: `CLAUDE.md` (テスト配置)
+- 規約: `AGENTS.md` (テスト配置)

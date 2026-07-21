@@ -189,25 +189,6 @@ impl DynamicTable {
         Some(absolute_index)
     }
 
-    /// 名前参照で挿入 (RFC 9204 Section 4.3.2)
-    ///
-    /// 既存のエントリの名前を参照して新しいエントリを挿入。
-    pub fn insert_with_name_ref(
-        &mut self,
-        name_index: u64,
-        is_static: bool,
-        value: Vec<u8>,
-        static_table: &[crate::qpack::Header],
-    ) -> Option<u64> {
-        let name = if is_static {
-            static_table.get(name_index as usize)?.name().to_vec()
-        } else {
-            self.get_by_absolute_index(name_index)?.name.clone()
-        };
-
-        self.insert(name, value)
-    }
-
     /// 複製 (RFC 9204 Section 4.3.4)
     ///
     /// 既存のエントリを複製して新しいエントリとして挿入。
@@ -259,7 +240,7 @@ impl DynamicTable {
     ///
     /// absolute_index = base + post_base_index
     pub fn get_by_post_base_index(&self, post_base_index: u64, base: u64) -> Option<&DynamicEntry> {
-        let absolute_index = base + post_base_index;
+        let absolute_index = base.checked_add(post_base_index)?;
         self.get_by_absolute_index(absolute_index)
     }
 

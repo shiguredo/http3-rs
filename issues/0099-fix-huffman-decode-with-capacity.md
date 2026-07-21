@@ -9,11 +9,11 @@
 
 ## 目的
 
-`src/qpack/huffman.rs:1100` の `Vec::with_capacity(data.len() * 2)` は CLAUDE.md「入力バイナリデータをデコードする際には `Vec::with_capacity()` などのメモリを事前に割り当てるメソッドを原則として使用しないこと」に違反している。ピアからの任意バイト列を渡されると `data.len() * 2` の確保を強制でき、さらに `data.len() > usize::MAX / 2` で乗算オーバーフローが発生する (debug で panic、release で wrap)。`Vec::new()` に置換して規約を遵守する。
+`src/qpack/huffman.rs:1100` の `Vec::with_capacity(data.len() * 2)` は AGENTS.md「入力バイナリデータをデコードする際には `Vec::with_capacity()` などのメモリを事前に割り当てるメソッドを原則として使用しないこと」に違反している。ピアからの任意バイト列を渡されると `data.len() * 2` の確保を強制でき、さらに `data.len() > usize::MAX / 2` で乗算オーバーフローが発生する (debug で panic、release で wrap)。`Vec::new()` に置換して規約を遵守する。
 
 ## 優先度根拠
 
-High。CLAUDE.md の明示的な規約違反であり、入力バイナリデコードという最も警戒すべき経路に該当する。性能差は誤差で対処コストも軽微なため、すぐに修正できる。
+High。AGENTS.md の明示的な規約違反であり、入力バイナリデコードという最も警戒すべき経路に該当する。性能差は誤差で対処コストも軽微なため、すぐに修正できる。
 
 ## 現状
 
@@ -26,7 +26,7 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, QpackError> {
 }
 ```
 
-CLAUDE.md (リポジトリルート):
+AGENTS.md (リポジトリルート):
 
 > 入力バイナリデータをデコードする際には `Vec::with_capacity()` などのメモリを事前に割り当てるメソッドを原則として使用しないこと
 > - 入力データが破損している場合などに、サイズやカウントを示す値のデコード結果が極端に大きくなり、メモリを大量に消費してしまうリスクがあるため
@@ -57,4 +57,4 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, QpackError> {
 ### 関連ファイル
 
 - 修正対象: `src/qpack/huffman.rs:1100`
-- 規約: `CLAUDE.md` ルート (`AGENTS.md` シンボリックリンク)
+- 規約: `AGENTS.md` ルート (`AGENTS.md` シンボリックリンク)

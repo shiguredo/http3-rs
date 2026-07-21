@@ -2,16 +2,15 @@
 
 - Priority: Medium
 - Created: 2026-06-09
-- Completed: {YYYY-MM-DD}
 - Model: Opus 4.7
 - Branch: feature/add-nghttp3-interop-tests
-- Polished: 2026-06-09
+- Polished: 2026-07-21
 
 ## 目的
 
 shiguredo_http3 と nghttp3 (ngtcp2) との e2e 相互運用テストを RFC 9114 に基づいて拡充する。
 
-CLAUDE.md は「ngtcp2 / nghttp3 を正としてテストを行うこと」を方針として掲げているが、現状の interop テストは双方向ペアあたり 4 ケース (GET / POST with body / カスタムレスポンスヘッダー / 404) のみで、HTTP/3 として最低限カバーすべき領域 (メソッド・パス・ステータス・ヘッダー多様性・ボディサイズ・接続あたり複数リクエスト) を網羅していない。本 issue では現状 API で実装可能な範囲に絞り、計 37 件のテストを追加する (`s2n_client_ngtcp2_server.rs` に 15 件、`ngtcp2_client_s2n_server.rs` に 22 件)。
+AGENTS.md は「ngtcp2 / nghttp3 を正としてテストを行うこと」を方針として掲げているが、現状の interop テストは双方向ペアあたり 4 ケース (GET / POST with body / カスタムレスポンスヘッダー / 404) のみで、HTTP/3 として最低限カバーすべき領域 (メソッド・パス・ステータス・ヘッダー多様性・ボディサイズ・接続あたり複数リクエスト) を網羅していない。本 issue では現状 API で実装可能な範囲に絞り、計 37 件のテストを追加する (`s2n_client_ngtcp2_server.rs` に 15 件、`ngtcp2_client_s2n_server.rs` に 22 件)。
 
 ## 優先度根拠
 
@@ -21,12 +20,12 @@ Medium。canary 段階での品質強化目的で、緊急度はないが、IETF
 
 ### 既存テストファイル
 
-- `interop/h3/tests/s2n_client_ngtcp2_server.rs` (353 行)
+- `interop/h3/tests/s2n_client_ngtcp2_server.rs` (373 行)
   - `test_http3_request_response` (GET /)
   - `test_post_request_with_body` (POST / + body)
   - `test_response_custom_headers` (GET / + カスタムヘッダー検証)
   - `test_status_404` (GET /not-found → 404)
-- `interop/h3/tests/ngtcp2_client_s2n_server.rs` (388 行)
+- `interop/h3/tests/ngtcp2_client_s2n_server.rs` (404 行)
   - 同じ 4 ケースを逆方向で実装
 
 ### ヘルパーの現状所在
@@ -246,7 +245,7 @@ RFC 9000 §2.1 によりクライアント発の bidi stream ID は 0, 4, 8 と 
 - 1 接続で複数リクエストを送る F1 用に、`pub async fn send_ngtcp2_requests(server_addr: SocketAddr, requests: Vec<(String, String, Vec<u8>)>) -> Result<Vec<Ngtcp2Response>, Box<dyn Error + Send + Sync>>` を追加 (各 body の所有権を内部で `send_request_with_body` に渡す都合上、`requests` も所有権を受け取る形にする)。内部実装: `Client` を 1 度生成し、各リクエストごとに `send_request` → `Http3Event::StreamEnd` を待って `Ngtcp2Response` を完成 → `Vec` に push → 次の `send_request`。「逐次」とは厳密に「1 件目の `StreamEnd` まで poll → 完了確認 → 次の `send_request`」と定義する
 - エラー型は既存ヘルパーと同じ `Box<dyn Error + Send + Sync>` で揃える
 - 既存 4 ケースの `use` 文をこれらヘルパー参照に書き換える
-- 新規追加した nghttp3 関連ヘルパー (`start_ngtcp2_server`, `send_ngtcp2_request`, `send_ngtcp2_requests`) の `eprintln!` メッセージは英語で記述する (CLAUDE.md 「ログメッセージは全て英語」)。例: `"[ngtcp2 server] started: {}"`。既存の quiche/quinn ヘルパー (`start_quiche_server`, `run_quinn_client` 等) の日本語 `eprintln!` 修正は本 issue のスコープ外
+- 新規追加した nghttp3 関連ヘルパー (`start_ngtcp2_server`, `send_ngtcp2_request`, `send_ngtcp2_requests`) の `eprintln!` メッセージは英語で記述する (AGENTS.md 「ログメッセージは全て英語」)。例: `"[ngtcp2 server] started: {}"`。既存の quiche/quinn ヘルパー (`start_quiche_server`, `run_quinn_client` 等) の日本語 `eprintln!` 修正は本 issue のスコープ外
 
 ### ボディ検証の方針
 
@@ -310,11 +309,11 @@ server.run(move |_addr, event| {
 
 ### テスト数とファイル分割
 
-新規追加後のファイル行数は両ファイルとも 800〜1000 行程度になる見込み。CLAUDE.md 「テストファイルが長くなった場合はファイル内で `mod` を使って分割すること」に従い、`mod method { ... } mod path { ... } mod status { ... } mod header { ... } mod body { ... } mod connection { ... }` の 6 モジュール構成で分割する。
+新規追加後のファイル行数は両ファイルとも 800〜1000 行程度になる見込み。AGENTS.md 「テストファイルが長くなった場合はファイル内で `mod` を使って分割すること」に従い、`mod method { ... } mod path { ... } mod status { ... } mod header { ... } mod body { ... } mod connection { ... }` の 6 モジュール構成で分割する。
 
 ### CHANGES.md 扱い
 
-CLAUDE.md 「機能に直接影響しない変更 (ドキュメント追加、リファクタリング等) は `### misc` サブセクションに記載すること」に従い、`## develop` の `### misc` セクション (なければ新設) に以下のエントリ案を追加する:
+AGENTS.md 「機能に直接影響しない変更 (ドキュメント追加、リファクタリング等) は `### misc` サブセクションに記載すること」に従い、`## develop` の `### misc` セクション (なければ新設) に以下のエントリ案を追加する:
 
 ```
 ### misc

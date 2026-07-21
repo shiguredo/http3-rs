@@ -29,58 +29,6 @@
   - @voluntas
 - [CHANGE] `:authority` が無く Host ヘッダーのみで authority を運ぶリクエストの Host 値を uri-host[:port] 構文で検証し、不正値を `H3_MESSAGE_ERROR` で拒否する (RFC 9110 Section 7.2)
   - @voluntas
-- [ADD] `VarInt::from_static` / `qpack::Header::from_static` / `frame::GoawayPayload::from_static` の doc に `compile_fail` ブロックを追加し、`const fn` 検査のリグレッションを CI (`cargo test --doc`) で防止する
-  - @voluntas
-- [ADD] 構築時検査の `from_static` ↔ `new` 一貫性、`from_validated_parts` ↔ `new` 整合性、`Header::new` ↔ QPACK ラウンドトリップ完全性を検証する PBT を追加する
-  - @voluntas
-- [ADD] `Makefile` に `doc-test` ターゲットを追加し `cargo test --doc --workspace --exclude nghttp3-sys --exclude ngtcp2-sys --features shiguredo_http3/internal-test` を実行する (sys クレートは bindgen 生成 doc が rustc でパースできないため除外)
-  - @voluntas
-- [ADD] `VarInt::from_validated_parts` を `internal-test` フィーチャー限定で公開し、PBT から `from_validated_parts` と `new` の整合性検証を可能にする (内部用は `from_validated_parts_internal` に改名)
-  - @voluntas
-- [ADD] `pbt` クレートに `strategies` モジュールを追加し、構築時検査型の `valid_*` / `invalid_*` 戦略を集約する (`pbt/Cargo.toml` の `proptest` / `shiguredo_http3` を `[dev-dependencies]` から `[dependencies]` に格上げ)
-  - @voluntas
-- [ADD] `VarInt` / `VarIntError` を新設し、RFC 9000 Section 16 の値域 (`0..=2^62 - 1`) を型で表現する
-  - @voluntas
-- [ADD] `VarInt::from_static` を `const fn` で提供し、`2^62` 以上のリテラル定数を `const` / `static` 宣言時にコンパイル時 panic として検出可能にする
-  - @voluntas
-- [ADD] `webtransport::DatagramError::SessionIdOutOfRange` を追加し、`Datagram::new` に session_id の VarInt 範囲検査を導入する
-  - @voluntas
-- [ADD] `webtransport::stream::StreamHeaderDecodeError::SessionIdOutOfRange` を追加し、`StreamHeader::new` に session_id の VarInt 範囲検査を導入する
-  - @voluntas
-- [ADD] `qpack::Header::from_static` を `const fn` で追加し、リテラル定数の RFC 9114 / RFC 9110 違反を `const` / `static` 宣言時にコンパイル時 panic として検出可能にする
-  - @voluntas
-- [ADD] `qpack::HeaderError` を新設し、`Header::new` のバリデーションエラーを構造化する
-  - @voluntas
-- [ADD] `validation` に `:protocol` 値検査 (RFC 8441 Section 4 / RFC 9220 Section 3 / RFC 9110 Section 7.8 の HTTP Upgrade Token 構文) を追加する
-  - @voluntas
-- [ADD] `qpack::Header::new` / `Header::from_static` の `:protocol` 値検査 (HTTP Upgrade Token 構文) を構築時検査に組み込む
-  - @voluntas
-- [ADD] `internal-test` フィーチャーを追加し、PBT / fuzz / 統合テストから検査バイパス API (`Header::from_validated_parts`) を利用できるようにする (通常のアプリケーションでは有効化しない)
-  - @voluntas
-- [ADD] `Setting` enum を新設し、SETTINGS パラメータの ID と型安全な値 (`VarInt` または `bool`) を一体で表現する
-  - @voluntas
-- [ADD] `UnknownSetting` 構造体を新設し、`Setting::Unknown(UnknownSetting)` のフィールドを
-  private 化することで HTTP/2 専用 ID / 予約 ID が `Setting::Unknown` 経由で構築できない
-  不変条件を保証する
-  - @voluntas
-- [ADD] `SettingError` を新設し、`Setting::from_wire` / `SettingsPayload::add` の検査エラー
-  (HTTP/2 専用 ID / 予約 ID / bool 値域外 / 重複 ID) を構造化エラーで通知する
-  - @voluntas
-- [ADD] `GoawayPayload::from_static` を `const fn` で追加し、不正リテラルの GOAWAY ID
-  (RFC 9000 Section 16 の VarInt 範囲外) をコンパイル時 panic として検出可能にする
-  - @voluntas
-- [ADD] `frame::DataPayload` / `frame::HeadersPayload` にアクセサ
-  (`data` / `into_data` / `encoded_field_section` / `into_encoded_field_section` /
-  `len` / `is_empty`) を追加し、フィールド private 化後も所有権付きで取り出せるようにする
-  - @voluntas
-- [ADD] `frame::UnknownFrame` / `frame::UnknownFrameError` を新設し、`Frame::Unknown` のフィールドを
-  private 化することで既知の HTTP/3 フレームタイプ (DATA / HEADERS / CANCEL_PUSH / SETTINGS /
-  PUSH_PROMISE / GOAWAY / MAX_PUSH_ID) や HTTP/2 専用 ID (RFC 9114 Section 11.2.1 Table 2 で
-  Reserved 登録、Section 7.2.8 で受信時 H3_FRAME_UNEXPECTED: 0x02 / 0x06 / 0x08 / 0x09) を
-  `Unknown` で偽装できない不変条件を保証する
-  - @voluntas
-- [ADD] ngtcp2-rs クレートの `Http3Event` に `WebTransportCloseSession` バリアントを追加し、nghttp3 の `recv_wt_close_session` コールバック経由で WT_CLOSE_SESSION Capsule の受信 (アプリケーションエラーコード・メッセージ) を通知する
-  - @voluntas
 - [CHANGE] `varint::encode` / `varint::encode_into_vec` / `varint::decode` のシグネチャを `VarInt` を扱う形に変更する
   - @voluntas
 - [CHANGE] `varint::MAX_VALUE` / `varint::encoded_len(u64)` / `varint::try_encoded_len` / `varint::try_encode_into_vec` / `varint::EncodeError::ValueTooLarge` を削除する (`VarInt` 型が値域を保証するため)
@@ -165,6 +113,58 @@
   `ServerConnection::send_goaway` の引数型を `u64` から `VarInt` に変更し、
   ローカル API 利用時の値域違反を型レベルで排除する
   - @voluntas
+- [CHANGE] `qpack::DynamicTable::insert_with_name_ref` を削除する (未使用の公開 API。RFC 9204 Section 4.3.2 の relative index を absolute index として誤解釈するバグを含んでいた)
+  - @voluntas
+- [ADD] `VarInt::from_static` / `qpack::Header::from_static` / `frame::GoawayPayload::from_static` の doc に `compile_fail` ブロックを追加し、`const fn` 検査のリグレッションを CI (`cargo test --doc`) で防止する
+  - @voluntas
+- [ADD] 構築時検査の `from_static` ↔ `new` 一貫性、`from_validated_parts` ↔ `new` 整合性、`Header::new` ↔ QPACK ラウンドトリップ完全性を検証する PBT を追加する
+  - @voluntas
+- [ADD] `Makefile` に `doc-test` ターゲットを追加し `cargo test --doc --workspace --exclude nghttp3-sys --exclude ngtcp2-sys` を実行する (sys クレートは bindgen 生成 doc が rustc でパースできないため除外)
+  - @voluntas
+- [ADD] `pbt` クレートに `strategies` モジュールを追加し、構築時検査型の `valid_*` / `invalid_*` 戦略を集約する (`pbt/Cargo.toml` の `proptest` / `shiguredo_http3` を `[dev-dependencies]` から `[dependencies]` に格上げ)
+  - @voluntas
+- [ADD] `VarInt` / `VarIntError` を新設し、RFC 9000 Section 16 の値域 (`0..=2^62 - 1`) を型で表現する
+  - @voluntas
+- [ADD] `VarInt::from_static` を `const fn` で提供し、`2^62` 以上のリテラル定数を `const` / `static` 宣言時にコンパイル時 panic として検出可能にする
+  - @voluntas
+- [ADD] `webtransport::DatagramError::SessionIdOutOfRange` を追加し、`Datagram::new` に session_id の VarInt 範囲検査を導入する
+  - @voluntas
+- [ADD] `webtransport::stream::StreamHeaderDecodeError::SessionIdOutOfRange` を追加し、`StreamHeader::new` に session_id の VarInt 範囲検査を導入する
+  - @voluntas
+- [ADD] `qpack::Header::from_static` を `const fn` で追加し、リテラル定数の RFC 9114 / RFC 9110 違反を `const` / `static` 宣言時にコンパイル時 panic として検出可能にする
+  - @voluntas
+- [ADD] `qpack::HeaderError` を新設し、`Header::new` のバリデーションエラーを構造化する
+  - @voluntas
+- [ADD] `validation` に `:protocol` 値検査 (RFC 8441 Section 4 / RFC 9220 Section 3 / RFC 9110 Section 7.8 の HTTP Upgrade Token 構文) を追加する
+  - @voluntas
+- [ADD] `qpack::Header::new` / `Header::from_static` の `:protocol` 値検査 (HTTP Upgrade Token 構文) を構築時検査に組み込む
+  - @voluntas
+- [ADD] `Setting` enum を新設し、SETTINGS パラメータの ID と型安全な値 (`VarInt` または `bool`) を一体で表現する
+  - @voluntas
+- [ADD] `UnknownSetting` 構造体を新設し、`Setting::Unknown(UnknownSetting)` のフィールドを
+  private 化することで HTTP/2 専用 ID / 予約 ID が `Setting::Unknown` 経由で構築できない
+  不変条件を保証する
+  - @voluntas
+- [ADD] `SettingError` を新設し、`Setting::from_wire` / `SettingsPayload::add` の検査エラー
+  (HTTP/2 専用 ID / 予約 ID / bool 値域外 / 重複 ID) を構造化エラーで通知する
+  - @voluntas
+- [ADD] `GoawayPayload::from_static` を `const fn` で追加し、不正リテラルの GOAWAY ID
+  (RFC 9000 Section 16 の VarInt 範囲外) をコンパイル時 panic として検出可能にする
+  - @voluntas
+- [ADD] `frame::DataPayload` / `frame::HeadersPayload` にアクセサ
+  (`data` / `into_data` / `encoded_field_section` / `into_encoded_field_section` /
+  `len` / `is_empty`) を追加し、フィールド private 化後も所有権付きで取り出せるようにする
+  - @voluntas
+- [ADD] `frame::UnknownFrame` / `frame::UnknownFrameError` を新設し、`Frame::Unknown` のフィールドを
+  private 化することで既知の HTTP/3 フレームタイプ (DATA / HEADERS / CANCEL_PUSH / SETTINGS /
+  PUSH_PROMISE / GOAWAY / MAX_PUSH_ID) や HTTP/2 専用 ID (RFC 9114 Section 11.2.1 Table 2 で
+  Reserved 登録、Section 7.2.8 で受信時 H3_FRAME_UNEXPECTED: 0x02 / 0x06 / 0x08 / 0x09) を
+  `Unknown` で偽装できない不変条件を保証する
+  - @voluntas
+- [ADD] ngtcp2-rs クレートの `Http3Event` に `WebTransportCloseSession` バリアントを追加し、nghttp3 の `recv_wt_close_session` コールバック経由で WT_CLOSE_SESSION Capsule の受信 (アプリケーションエラーコード・メッセージ) を通知する
+  - @voluntas
+- [ADD] SETTINGS フレームに GREASE 予約設定 (RFC 9114 Section 7.2.4.1, ID=0x21) を追加する
+  - @voluntas
 - [FIX] QPACK エンコーダーストリームレシーバーでテーブル操作前にバッファを drain していた処理順序を修正する
   - @voluntas
 - [FIX] send_request で GOAWAY 境界超過およびフロー制御なし WT セッション上限超過時に ConnectionError ではなく StreamError を返すよう修正する
@@ -187,10 +187,34 @@
   - @voluntas
 - [FIX] `ngtcp2-sys` / `nghttp3-sys` の build.rs でクローン済みの上流リポジトリを fetch してリモートブランチの最新にリセットし、stale なキャッシュから古いヘッダで bindings の再生成やビルドが行われる問題を修正する
   - @voluntas
+- [FIX] QPACK 整数エンコード/デコードのシフトオーバーフローを修正する (encode_integer: prefix_bits >= 64, decode_integer: prefix_bits >= 16)
+  - @voluntas
+- [FIX] Huffman デコードで EOS シンボル検出時に `Ok` を返していた RFC 7541 Section 5.2 違反を修正し `Err(QpackError::InvalidHuffman)` を返すようにする
+  - @voluntas
+- [FIX] STOP_SENDING 受信時のクリティカルストリーム判定を受信側から送信側 (`control_send` / ローカル QPACK encoder・decoder) に修正し、送信側クリティカルストリームへの STOP_SENDING を `H3_CLOSED_CRITICAL_STREAM` とする (RFC 9114 Section 6.2.1, RFC 9204 Section 4.2)
+  - @voluntas
+- [FIX] payload が欠落した GOAWAY フレームのデコードエラーを `BufferTooShort` から `InvalidLength` に変更し、`H3_FRAME_ERROR` に集約されるよう修正する (RFC 9114 Section 7.1)
+  - @voluntas
+- [FIX] QPACK Encoder の Indexed Field Line / Literal with Name Reference で手書きの prefix 境界分岐 (`index < 64` / `index < 16`) が continuation byte を欠落させていたバグを修正し、`integer::encode_integer` への一本委譲に統一する (RFC 7541 Section 5.1, RFC 9204 Section 4.5.2 / 4.5.4)
+  - @voluntas
+- [FIX] WebTransport フロー制御カウンタの u64 加算を `saturating_add` / `checked_sub` に置き換え、オーバーフロー時のフロー制御素通りを防止する (draft-ietf-webtrans-http3-15 Section 5.6)
+  - @voluntas
+- [FIX] QPACK Post-Base 参照デコードの `base + post_base_index` 加算を `checked_add` に置き換え、算術オーバーフローによる panic / wrap-around を防止する (RFC 9204 Section 4.5.3 / 4.5.5)
+  - @voluntas
+- [FIX] `Capsule::decode` の `length as usize` 素朴キャストを `usize::try_from` + `checked_add` に置き換え、32-bit 環境での境界判定緩みと 64-bit でのオーバーフローを防止する
+  - @voluntas
 
 ### misc
 
 - [ADD] `fuzz_qpack` に DynamicEncoder, 整数エンコード/デコードの fuzz 経路を追加する
+  - @voluntas
+- [ADD] `refs/` に RFC 7541, RFC 9110, RFC 9651 の一次資料を追加する
+  - @voluntas
+- [ADD] ngtcp2/nghttp3 と s2n-quic の WebTransport 相互運用テストを平日 JST 11:00 に実行する GitHub Actions ワークフローを追加する
+  - @voluntas
+- [ADD] fuzz 用に `fuzz/rust-toolchain.toml` を追加し nightly toolchain を指定する
+  - @voluntas
+- [ADD] `prop_qpack.rs` に `DynamicEncoder` / `DynamicDecoder` ラウンドトリップと Blocked/Unblocked のプロパティ検証を追加する
   - @voluntas
 - [UPDATE] QPACK 整数エンコード/デコードの重複実装を src/qpack/integer.rs に一本化する
   - @voluntas
@@ -220,32 +244,11 @@
   - @voluntas
 - [UPDATE] interop/h3 と interop/wt の edition / rust-version を workspace 継承に変更する
   - @voluntas
-- [ADD] `refs/` に RFC 7541, RFC 9110, RFC 9651 の一次資料を追加する
-  - @voluntas
-- [ADD] ngtcp2/nghttp3 と s2n-quic の WebTransport 相互運用テストを平日 JST 11:00 に実行する GitHub Actions ワークフローを追加する
-  - @voluntas
-- [ADD] fuzz 用に `fuzz/rust-toolchain.toml` を追加し nightly toolchain を指定する
-  - @voluntas
-- [ADD] `prop_qpack.rs` に `DynamicEncoder` / `DynamicDecoder` ラウンドトリップと Blocked/Unblocked のプロパティ検証を追加する
-  - @voluntas
-- [ADD] SETTINGS フレームに GREASE 予約設定 (RFC 9114 Section 7.2.4.1, ID=0x21) を追加する
-  - @voluntas
-- [FIX] QPACK 整数エンコード/デコードのシフトオーバーフローを修正する (encode_integer: prefix_bits >= 64, decode_integer: prefix_bits >= 16)
-  - @voluntas
-- [FIX] `fuzz/fuzz_targets/fuzz_settings.rs` が `Settings::from_payload` の `Result` 戻り値に追従しておらず fuzz crate がコンパイルできなかった問題を修正する
-  - @voluntas
-- [FIX] Huffman デコードで EOS シンボル検出時に `Ok` を返していた RFC 7541 Section 5.2 違反を修正し `Err(QpackError::InvalidHuffman)` を返すようにする
-  - @voluntas
-- [FIX] CI の共通 workspace job から `interop/h3` / `interop/wt` を除外し、相互運用テストは macOS 専用 step でのみ実行する
-  - @voluntas
-- [FIX] STOP_SENDING 受信時のクリティカルストリーム判定を受信側から送信側 (`control_send` / ローカル QPACK encoder・decoder) に修正し、送信側クリティカルストリームへの STOP_SENDING を `H3_CLOSED_CRITICAL_STREAM` とする (RFC 9114 Section 6.2.1, RFC 9204 Section 4.2)
-  - @voluntas
-- [FIX] payload が欠落した GOAWAY フレームのデコードエラーを `BufferTooShort` から `InvalidLength` に変更し、`H3_FRAME_ERROR` に集約されるよう修正する (RFC 9114 Section 7.1)
-  - @voluntas
-
-### misc
-
 - [UPDATE] `examples/wt_server` の Base64 依存を `base64` から `base64ct` に切り替える
   - @voluntas
 - [UPDATE] shiguredo-rust 規約に合わせ `.unwrap()` を `.expect(...)` に、手書きの `#[allow]` を `#[expect]` に置き換える
+  - @voluntas
+- [FIX] `fuzz/fuzz_targets/fuzz_settings.rs` が `Settings::from_payload` の `Result` 戻り値に追従しておらず fuzz crate がコンパイルできなかった問題を修正する
+  - @voluntas
+- [FIX] CI の共通 workspace job から `interop/h3` / `interop/wt` を除外し、相互運用テストは macOS 専用 step でのみ実行する
   - @voluntas

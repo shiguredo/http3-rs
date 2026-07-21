@@ -2,10 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/fix-declares-flow-control-draft-citation
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
@@ -13,7 +12,7 @@
 
 ## 優先度根拠
 
-Medium。仕様引用の誤りは将来の改修時に判断ミスを誘発する。CLAUDE.md「資料を由来の機能を実装する場合は、根拠資料名、節番号、将来変更される可能性があることをコードコメントで明記すること」に基づき、引用の正確性を維持する責務がある。
+Medium。仕様引用の誤りは将来の改修時に判断ミスを誘発する。AGENTS.md「資料を由来の機能を実装する場合は、根拠資料名、節番号、将来変更される可能性があることをコードコメントで明記すること」に基づき、引用の正確性を維持する責務がある。
 
 ## 現状
 
@@ -37,7 +36,7 @@ draft-15 Section 5.1 (`refs/webtrans/draft-ietf-webtrans-http3-15.txt` L989-999)
 
 - コメントから `draft-15 Section 5.1` を削除し、`wt_max_sessions_draft14` 条件は「draft-14 互換のみ」であることを明示
 - `flow_control_enabled_with_peer` (settings.rs:243) のコメントも同様に再確認
-- 仕様引用は draft 番号と節番号を含め、将来変更されうる旨も書く (CLAUDE.md 規約)
+- 仕様引用は draft 番号と節番号を含め、将来変更されうる旨も書く (AGENTS.md 規約)
 
 ## 完了条件
 

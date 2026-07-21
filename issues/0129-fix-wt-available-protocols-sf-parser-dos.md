@@ -2,10 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/fix-wt-available-protocols-sf-parser-dos
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 

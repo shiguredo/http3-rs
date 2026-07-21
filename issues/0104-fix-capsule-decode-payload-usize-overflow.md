@@ -2,10 +2,9 @@
 
 - Priority: High
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/fix-capsule-decode-payload-usize-overflow
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
@@ -13,7 +12,7 @@
 
 ## 優先度根拠
 
-High。Sans I/O のデコーダーは任意のピアからの入力を受ける前提なので、境界判定がプラットフォーム依存に緩むのはセキュリティ・堅牢性の両面で問題。CLAUDE.md「性能より堅牢性を優先」原則に直接抵触する。
+High。Sans I/O のデコーダーは任意のピアからの入力を受ける前提なので、境界判定がプラットフォーム依存に緩むのはセキュリティ・堅牢性の両面で問題。AGENTS.md「性能より堅牢性を優先」原則に直接抵触する。
 
 ## 現状
 

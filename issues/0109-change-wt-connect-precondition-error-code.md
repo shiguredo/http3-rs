@@ -2,10 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/change-wt-connect-precondition-error-code
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
@@ -37,7 +36,6 @@ if !peer_settings.is_webtransport_enabled() {
 - `Error` enum (もしくは新規 `WtSetupError` enum) に「呼び出し順序 / 前提条件不足」を表す variant を追加
 - 8 種類のチェックがそれぞれ異なる variant を返すように分離
 - 既存利用者の影響を抑えるため、`Error::PreconditionFailed { what: WtSetupError }` のような形を検討
-- `#[non_exhaustive]` を付けて将来の variant 追加を後方互換に
 - `CHANGES.md` に `[CHANGE] WT CONNECT 前提条件違反のエラーを <新 variant> に変更する` を追加
 
 ## 完了条件
@@ -51,7 +49,6 @@ if !peer_settings.is_webtransport_enabled() {
 `src/error.rs`:
 
 ```rust
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WtSetupError {
     PeerSettingsUnreceived,

@@ -2,10 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/add-webtransport-error-display-and-std-error
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
@@ -20,7 +19,6 @@ Medium。Rust のエラー型は `Display + std::error::Error` を満たすの�
 `src/webtransport/error.rs:138-212`:
 
 ```rust
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     // ...
@@ -35,8 +33,8 @@ pub enum Error {
 
 - 上記すべてのエラー型に `Display` を `#[derive(thiserror::Error)]` または手書き実装する
 - 内部に他エラーを保持する variant では `#[from]` (thiserror 利用時) または `source()` を実装し、エラーチェーンを辿れるようにする
-- `thiserror` 依存追加は CLAUDE.md ライブラリ規約と相談 (現状の方針は手書き Display が多いため要確認)
-- `Display` メッセージは英語 (CLAUDE.md「エラーメッセージは全て英語にすること」)
+- `thiserror` 依存追加は AGENTS.md ライブラリ規約と相談 (現状の方針は手書き Display が多いため要確認)
+- `Display` メッセージは英語 (AGENTS.md「エラーメッセージは全て英語にすること」)
 
 ## 完了条件
 

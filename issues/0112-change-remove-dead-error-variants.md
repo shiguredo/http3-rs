@@ -2,18 +2,17 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/change-remove-dead-error-variants
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
-`src/error.rs` の `Error::InvalidStreamId(u64)`, `Error::VarintDecode`, `ErrorCode::ConnectError = 0x10f`, `ErrorCode::VersionFallback = 0x110` が src 全域で生成箇所ゼロの死に variant になっている。`#[non_exhaustive]` で守られているため削除可能。API 表面積を縮小する。
+`src/error.rs` の `Error::InvalidStreamId(u64)`, `Error::VarintDecode`, `ErrorCode::ConnectError = 0x10f`, `ErrorCode::VersionFallback = 0x110` が src 全域で生成箇所ゼロの死に variant になっている。API 表面積を縮小する。
 
 ## 優先度根拠
 
-Medium。死に variant は将来の利用者の混乱を招き、`match` のアームを冗長にする。`#[non_exhaustive]` のため削除は後方互換的に許容される (パターンマッチに `_ =>` を持つ利用者は影響を受けない)。
+Medium。死に variant は将来の利用者の混乱を招き、`match` のアームを冗長にする。削除は API 表面積の縮小に直接貢献する。
 
 ## 現状
 

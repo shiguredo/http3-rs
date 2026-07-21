@@ -2,10 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/add-qpack-never-indexed-bit
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 

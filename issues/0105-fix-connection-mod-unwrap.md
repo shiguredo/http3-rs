@@ -9,11 +9,11 @@
 
 ## 目的
 
-`src/connection/mod.rs:2641, 2656` の `self.streams.get(&stream_id).unwrap()` / `.get_mut(&stream_id).unwrap()` が CLAUDE.md「`.unwrap()` ではなく `.expect("MESSAGE")` を使用する」規約に違反している。本番コードでメッセージ付き expect に置換し、不変条件を明示する。
+`src/connection/mod.rs:2641, 2656` の `self.streams.get(&stream_id).unwrap()` / `.get_mut(&stream_id).unwrap()` が AGENTS.md「`.unwrap()` ではなく `.expect("MESSAGE")` を使用する」規約に違反している。本番コードでメッセージ付き expect に置換し、不変条件を明示する。
 
 ## 優先度根拠
 
-High。CLAUDE.md の明示的な規約違反。本番経路の panic 発生時のデバッグ性に直結する。修正コストは軽微。
+High。AGENTS.md の明示的な規約違反。本番経路の panic 発生時のデバッグ性に直結する。修正コストは軽微。
 
 ## 現状
 
@@ -32,7 +32,7 @@ let stream = self.streams.get_mut(&stream_id).unwrap();
 
 直前で `entry().or_insert_with(...)` を呼んでいるため `.get(&stream_id)` は確実に `Some` を返すが、コードを読む側にとって「なぜ unwrap が安全か」が明示されない。さらに `retry_blocked_streams` 等の別経路から呼ばれるケースもあり、フロー全体を読まないと安全性が確証できない。
 
-CLAUDE.md:
+AGENTS.md:
 
 > `.unwrap()` ではなく `.expect("MESSAGE")` を使用する
 > - `.unwrap()` では情報が少ない
@@ -77,5 +77,5 @@ if stream.is_qpack_blocked() {
 ### 関連ファイル
 
 - 修正対象: `src/connection/mod.rs:2641, 2656` および `#[cfg(test)] mod tests` 外の全 `.unwrap()`
-- 規約: `CLAUDE.md` (ルート)
+- 規約: `AGENTS.md` (ルート)
 - 関連 issue: 0121 (tests/pbt の `.unwrap()` 一括 expect 化)

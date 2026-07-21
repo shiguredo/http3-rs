@@ -2,10 +2,9 @@
 
 - Priority: Low
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/fix-remove-interop-cargo-lock
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 

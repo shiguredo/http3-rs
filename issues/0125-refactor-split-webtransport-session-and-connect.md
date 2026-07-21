@@ -2,10 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/refactor-split-webtransport-session-and-connect
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
@@ -13,7 +12,7 @@
 
 ## 優先度根拠
 
-Medium。CLAUDE.md「テストファイルが長くなった場合はファイル内で mod を使って分割すること。テストが長くなるのはモジュール自体が大きすぎるサイン」に該当。0077 で `connection/mod.rs` 分割が予定されているため、それと並行して webtransport 側も整理する。
+Medium。AGENTS.md「テストファイルが長くなった場合はファイル内で mod を使って分割すること。テストが長くなるのはモジュール自体が大きすぎるサイン」に該当。0077 で `connection/mod.rs` 分割が予定されているため、それと並行して webtransport 側も整理する。
 
 ## 現状
 

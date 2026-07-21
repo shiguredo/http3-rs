@@ -2,10 +2,9 @@
 
 - Priority: High
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/fix-changes-md-entry-order
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
@@ -13,7 +12,7 @@
 
 ## 優先度根拠
 
-High。CLAUDE.md の変更履歴規約 (「エントリは種別の順番を守って記載すること (CHANGE → ADD → UPDATE → FIX の順)」) の明示的な違反であり、リリースノート公開時に混乱を招く。リリース前の整理は必須。
+High。AGENTS.md の変更履歴規約 (「エントリは種別の順番を守って記載すること (CHANGE → ADD → UPDATE → FIX の順)」) の明示的な違反であり、リリースノート公開時に混乱を招く。リリース前の整理は必須。
 
 ## 現状
 
@@ -30,7 +29,7 @@ High。CLAUDE.md の変更履歴規約 (「エントリは種別の順番を守�
 - L236-237 `[FIX] STOP_SENDING 受信時のクリティカルストリーム判定...`
 - L238 `[FIX] payload が欠落した GOAWAY フレームのデコードエラー...`
 
-CLAUDE.md「機能に直接影響しない変更（ドキュメント追加、リファクタリング等）は `### misc` サブセクションに記載すること」より、これらは `## develop` 本体に置くべき。
+AGENTS.md「機能に直接影響しない変更（ドキュメント追加、リファクタリング等）は `### misc` サブセクションに記載すること」より、これらは `## develop` 本体に置くべき。
 
 ## 設計方針
 
@@ -59,4 +58,4 @@ CLAUDE.md「機能に直接影響しない変更（ドキュメント追加、�
 ### 関連ファイル
 
 - 修正対象: `CHANGES.md`
-- 規約: `CLAUDE.md` (リポジトリルート)
+- 規約: `AGENTS.md` (リポジトリルート)

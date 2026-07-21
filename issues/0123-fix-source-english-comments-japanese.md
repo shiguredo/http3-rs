@@ -2,18 +2,17 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/fix-source-english-comments-japanese
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
-`src/qpack/encoder.rs`, `decoder.rs`, `connection/mod.rs`, `webtransport/stream.rs`, `capsule.rs` 等で英語単独コメント (`// Literal Field Line ...`, `// Name index`, `// Value`, `// Stream Type`, `// Control Stream` 等) が多数残存している。CLAUDE.md「コメントは全て日本語にすること」規約違反を是正する。
+`src/qpack/encoder.rs`, `decoder.rs`, `connection/mod.rs`, `webtransport/stream.rs`, `capsule.rs` 等で英語単独コメント (`// Literal Field Line ...`, `// Name index`, `// Value`, `// Stream Type`, `// Control Stream` 等) が多数残存している。AGENTS.md「コメントは全て日本語にすること」規約違反を是正する。
 
 ## 優先度根拠
 
-Medium。CLAUDE.md の明示的な規約違反。RFC のフィールド名引用などは原文を残す必要があるが、その場合も日本語の補足説明を併記すべき。
+Medium。AGENTS.md の明示的な規約違反。RFC のフィールド名引用などは原文を残す必要があるが、その場合も日本語の補足説明を併記すべき。
 
 ## 現状
 
@@ -26,7 +25,7 @@ Medium。CLAUDE.md の明示的な規約違反。RFC のフィールド名引用
 - `src/webtransport/capsule.rs:305,311` `// Capsule Type`, `// Length`
 - `src/validation.rs:217,242,323,402,460,466,485,523,618` 多数の RFC ABNF 引用
 
-CLAUDE.md:
+AGENTS.md:
 
 > コメントは全て日本語にすること
 
@@ -50,4 +49,4 @@ CLAUDE.md:
 ### 関連ファイル
 
 - 修正対象: `src/qpack/encoder.rs`, `src/qpack/decoder.rs`, `src/connection/mod.rs`, `src/webtransport/stream.rs`, `src/webtransport/capsule.rs`, `src/validation.rs` ほか
-- 規約: `CLAUDE.md`
+- 規約: `AGENTS.md`

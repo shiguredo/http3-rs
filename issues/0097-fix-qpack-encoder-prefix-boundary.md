@@ -2,10 +2,9 @@
 
 - Priority: High
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/fix-qpack-encoder-prefix-boundary
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
@@ -128,7 +127,7 @@ fn encode_literal_with_name_ref(
 
 ### 仕様引用コメント
 
-`integer::encode_integer` への委譲箇所に、RFC 7541 Section 5.1 / RFC 9204 Section 4.5.2 (Indexed Field Line) / Section 4.5.4 (Literal Field Line with Name Reference) の節番号を引用するコメントを追加する。CLAUDE.md「資料を由来の機能を実装する場合は、根拠資料名、節番号、将来変更される可能性があることをコードコメントで明記すること」に従う。
+`integer::encode_integer` への委譲箇所に、RFC 7541 Section 5.1 / RFC 9204 Section 4.5.2 (Indexed Field Line) / Section 4.5.4 (Literal Field Line with Name Reference) の節番号を引用するコメントを追加する。AGENTS.md「資料を由来の機能を実装する場合は、根拠資料名、節番号、将来変更される可能性があることをコードコメントで明記すること」に従う。
 
 ### 関連ファイル
 

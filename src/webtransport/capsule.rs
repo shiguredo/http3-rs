@@ -314,15 +314,21 @@ impl Capsule {
         };
         offset += len;
 
-        let length = length as usize;
-        if buf.len() < offset + length {
+        let Some(length) = usize::try_from(length).ok() else {
+            // 32-bit 環境で usize を超える length はデコード不能
+            return Ok(None);
+        };
+        let Some(end) = offset.checked_add(length) else {
+            return Ok(None);
+        };
+        if buf.len() < end {
             return Ok(None);
         }
 
-        let payload = &buf[offset..offset + length];
+        let payload = &buf[offset..end];
         let capsule = Self::decode_payload(capsule_type, payload)?;
 
-        Ok(Some((capsule, offset + length)))
+        Ok(Some((capsule, end)))
     }
 
     /// ペイロードから Capsule をデコード

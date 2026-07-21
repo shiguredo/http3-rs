@@ -2,10 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/refactor-merge-encoder-decoder-static-and-dynamic
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
@@ -53,5 +52,5 @@ Medium。Don't live with broken windows。重複の片方を直し忘れると�
 ### 関連ファイル
 
 - 修正対象: `src/qpack/encoder.rs`, `src/qpack/decoder.rs`, `src/qpack/mod.rs`, `src/lib.rs`
-- 関連 issue: 0097 (境界判定バグ), 0099 (Vec::with_capacity)
+- 関連 issue: 0097 (境界判定バグ)
 - `CHANGES.md` 追記必要

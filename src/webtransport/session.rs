@@ -159,7 +159,7 @@ impl DirectionalStreamFlowControl {
 
     /// ピアがストリームを開いたことを記録
     pub(crate) fn on_stream_received(&mut self) {
-        self.total_received += 1;
+        self.total_received = self.total_received.saturating_add(1);
     }
 
     /// ピアが開いたストリームが完全に閉じたことを記録
@@ -167,7 +167,7 @@ impl DirectionalStreamFlowControl {
     /// しきい値を下回った場合、新しい `advertised_max` を返す。
     /// 呼び出し側は返された値で WT_MAX_STREAMS カプセルを生成する。
     pub(crate) fn on_stream_closed(&mut self) -> Option<u64> {
-        self.total_closed += 1;
+        self.total_closed = self.total_closed.saturating_add(1);
 
         // concurrent_limit が 0 の場合はウィンドウ更新不要
         if self.concurrent_limit == 0 {
@@ -223,12 +223,13 @@ impl DataFlowControl {
 
     /// ピアが送信するデータを受信可能かどうか
     pub(crate) fn check_received(&self, bytes: u64) -> bool {
-        self.total_received + bytes <= self.advertised_max
+        // checked_sub でオーバーフローを回避: advertised_max - total_received の残り枠と比較
+        self.advertised_max.saturating_sub(self.total_received) >= bytes
     }
 
     /// ピアからのデータ受信を記録
     pub(crate) fn on_data_received(&mut self, bytes: u64) {
-        self.total_received += bytes;
+        self.total_received = self.total_received.saturating_add(bytes);
     }
 
     /// アプリがデータを消費したことを記録
@@ -236,7 +237,7 @@ impl DataFlowControl {
     /// しきい値を下回った場合、新しい `advertised_max` を返す。
     /// 呼び出し側は返された値で WT_MAX_DATA カプセルを生成する。
     pub(crate) fn on_data_consumed(&mut self, bytes: u64) -> Option<u64> {
-        self.total_consumed += bytes;
+        self.total_consumed = self.total_consumed.saturating_add(bytes);
 
         // initial_window が 0 の場合はウィンドウ更新不要
         if self.initial_window == 0 {
@@ -558,7 +559,12 @@ impl Session {
 
     /// データを送信可能かどうか (フロー制御考慮)
     pub fn can_send_data(&self, bytes: u64) -> bool {
-        self.state.can_send() && self.flow_state.data_sent + bytes <= self.remote_limits.max_data
+        self.state.can_send()
+            && self
+                .remote_limits
+                .max_data
+                .saturating_sub(self.flow_state.data_sent)
+                >= bytes
     }
 
     /// ストリームの開設を試行 (送信側)
@@ -588,7 +594,7 @@ impl Session {
         };
 
         if *opened < limit {
-            *opened += 1;
+            *opened = opened.saturating_add(1);
             return true;
         }
 
@@ -615,8 +621,13 @@ impl Session {
             return false;
         }
 
-        if self.flow_state.data_sent + bytes <= self.remote_limits.max_data {
-            self.flow_state.data_sent += bytes;
+        if self
+            .remote_limits
+            .max_data
+            .saturating_sub(self.flow_state.data_sent)
+            >= bytes
+        {
+            self.flow_state.data_sent = self.flow_state.data_sent.saturating_add(bytes);
             return true;
         }
 
@@ -649,7 +660,7 @@ impl Session {
 
     /// 受信データ量を加算
     pub fn add_received_data(&mut self, bytes: u64) {
-        self.flow_state.data_received += bytes;
+        self.flow_state.data_received = self.flow_state.data_received.saturating_add(bytes);
         self.recv_data_fc.on_data_received(bytes);
     }
 
@@ -675,10 +686,12 @@ impl Session {
     /// 受信ストリーム数を加算
     pub fn add_received_stream(&mut self, bidirectional: bool) {
         if bidirectional {
-            self.flow_state.streams_bidi_received += 1;
+            self.flow_state.streams_bidi_received =
+                self.flow_state.streams_bidi_received.saturating_add(1);
             self.recv_stream_fc_bidi.on_stream_received();
         } else {
-            self.flow_state.streams_uni_received += 1;
+            self.flow_state.streams_uni_received =
+                self.flow_state.streams_uni_received.saturating_add(1);
             self.recv_stream_fc_uni.on_stream_received();
         }
     }
@@ -731,7 +744,7 @@ impl Session {
 
     /// 受信データグラム数を加算 (DoS 監視用)
     pub fn add_received_datagram(&mut self) {
-        self.flow_state.datagrams_received += 1;
+        self.flow_state.datagrams_received = self.flow_state.datagrams_received.saturating_add(1);
     }
 
     /// Capsule を送信キューに追加

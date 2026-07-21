@@ -2,14 +2,13 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/fix-remove-english-monologue-comments-in-tests
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
-`src/connection/mod.rs:4265-4274` のテスト関数内に英語の思考過程コメント (`Actually: ...`, `Let me use simpler encoding.`, `varint encoding: 4096 fits in 14-bit ...` 等) が残骸として残っている。CLAUDE.md「コメントは全て日本語にすること」違反かつ、思考過程の独白は本番のテストコードに残してはならない。削除する。
+`src/connection/mod.rs:4265-4274` のテスト関数内に英語の思考過程コメント (`Actually: ...`, `Let me use simpler encoding.`, `varint encoding: 4096 fits in 14-bit ...` 等) が残骸として残っている。AGENTS.md「コメントは全て日本語にすること」違反かつ、思考過程の独白は本番のテストコードに残してはならない。削除する。
 
 ## 優先度根拠
 
@@ -29,7 +28,7 @@ Medium。コード品質の問題で、規約違反かつ「コメントは読�
 // = 0x50, 0x00
 ```
 
-CLAUDE.md:
+AGENTS.md:
 
 > コメントは全て日本語にすること
 
@@ -59,4 +58,4 @@ CLAUDE.md:
 ### 関連ファイル
 
 - 修正対象: `src/connection/mod.rs:4265-4274`
-- 規約: `CLAUDE.md`
+- 規約: `AGENTS.md`

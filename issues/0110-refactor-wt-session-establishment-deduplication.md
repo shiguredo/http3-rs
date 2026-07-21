@@ -2,10 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
 - Model: Opus 4.7
 - Branch: feature/refactor-wt-session-establishment-deduplication
-- Polished:
+- Polished: 2026-07-21
 
 ## 目的
 
@@ -13,7 +12,7 @@
 
 ## 優先度根拠
 
-Medium。重複の片方を直し忘れるとプロトコル挙動の非対称性が生じる。実際 fc_violation 判定やイベント生成スタイルが微妙に異なっており既に乖離の兆候がある。CLAUDE.md「Don't live with broken windows」に該当する。
+Medium。重複の片方を直し忘れるとプロトコル挙動の非対称性が生じる。実際 fc_violation 判定やイベント生成スタイルが微妙に異なっており既に乖離の兆候がある。AGENTS.md「Don't live with broken windows」に該当する。
 
 ## 現状
 

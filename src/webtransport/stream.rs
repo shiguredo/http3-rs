@@ -266,12 +266,12 @@ impl Stream {
 
     /// 送信データ量を加算
     pub fn add_bytes_sent(&mut self, bytes: u64) {
-        self.bytes_sent += bytes;
+        self.bytes_sent = self.bytes_sent.saturating_add(bytes);
     }
 
     /// 受信データ量を加算
     pub fn add_bytes_received(&mut self, bytes: u64) {
-        self.bytes_received += bytes;
+        self.bytes_received = self.bytes_received.saturating_add(bytes);
     }
 }
 
