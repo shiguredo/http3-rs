@@ -514,10 +514,10 @@ mod tests {
         ];
 
         // QPACK エンコード
-        let encoder = QpackEncoder::new();
+        let mut encoder = QpackEncoder::new();
         let mut qpack_buf = vec![0u8; 4096];
         let qpack_len = encoder
-            .encode(&mut qpack_buf, &headers)
+            .encode(&mut qpack_buf, &headers, 0)
             .expect("test must succeed");
         qpack_buf.truncate(qpack_len);
 
@@ -537,10 +537,10 @@ mod tests {
         let headers = vec![Header::new(b":method", b"POST").expect("test must succeed")];
 
         // QPACK エンコード
-        let encoder = QpackEncoder::new();
+        let mut encoder = QpackEncoder::new();
         let mut qpack_buf = vec![0u8; 4096];
         let qpack_len = encoder
-            .encode(&mut qpack_buf, &headers)
+            .encode(&mut qpack_buf, &headers, 0)
             .expect("test must succeed");
         qpack_buf.truncate(qpack_len);
 

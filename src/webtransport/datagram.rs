@@ -53,6 +53,26 @@ pub struct Datagram {
     pub payload: Vec<u8>,
 }
 
+/// デコードエラー
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DatagramDecodeError {
+    /// バッファが不足している (追加データが必要)
+    BufferTooShort,
+    /// Quarter Stream ID が不正 (H3_DATAGRAM_ERROR で接続を閉じる)
+    InvalidQuarterStreamId,
+}
+
+impl core::fmt::Display for DatagramDecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::BufferTooShort => write!(f, "datagram buffer too short"),
+            Self::InvalidQuarterStreamId => write!(f, "invalid quarter stream id"),
+        }
+    }
+}
+
+impl core::error::Error for DatagramDecodeError {}
+
 impl Datagram {
     /// 新しいデータグラムを作成
     ///
@@ -101,23 +121,27 @@ impl Datagram {
     ///
     /// `buf` はひとつの QUIC DATAGRAM フレームのペイロード全体を渡す。
     /// 成功時は `(Datagram, 消費バイト数)` を返す。
-    /// バッファが不足している場合は `None` を返す。
+    /// バッファが不足している場合は `Err(BufferTooShort)` を返す。
+    /// Quarter Stream ID が不正な場合は `Err(InvalidQuarterStreamId)` を返す。
     ///
     /// `session_id = quarter_stream_id * 4` として復元する。
-    pub fn decode(buf: &[u8]) -> Option<(Self, usize)> {
-        let (qsi, varint_len) = varint::decode(buf).ok()?;
+    pub fn decode(buf: &[u8]) -> Result<(Self, usize), DatagramDecodeError> {
+        let (qsi, varint_len) =
+            varint::decode(buf).map_err(|_| DatagramDecodeError::BufferTooShort)?;
         let qsi = qsi.get();
         // RFC 9297 Section 2.1: Quarter Stream ID は QUIC ストリーム ID 空間
         // (2^62 - 1) を 4 で割った値、すなわち 2^60 - 1 が上限。
         // これを超える値は不正であり、呼び出し側は H3_DATAGRAM_ERROR で
         // 接続を閉じる。
         if qsi > (1u64 << 60) - 1 {
-            return None;
+            return Err(DatagramDecodeError::InvalidQuarterStreamId);
         }
-        let session_id = qsi.checked_mul(4)?;
+        let session_id = qsi
+            .checked_mul(4)
+            .ok_or(DatagramDecodeError::InvalidQuarterStreamId)?;
         let payload = buf[varint_len..].to_vec();
         let consumed = buf.len();
-        Some((
+        Ok((
             Self {
                 session_id,
                 payload,
@@ -175,7 +199,7 @@ mod tests {
 
     #[test]
     fn test_datagram_decode_empty_buffer() {
-        assert!(Datagram::decode(&[]).is_none());
+        assert!(Datagram::decode(&[]).is_err());
     }
 
     #[test]

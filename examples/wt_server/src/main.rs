@@ -505,8 +505,7 @@ async fn handle_datagram_echo(
         };
 
         // Quarter Stream ID をデコードして、このセッション宛かを確認する
-        let Some((decoded, consumed)) = shiguredo_http3::webtransport::Datagram::decode(&raw)
-        else {
+        let Ok((decoded, consumed)) = shiguredo_http3::webtransport::Datagram::decode(&raw) else {
             tracing::warn!(
                 "[{remote}] Datagram decode failed ({} bytes): {:02x?}",
                 raw.len(),

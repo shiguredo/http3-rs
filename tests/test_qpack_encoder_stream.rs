@@ -5,6 +5,7 @@ use shiguredo_http3::qpack::{DynamicTable, EncoderStreamReceiver};
 fn insert_with_name_ref_static_invalid_index_does_not_drain() {
     // 静的テーブルに存在しないインデックス 99 で Insert with Name Reference を送信する
     // QPACK 静的テーブルは 0-98 の 99 エントリのみ
+    // 名前参照の段階でエラーになるため消費バイト数が確定せず drain しない
     let mut receiver = EncoderStreamReceiver::new();
     receiver.set_max_table_capacity(4096);
     let mut table = DynamicTable::with_capacity(4096);
@@ -24,13 +25,14 @@ fn insert_with_name_ref_static_invalid_index_does_not_drain() {
     assert_eq!(
         receiver.buffer(),
         data,
-        "エラー時にバッファが drain されていないこと"
+        "名前参照エラー時は消費バイト数が確定しないため drain しないこと"
     );
 }
 
 #[test]
 fn insert_with_name_ref_dynamic_invalid_index_does_not_drain() {
     // 空の動的テーブルに対して relative_index=5 で Insert with Name Reference を送信する
+    // 名前参照の段階でエラーになるため消費バイト数が確定せず drain しない
     let mut receiver = EncoderStreamReceiver::new();
     receiver.set_max_table_capacity(4096);
     let mut table = DynamicTable::with_capacity(4096);
@@ -50,12 +52,12 @@ fn insert_with_name_ref_dynamic_invalid_index_does_not_drain() {
     assert_eq!(
         receiver.buffer(),
         data,
-        "エラー時にバッファが drain されていないこと"
+        "名前参照エラー時は消費バイト数が確定しないため drain しないこと"
     );
 }
 
 #[test]
-fn insert_with_name_ref_capacity_overflow_does_not_drain() {
+fn insert_with_name_ref_capacity_overflow_drains_on_error() {
     // 容量不足で insert が失敗するケース
     // 静的テーブル index 0 (:authority) のエントリサイズ = 10 + 0 + 32 = 42 > 32
     let mut receiver = EncoderStreamReceiver::new();
@@ -74,15 +76,15 @@ fn insert_with_name_ref_capacity_overflow_does_not_drain() {
         Err(QpackError::DecodeFailed),
         "容量超過で挿入が失敗しエラーが返ること"
     );
-    assert_eq!(
-        receiver.buffer(),
-        data,
-        "エラー時にバッファが drain されていないこと"
+    // 0120: infinite loop 防止のため、insert 失敗時もバッファを drain する
+    assert!(
+        receiver.buffer().is_empty(),
+        "insert 失敗時にバッファが drain されていること (infinite loop 防止)"
     );
 }
 
 #[test]
-fn insert_with_literal_name_capacity_overflow_does_not_drain() {
+fn insert_with_literal_name_capacity_overflow_drains_on_error() {
     // 容量不足で insert が失敗するケース
     // エントリサイズ = 1 (name "a") + 0 (empty value) + 32 = 33 > 32
     let mut receiver = EncoderStreamReceiver::new();
@@ -102,15 +104,15 @@ fn insert_with_literal_name_capacity_overflow_does_not_drain() {
         Err(QpackError::DecodeFailed),
         "容量超過で挿入が失敗しエラーが返ること"
     );
-    assert_eq!(
-        receiver.buffer(),
-        data,
-        "エラー時にバッファが drain されていないこと"
+    // 0120: infinite loop 防止のため、insert 失敗時もバッファを drain する
+    assert!(
+        receiver.buffer().is_empty(),
+        "insert 失敗時にバッファが drain されていること (infinite loop 防止)"
     );
 }
 
 #[test]
-fn duplicate_invalid_index_does_not_drain() {
+fn duplicate_invalid_index_drains_on_error() {
     // 空の動的テーブルに対して relative_index=5 で Duplicate を送信する
     let mut receiver = EncoderStreamReceiver::new();
     receiver.set_max_table_capacity(4096);
@@ -126,9 +128,9 @@ fn duplicate_invalid_index_does_not_drain() {
         Err(QpackError::InvalidIndex(5)),
         "不正な相対インデックスでエラーが返ること"
     );
-    assert_eq!(
-        receiver.buffer(),
-        data,
-        "エラー時にバッファが drain されていないこと"
+    // 0120: infinite loop 防止のため、duplicate 失敗時もバッファを drain する
+    assert!(
+        receiver.buffer().is_empty(),
+        "duplicate 失敗時にバッファが drain されていること (infinite loop 防止)"
     );
 }

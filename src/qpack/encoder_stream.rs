@@ -289,9 +289,12 @@ impl EncoderStreamReceiver {
                 .clone()
         };
 
-        table
-            .insert(name, value.clone())
-            .ok_or(QpackError::DecodeFailed)?;
+        // insert 失敗時もバッファを drain しないと同一バイト列が再処理され
+        // infinite loop になる (RFC 9204 Section 4.3.2)
+        if table.insert(name, value.clone()).is_none() {
+            self.recv_buffer.drain(..consumed);
+            return Err(QpackError::DecodeFailed);
+        }
 
         self.recv_buffer.drain(..consumed);
 
@@ -315,9 +318,12 @@ impl EncoderStreamReceiver {
         consumed += value_len;
 
         // テーブル操作を先に行い、成功後に drain
-        table
-            .insert(name.clone(), value.clone())
-            .ok_or(QpackError::DecodeFailed)?;
+        // insert 失敗時もバッファを drain しないと同一バイト列が再処理され
+        // infinite loop になる (RFC 9204 Section 4.3.3)
+        if table.insert(name.clone(), value.clone()).is_none() {
+            self.recv_buffer.drain(..consumed);
+            return Err(QpackError::DecodeFailed);
+        }
 
         self.recv_buffer.drain(..consumed);
 
@@ -335,9 +341,12 @@ impl EncoderStreamReceiver {
         let (relative_index, consumed) = integer::decode_integer(&self.recv_buffer, 5)?;
 
         // テーブル操作を先に行い、成功後に drain
-        table
-            .duplicate(relative_index)
-            .ok_or(QpackError::InvalidIndex(relative_index))?;
+        // duplicate 失敗時もバッファを drain しないと同一バイト列が再処理され
+        // infinite loop になる (RFC 9204 Section 4.3.4)
+        if table.duplicate(relative_index).is_none() {
+            self.recv_buffer.drain(..consumed);
+            return Err(QpackError::InvalidIndex(relative_index));
+        }
 
         self.recv_buffer.drain(..consumed);
 

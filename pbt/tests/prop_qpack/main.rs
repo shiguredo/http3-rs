@@ -455,7 +455,7 @@ proptest! {
     fn prop_encoder_decoder_roundtrip_static(
         value in valid_header_value(),
     ) {
-        let encoder = Encoder::new();
+        let mut encoder = Encoder::new();
         let decoder = Decoder::new();
 
         let headers = vec![
@@ -464,7 +464,7 @@ proptest! {
         ];
 
         let mut buf = vec![0u8; 1024];
-        let encoded_len = encoder.encode(&mut buf, &headers).expect("test must succeed");
+        let encoded_len = encoder.encode(&mut buf, &headers, 0).expect("test must succeed");
 
         let decoded = decoder.decode(&buf[..encoded_len]).expect("test must succeed");
 
@@ -481,13 +481,13 @@ proptest! {
         name in valid_header_name(),
         value in valid_header_value(),
     ) {
-        let encoder = Encoder::new();
+        let mut encoder = Encoder::new();
         let decoder = Decoder::new();
 
         let headers = vec![wire_header(&name, &value)];
 
         let mut buf = vec![0u8; 1024];
-        let encoded_len = encoder.encode(&mut buf, &headers).expect("test must succeed");
+        let encoded_len = encoder.encode(&mut buf, &headers, 0).expect("test must succeed");
 
         let decoded = decoder.decode(&buf[..encoded_len]).expect("test must succeed");
 
@@ -504,7 +504,7 @@ proptest! {
             1..5
         ),
     ) {
-        let encoder = Encoder::new();
+        let mut encoder = Encoder::new();
         let decoder = Decoder::new();
 
         let headers: Vec<Header> = headers_data
@@ -513,7 +513,7 @@ proptest! {
             .collect();
 
         let mut buf = vec![0u8; 4096];
-        let encoded_len = encoder.encode(&mut buf, &headers).expect("test must succeed");
+        let encoded_len = encoder.encode(&mut buf, &headers, 0).expect("test must succeed");
 
         let decoded = decoder.decode(&buf[..encoded_len]).expect("test must succeed");
 
@@ -981,11 +981,11 @@ proptest! {
         value in valid_header_value(),
     ) {
         let original = Header::new(&name, &value).expect("test must succeed");
-        let encoder = Encoder::new();
+        let mut encoder = Encoder::new();
         let decoder = Decoder::new();
         let headers = vec![original.clone()];
         let mut buf = vec![0u8; 8192];
-        let encoded_len = encoder.encode(&mut buf, &headers).expect("test must succeed");
+        let encoded_len = encoder.encode(&mut buf, &headers, 0).expect("test must succeed");
         let decoded = decoder.decode(&buf[..encoded_len]).expect("test must succeed");
         prop_assert_eq!(decoded.len(), 1);
         prop_assert_eq!(decoded[0].name(), original.name());

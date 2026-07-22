@@ -46,10 +46,6 @@ pub enum ErrorCode {
     RequestIncomplete = 0x10d,
     /// メッセージエラー (0x10e)
     MessageError = 0x10e,
-    /// 接続クローズ (0x10f)
-    ConnectError = 0x10f,
-    /// バージョンフォールバック (0x110)
-    VersionFallback = 0x110,
     /// QPACK デコンプレッションエラー (0x200)
     QpackDecompressionFailed = 0x200,
     /// QPACK エンコーダーストリームエラー (0x201)
@@ -82,8 +78,6 @@ impl ErrorCode {
             0x10c => Some(Self::RequestCancelled),
             0x10d => Some(Self::RequestIncomplete),
             0x10e => Some(Self::MessageError),
-            0x10f => Some(Self::ConnectError),
-            0x110 => Some(Self::VersionFallback),
             0x200 => Some(Self::QpackDecompressionFailed),
             0x201 => Some(Self::QpackEncoderStreamError),
             0x202 => Some(Self::QpackDecoderStreamError),
@@ -116,8 +110,6 @@ impl fmt::Display for ErrorCode {
             Self::RequestCancelled => write!(f, "H3_REQUEST_CANCELLED"),
             Self::RequestIncomplete => write!(f, "H3_REQUEST_INCOMPLETE"),
             Self::MessageError => write!(f, "H3_MESSAGE_ERROR"),
-            Self::ConnectError => write!(f, "H3_CONNECT_ERROR"),
-            Self::VersionFallback => write!(f, "H3_VERSION_FALLBACK"),
             Self::QpackDecompressionFailed => write!(f, "QPACK_DECOMPRESSION_FAILED"),
             Self::QpackEncoderStreamError => write!(f, "QPACK_ENCODER_STREAM_ERROR"),
             Self::QpackDecoderStreamError => write!(f, "QPACK_DECODER_STREAM_ERROR"),
@@ -135,14 +127,10 @@ pub enum Error {
     StreamError(ErrorCode),
     /// バッファ不足 (追加データが必要)
     BufferTooShort,
-    /// 無効なストリーム ID
-    InvalidStreamId(u64),
     /// ストリームが見つからない
     StreamNotFound(u64),
     /// ストリームがクローズ済み
     StreamClosed(u64),
-    /// 可変長整数デコードエラー
-    VarintDecode,
     /// フレームデコードエラー
     FrameDecode(FrameDecodeError),
     /// QPACK エラー
@@ -154,6 +142,56 @@ pub enum Error {
     /// グレースフルシャットダウン中の場合に、新規ストリーム/データグラムの
     /// 送信を試みると返される (Section 4.7 の MAY に対し本実装は送信を拒否する)。
     WtSessionDraining(u64),
+    /// WebTransport 前提条件未達
+    ///
+    /// WebTransport CONNECT を送信するために必要な SETTINGS / transport parameter /
+    /// ドラフトバージョンの前提条件が揃っていない場合に返される。
+    /// 呼び出し順序や設定不足の問題であり、接続自体のエラーではない。
+    WtSetup(WtSetupError),
+}
+
+/// WebTransport 前提条件エラーの詳細
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WtSetupError {
+    /// peer の SETTINGS を未受信
+    PeerSettingsNotReceived,
+    /// peer が WebTransport を有効化していない
+    WebTransportNotEnabled,
+    /// peer のドラフトバージョンが不明
+    UnknownDraftVersion,
+    /// ENABLE_CONNECT_PROTOCOL が未設定 (draft-07/14/15 で必須)
+    EnableConnectProtocolMissing,
+    /// H3_DATAGRAM が未設定
+    H3DatagramNotEnabled,
+    /// QUIC transport parameter の検証が未完了
+    TransportNotVerified,
+    /// reset_stream_at transport parameter が未サポート (draft-14/15 で必須)
+    ResetStreamAtNotSupported,
+    /// :protocol がネゴシエートしたドラフトと不一致
+    ProtocolMismatch,
+}
+
+impl fmt::Display for WtSetupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PeerSettingsNotReceived => write!(f, "peer SETTINGS not received"),
+            Self::WebTransportNotEnabled => write!(f, "WebTransport not enabled by peer"),
+            Self::UnknownDraftVersion => write!(f, "unknown WebTransport draft version"),
+            Self::EnableConnectProtocolMissing => {
+                write!(f, "ENABLE_CONNECT_PROTOCOL not set by peer")
+            }
+            Self::H3DatagramNotEnabled => write!(f, "H3_DATAGRAM not enabled by peer"),
+            Self::TransportNotVerified => {
+                write!(f, "QUIC transport parameters not verified")
+            }
+            Self::ResetStreamAtNotSupported => {
+                write!(f, "reset_stream_at transport parameter not supported")
+            }
+            Self::ProtocolMismatch => {
+                write!(f, ":protocol does not match negotiated draft version")
+            }
+        }
+    }
 }
 
 impl fmt::Display for Error {
@@ -162,13 +200,12 @@ impl fmt::Display for Error {
             Self::ConnectionError(code) => write!(f, "connection error: {code}"),
             Self::StreamError(code) => write!(f, "stream error: {code}"),
             Self::BufferTooShort => write!(f, "buffer too short"),
-            Self::InvalidStreamId(id) => write!(f, "invalid stream id: {id}"),
             Self::StreamNotFound(id) => write!(f, "stream not found: {id}"),
             Self::StreamClosed(id) => write!(f, "stream closed: {id}"),
-            Self::VarintDecode => write!(f, "varint decode error"),
             Self::FrameDecode(e) => write!(f, "frame decode error: {e}"),
             Self::Qpack(e) => write!(f, "qpack error: {e}"),
             Self::WtSessionDraining(id) => write!(f, "webtransport session draining: {id}"),
+            Self::WtSetup(e) => write!(f, "webtransport setup error: {e}"),
         }
     }
 }

@@ -38,6 +38,7 @@ mod header;
 pub mod huffman;
 pub mod integer;
 pub mod table;
+pub(crate) mod wire;
 
 pub use decoder::{DecodeOutput, Decoder, DynamicDecoder};
 pub use decoder_stream::{DecoderInstruction, DecoderStream, DecoderStreamReceiver};

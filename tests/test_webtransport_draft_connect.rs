@@ -13,7 +13,7 @@ use shiguredo_http3::qpack::Encoder;
 use shiguredo_http3::webtransport::DraftVersion;
 use shiguredo_http3::{
     Error, ErrorCode, Event, Header, ServerConnection, Settings, VarInt, WebTransportEvent,
-    webtransport,
+    WtSetupError, webtransport,
 };
 
 fn vi(value: u64) -> VarInt {
@@ -26,10 +26,10 @@ fn vi(value: u64) -> VarInt {
 
 /// QPACK エンコードされた HEADERS フレームを手動構築する
 fn build_headers_frame(headers: &[Header]) -> Vec<u8> {
-    let encoder = Encoder::new();
+    let mut encoder = Encoder::new();
     let mut qpack_buf = vec![0u8; 4096];
     let qpack_len = encoder
-        .encode(&mut qpack_buf, headers)
+        .encode(&mut qpack_buf, headers, 0)
         .expect("test must succeed");
     qpack_buf.truncate(qpack_len);
 
@@ -924,7 +924,7 @@ mod protocol_draft_alignment {
         let result = client.send_request(&headers, false);
         assert!(matches!(
             result,
-            Err(Error::ConnectionError(ErrorCode::InternalError))
+            Err(Error::WtSetup(WtSetupError::ProtocolMismatch))
         ));
     }
 }

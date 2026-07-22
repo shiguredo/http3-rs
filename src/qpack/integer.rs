@@ -7,6 +7,7 @@
 //! 仕様は将来変更される可能性がある。
 
 use crate::error::QpackError;
+use crate::varint::VarInt;
 
 /// スライスにエンコード (RFC 7541 Section 5.1)
 ///
@@ -116,6 +117,13 @@ pub fn decode_integer(data: &[u8], prefix_bits: u8) -> Result<(u64, usize), Qpac
         if shift > 56 {
             return Err(QpackError::DecodeFailed);
         }
+    }
+
+    // RFC 9204 Section 4.1.1: 62 ビットまでデコード可能 (MUST)。
+    // shift > 56 ガードはオーバーフロー防止だが、最終値が 2^62 - 1 を
+    // 超えるケース (例: prefix 全部 1 + continuation 全部 0x7f) も弾く。
+    if value > VarInt::MAX.get() {
+        return Err(QpackError::DecodeFailed);
     }
 
     Ok((value, offset))

@@ -1,31 +1,15 @@
 //! HTTP/3 メッセージ検証 (RFC 9114 Section 4.1.2)
 //!
 //! 送受信するヘッダーセクションが malformed でないかを検証する。
-//!
-//! ヘッダーフィールド単体の構文検査 (lowercase name / field-vchar value 等) は
-//! `qpack::Header` の構築時検査に統合されている。本モジュールでは
-//! ヘッダーリスト全体や他フィールドとの組み合わせに依存する検査
+//! ヘッダーフィールド単体の構文検査は `qpack::Header` の構築時検査に統合済み。
+//! 本モジュールはヘッダーリスト全体や他フィールドとの組み合わせに依存する検査
 //! (CONNECT の構成、`:path` / `:authority` の構文、疑似ヘッダーの順序/重複/存在等)
 //! を担当する。
 //!
-//! # `qpack::header` との検査ロジック重複について
-//!
-//! 単一フィールドの構文検査 (`is_valid_field_name` / `is_valid_field_value` /
-//! `is_valid_scheme` / `is_tchar` / `:status` の 3DIGIT 等) は `qpack::header`
-//! 内の `check_header` / `check_pseudo_value` と意味的に等価な実装を持つ。
-//! 両者は **常に同期している必要がある**。
-//!
-//! 重複を許容している理由:
-//! - decoder 経由で `Header::from_validated_parts_internal` で構築されたヘッダーは
-//!   構築時検査をスキップしているため、wire 上の不正バイト列を含み得る。
-//!   そのまま validate 関数に渡されたときに malformed として弾けるよう、
-//!   ここでも独立に検査する。
-//! - 検査ロジックを完全に共有してしまうと、構築時検査の正しさに依存して
-//!   validation を簡略化するという循環が生まれ、`from_validated_parts_internal`
-//!   経路の安全網が崩れる。
-//!
-//! 両者の挙動が乖離していないことは PBT (`pbt/tests/prop_validation.rs`) で
-//! 確認することを推奨する。
+//! `qpack::header` の `check_header` と意味的に等価な検査ロジックを意図的に重複させている。
+//! decoder 経由の `from_validated_parts_internal` は構築時検査をスキップするため、
+//! wire 上の不正バイト列をここで独立に検査する必要がある。
+//! 両者の挙動乖離は PBT (`pbt/tests/prop_validation.rs`) で検出する。
 
 use crate::connection::Role;
 use crate::error::{Error, ErrorCode};

@@ -13,7 +13,6 @@ use crate::error::QpackError;
 
 use super::dynamic_table::DynamicTable;
 use super::header::Header;
-use super::huffman;
 use super::integer;
 use super::table::{STATIC_TABLE_LEN, get_static_entry};
 
@@ -205,27 +204,7 @@ impl Decoder {
 
     /// 文字列をデコード
     fn decode_string(&self, data: &[u8]) -> Result<(Vec<u8>, usize), QpackError> {
-        if data.is_empty() {
-            return Err(QpackError::BufferTooShort);
-        }
-
-        let is_huffman = (data[0] & 0x80) != 0;
-        let (length, prefix_len) = integer::decode_integer(data, 7)?;
-
-        let total_len = prefix_len + length as usize;
-        if data.len() < total_len {
-            return Err(QpackError::BufferTooShort);
-        }
-
-        let encoded = &data[prefix_len..total_len];
-
-        let decoded = if is_huffman {
-            huffman::decode(encoded)?
-        } else {
-            encoded.to_vec()
-        };
-
-        Ok((decoded, total_len))
+        super::wire::decode_string(data)
     }
 
     /// 長さ指定で文字列をデコード
@@ -235,19 +214,7 @@ impl Decoder {
         length: usize,
         is_huffman: bool,
     ) -> Result<(Vec<u8>, usize), QpackError> {
-        if data.len() < length {
-            return Err(QpackError::BufferTooShort);
-        }
-
-        let encoded = &data[..length];
-
-        let decoded = if is_huffman {
-            huffman::decode(encoded)?
-        } else {
-            encoded.to_vec()
-        };
-
-        Ok((decoded, length))
+        super::wire::decode_string_with_len(data, length, is_huffman)
     }
 }
 
@@ -645,27 +612,7 @@ impl DynamicDecoder {
 
 /// 文字列をデコード
 fn decode_string(data: &[u8]) -> Result<(Vec<u8>, usize), QpackError> {
-    if data.is_empty() {
-        return Err(QpackError::BufferTooShort);
-    }
-
-    let is_huffman = (data[0] & 0x80) != 0;
-    let (length, prefix_len) = integer::decode_integer(data, 7)?;
-
-    let total_len = prefix_len + length as usize;
-    if data.len() < total_len {
-        return Err(QpackError::BufferTooShort);
-    }
-
-    let encoded = &data[prefix_len..total_len];
-
-    let decoded = if is_huffman {
-        huffman::decode(encoded)?
-    } else {
-        encoded.to_vec()
-    };
-
-    Ok((decoded, total_len))
+    super::wire::decode_string(data)
 }
 
 /// 長さ指定で文字列をデコード
@@ -674,19 +621,7 @@ fn decode_string_with_len(
     length: usize,
     is_huffman: bool,
 ) -> Result<(Vec<u8>, usize), QpackError> {
-    if data.len() < length {
-        return Err(QpackError::BufferTooShort);
-    }
-
-    let encoded = &data[..length];
-
-    let decoded = if is_huffman {
-        huffman::decode(encoded)?
-    } else {
-        encoded.to_vec()
-    };
-
-    Ok((decoded, length))
+    super::wire::decode_string_with_len(data, length, is_huffman)
 }
 
 #[cfg(test)]
@@ -731,7 +666,7 @@ mod tests {
 
     #[test]
     fn test_encode_decode_roundtrip() {
-        let encoder = Encoder::new().use_huffman(false);
+        let mut encoder = Encoder::new().use_huffman(false);
         let decoder = Decoder::new();
 
         let original = vec![
@@ -742,7 +677,7 @@ mod tests {
 
         let mut buf = vec![0u8; 128];
         let len = encoder
-            .encode(&mut buf, &original)
+            .encode(&mut buf, &original, 0)
             .expect("test must succeed");
 
         let decoded = decoder.decode(&buf[..len]).expect("test must succeed");
@@ -756,7 +691,7 @@ mod tests {
 
     #[test]
     fn test_encode_decode_with_huffman() {
-        let encoder = Encoder::new().use_huffman(true);
+        let mut encoder = Encoder::new().use_huffman(true);
         let decoder = Decoder::new();
 
         let original = vec![
@@ -766,7 +701,7 @@ mod tests {
 
         let mut buf = vec![0u8; 128];
         let len = encoder
-            .encode(&mut buf, &original)
+            .encode(&mut buf, &original, 0)
             .expect("test must succeed");
 
         let decoded = decoder.decode(&buf[..len]).expect("test must succeed");

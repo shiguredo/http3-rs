@@ -410,6 +410,9 @@ const fn check_upgrade_token(value: &[u8]) -> CheckResult {
 pub struct Header {
     name: Cow<'static, [u8]>,
     value: Cow<'static, [u8]>,
+    /// N ビット (never-indexed): RFC 9204 Section 4.5.4 / RFC 7541 Section 6.2.2
+    /// true の場合、このヘッダーは中間プロキシで圧縮してはならない。
+    never_indexed: bool,
 }
 
 impl Header {
@@ -423,6 +426,7 @@ impl Header {
             CheckResult::Ok => Ok(Self {
                 name: Cow::Owned(name.to_vec()),
                 value: Cow::Owned(value.to_vec()),
+                never_indexed: false,
             }),
             CheckResult::EmptyFieldName => Err(HeaderError::EmptyFieldName),
             CheckResult::UppercaseFieldName => Err(HeaderError::UppercaseFieldName {
@@ -541,6 +545,7 @@ impl Header {
         Self {
             name: Cow::Borrowed(name),
             value: Cow::Borrowed(value),
+            never_indexed: false,
         }
     }
 
@@ -549,7 +554,11 @@ impl Header {
         name: Cow<'static, [u8]>,
         value: Cow<'static, [u8]>,
     ) -> Self {
-        Self { name, value }
+        Self {
+            name,
+            value,
+            never_indexed: false,
+        }
     }
 
     /// ヘッダー名を取得
@@ -569,6 +578,22 @@ impl Header {
     #[inline]
     pub fn size(&self) -> usize {
         self.name.len() + self.value.len() + 32
+    }
+
+    /// N ビット (never-indexed) を取得
+    ///
+    /// RFC 9204 Section 4.5.4 / RFC 7541 Section 6.2.2:
+    /// true の場合、このヘッダーは中間プロキシで圧縮してはならない。
+    #[inline]
+    pub fn never_indexed(&self) -> bool {
+        self.never_indexed
+    }
+
+    /// N ビット (never-indexed) を設定した新しい Header を返す
+    #[inline]
+    pub fn with_never_indexed(mut self, never_indexed: bool) -> Self {
+        self.never_indexed = never_indexed;
+        self
     }
 }
 

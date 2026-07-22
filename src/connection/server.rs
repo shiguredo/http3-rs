@@ -119,6 +119,21 @@ impl ServerConnection {
         self.inner.send_goaway(id)
     }
 
+    /// ストリームをリセット (RESET_STREAM)
+    pub fn stream_reset(
+        &mut self,
+        stream_id: u64,
+        error_code: u64,
+        final_size: u64,
+    ) -> Result<(), Error> {
+        self.inner.stream_reset(stream_id, error_code, final_size)
+    }
+
+    /// ストリームの送信停止を要求 (STOP_SENDING)
+    pub fn stop_sending(&mut self, stream_id: u64, error_code: u64) -> Result<(), Error> {
+        self.inner.stop_sending(stream_id, error_code)
+    }
+
     /// QUIC DATAGRAM フレームのペイロードを受信
     ///
     /// (draft-ietf-webtrans-http3-15 Section 4.5)

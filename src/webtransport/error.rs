@@ -72,6 +72,12 @@ impl ErrorCode {
     }
 }
 
+impl core::fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.description())
+    }
+}
+
 /// WebTransport アプリケーションエラーコード変換
 ///
 /// WebTransport アプリケーションエラーコード (0x00000000-0xffffffff) と
@@ -210,6 +216,24 @@ impl Error {
         }
     }
 }
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Protocol(code) => write!(f, "webtransport protocol error: {code}"),
+            Self::Application { code, message } => {
+                write!(f, "webtransport application error: {code:#x}")?;
+                if !message.is_empty() {
+                    write!(f, " ({message})")?;
+                }
+                Ok(())
+            }
+            Self::Unknown(code) => write!(f, "webtransport unknown error: {code:#x}"),
+        }
+    }
+}
+
+impl core::error::Error for Error {}
 
 #[cfg(test)]
 mod tests {
