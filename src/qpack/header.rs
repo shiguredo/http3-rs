@@ -183,7 +183,7 @@ const fn is_tchar(b: u8) -> bool {
 /// 検査結果
 ///
 /// `const fn` 内で `Result` を返せないため、専用の内部表現で結果を扱う。
-/// (`const Try` は MSRV 1.88 では未安定)
+/// (`const Try` は MSRV 1.93 では未安定)
 enum CheckResult {
     Ok,
     EmptyFieldName,

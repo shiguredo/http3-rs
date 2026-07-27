@@ -28,7 +28,7 @@ exclude = [
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.93"
 
 [workspace.dependencies]
 # 本ライブラリ (workspace ルートを参照)

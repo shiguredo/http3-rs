@@ -11,6 +11,8 @@
 
 ## develop
 
+- [CHANGE] MSRV (Minimum Supported Rust Version) を 1.88 から 1.93 に引き上げる
+  - @voluntas
 - [CHANGE] 公開エラー型 / 設定型などから `#[non_exhaustive]` を撤去し、`match` の網羅性チェックを利用側で保てるようにする
   - @voluntas
 - [CHANGE] `shiguredo_ngtcp2` の `Http3SettingsExt` / `TransportParamsExt` トレイトを `Http3Settings` / `TransportParams` newtype に置き換え、`nghttp3_sys` / `ngtcp2_sys` 型の再エクスポートを廃止する
