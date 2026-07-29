@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-declares-flow-control-draft-citation
 - Polished: 2026-07-21
@@ -61,3 +62,7 @@ draft-15 Section 5.1 (`refs/webtrans/draft-ietf-webtrans-http3-15.txt` L989-999)
 
 - 修正対象: `src/webtransport/settings.rs:228-236, 243`
 - 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-14.txt` / `-15.txt` Section 5.1
+
+## 解決方法
+
+コミット f5b5260 で実装した。declares_flow_control のコメントが引用する draft バージョンを是正し、draft-15 の参照を外して正しい仕様引用にした。
