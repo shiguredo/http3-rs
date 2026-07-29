@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/refactor-pbt-webtransport-capsule-datagram-layout
 - Polished: 2026-07-21
@@ -74,3 +75,7 @@ AGENTS.md:
 - マージ先: `pbt/tests/prop_webtransport/capsule.rs`, `pbt/tests/prop_webtransport/datagram.rs` (新規)
 - 関連: `pbt/tests/prop_webtransport/main.rs`
 - 規約: `AGENTS.md` (テスト配置)
+
+## 解決方法
+
+コミット f5b5260 で実装した。prop_capsule.rs と prop_datagram.rs を prop_webtransport/ 配下に統合し、src モジュールのディレクトリ構造と PBT 配置を一致させた。
