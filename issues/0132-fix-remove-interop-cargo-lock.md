@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-remove-interop-cargo-lock
 - Polished: 2026-07-21
@@ -45,3 +46,7 @@ git rm interop/h3/Cargo.lock interop/wt/Cargo.lock
 
 - 修正対象: `interop/h3/Cargo.lock`, `interop/wt/Cargo.lock`
 - `CHANGES.md` 追記必要
+
+## 解決方法
+
+コミット f5b5260 で実装した。interop/h3 と interop/wt に残存していた個別 Cargo.lock を削除し、workspace ルートの lock に統一した。
