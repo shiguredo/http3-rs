@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/refactor-wt-session-establishment-deduplication
 - Polished: 2026-07-21
@@ -65,3 +66,7 @@ fn establish_wt_session_and_deliver_buffered(
 
 - 修正対象: `src/connection/mod.rs:3030-3155, 3625-3742`
 - 関連 issue: 0077 (connection/mod.rs 分割)
+
+## 解決方法
+
+コミット f5b5260 で実装した。クライアント / サーバー両側の WT セッション確立処理の重複コードを共通メソッドに集約した。
