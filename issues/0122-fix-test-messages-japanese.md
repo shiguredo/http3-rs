@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-test-messages-japanese
 - Polished: 2026-07-21
@@ -65,3 +66,7 @@ prop_assert_eq!(frame_type, FrameType::Data, "DATA フレームが期待され�
 
 - 修正対象: `tests/**/*.rs`, `pbt/tests/**/*.rs`, `src/*/mod.rs` の `#[cfg(test)] mod tests`, `src/connection/mod.rs:5520`, `src/frame/decoder.rs:287`, `src/qpack/encoder_stream.rs:539` 等
 - 規約: `AGENTS.md`
+
+## 解決方法
+
+コミット f5b5260 で実装した。assert 系マクロの補助メッセージに混在していた英語を日本語に統一した。
