@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-encoder-stream-receiver-infinite-loop
 - Polished: 2026-07-21
@@ -65,3 +66,7 @@ pub enum QpackError {
 - 修正対象: `src/qpack/encoder_stream.rs:292-296, 318-322`, `src/error.rs::QpackError`
 - 上位対応: `src/connection/mod.rs`
 - 一次資料: `refs/h3/rfc9204.txt` Section 2.2.3, Section 6
+
+## 解決方法
+
+コミット f5b5260 で実装した。EncoderStreamReceiver の動的テーブル挿入失敗時に recv_buffer.drain が呼ばれず無限ループする問題を、専用エラー型の導入と接続クローズを促す形で修正した。
