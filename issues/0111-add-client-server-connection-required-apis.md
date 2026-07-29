@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/add-client-server-connection-required-apis
 - Polished: 2026-07-21
@@ -66,3 +67,7 @@ ServerConnection も同様。
 
 - 修正対象: `src/connection/client.rs`, `src/connection/server.rs`, `src/lib.rs`
 - 関連 issue: 0113 (死に API 削除)
+
+## 解決方法
+
+コミット f5b5260 で実装した。ClientConnection / ServerConnection に stream_reset、stop_sending 等の QUIC 統合必須 API を公開した。
