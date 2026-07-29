@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/add-internal-test-feature
 - Polished: 2026-07-21
@@ -97,3 +98,7 @@ Makefile も `cargo test --doc --workspace --exclude nghttp3-sys --exclude ngtcp
 
 - 修正対象: `Cargo.toml`, `src/varint.rs`, `src/qpack/header.rs`, `pbt/Cargo.toml`
 - 確認対象: `Makefile` (doc-test ターゲット), `pbt/tests/prop_varint.rs`, `pbt/tests/prop_qpack/main.rs`
+
+## 解決方法
+
+コミット f5b5260 で実装した。Cargo.toml に internal-test フィーチャーを追加し、from_validated_parts をフィーチャー gated で限定公開した。CHANGES.md と実装の乖離を解消した。
