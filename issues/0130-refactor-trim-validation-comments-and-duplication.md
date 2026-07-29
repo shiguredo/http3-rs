@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/refactor-trim-validation-comments-and-duplication
 - Polished: 2026-07-21
@@ -59,3 +60,7 @@ L271-311 の `is_valid_authority` と L318-356 の `is_valid_connect_authority` 
 
 - 修正対象: `src/validation.rs:7-28, 271-356, 359-628`
 - 関連テスト: `tests/test_validation.rs`
+
+## 解決方法
+
+コミット f5b5260 で実装した。validation.rs の過剰コメントと重複検査を整理し、authority 検証の重複排除と責務分離を行った。
