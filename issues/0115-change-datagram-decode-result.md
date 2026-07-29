@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/change-datagram-decode-result
 - Polished: 2026-07-21
@@ -68,3 +69,7 @@ impl Datagram {
 - 修正対象: `src/webtransport/datagram.rs:108-128`, `src/webtransport/mod.rs`, `src/connection/mod.rs::feed_datagram`
 - 一次資料: `refs/webtrans/rfc9297.txt` Section 2.1
 - `CHANGES.md` 追記必要
+
+## 解決方法
+
+コミット f5b5260 で実装した。webtransport::Datagram::decode を Result 化し、Quarter Stream ID 不正とバッファ不足を区別できるようにした。
