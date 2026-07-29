@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-qpack-integer-62bit-limit
 - Polished: 2026-07-21
@@ -71,3 +72,7 @@ if value > QPACK_MAX_INTEGER {
 - 修正対象: `src/qpack/integer.rs:78-122`
 - PBT 追加: `pbt/tests/prop_qpack/integer.rs`
 - 一次資料: `refs/h3/rfc9204.txt` Section 4.1.1
+
+## 解決方法
+
+コミット f5b5260 で実装した。QPACK 整数デコードの 62-bit 上限を厳密化し、VarInt 範囲 (2^62 - 1) を超える値を弾くようにした。
