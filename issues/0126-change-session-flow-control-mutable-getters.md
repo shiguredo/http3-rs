@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/change-session-flow-control-mutable-getters
 - Polished: 2026-07-21
@@ -61,3 +62,7 @@ impl Session {
 - 修正対象: `src/webtransport/session.rs:464-486`
 - 影響: 利用者コード (`examples/wt_server`, `interop/wt`)
 - `CHANGES.md` 追記必要
+
+## 解決方法
+
+コミット f5b5260 で実装した。Session の _mut 可変ゲッタを撤廃し、原子操作 API のみを公開して内部不変条件を保護した。
