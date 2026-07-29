@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-07-30
 - Model: deepseek-v4-pro
 - Branch: feature/refactor-split-connection-module
 - Polished: 2026-07-21
@@ -160,3 +161,7 @@ QPACK / GOAWAY 処理は本 issue のスコープ外であり、mod.rs に残す
 - [UPDATE] connection/mod.rs から WebTransport ロジックをサブモジュールに分割する
   - @voluntas
 ```
+
+## 解決方法
+
+コミット f5b5260 で実装した。src/connection/ 配下に wt_types.rs、wt_session.rs、wt_stream.rs、wt_capsule.rs を新設し、WebTransport の型定義・定数・セッション管理・ストリーム処理・Capsule 処理を mod.rs から分離した。mod.rs は 6149 行から 4038 行に縮小した。
