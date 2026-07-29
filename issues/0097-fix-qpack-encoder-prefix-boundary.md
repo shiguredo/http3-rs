@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-qpack-encoder-prefix-boundary
 - Polished: 2026-07-21
@@ -136,3 +137,7 @@ fn encode_literal_with_name_ref(
 - 参照実装: `src/qpack/integer.rs:15-51` (`integer::encode_integer`)
 - PBT 追加: `pbt/src/lib.rs`, `pbt/tests/prop_qpack/main.rs`
 - 一次資料: `refs/rfc7541.txt` Section 5.1, `refs/h3/rfc9204.txt` Section 4.5.2 / 4.5.4
+
+## 解決方法
+
+コミット f5b5260 で実装した。QPACK Encoder の Indexed Field Line / Literal with Name Reference の prefix integer エンコード境界判定を修正し、RFC 7541 / RFC 9204 に準拠する wire 表現を生成するようにした。
