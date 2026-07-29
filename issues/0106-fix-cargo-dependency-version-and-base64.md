@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-cargo-dependency-version-and-base64
 - Polished: 2026-07-21
@@ -53,3 +54,7 @@ arbitrary = { version = "1.4", features = ["derive"] }
 - 修正対象: `fuzz/Cargo.toml`
 - 確認対象: 全 workspace member の `Cargo.toml`
 - 規約: `AGENTS.md` (ルート)
+
+## 解決方法
+
+コミット f5b5260 で実装した。依存ライブラリのバージョン指定をマイナーまで統一し、base64 を base64ct に置換して AGENTS.md 規約に準拠させた。
