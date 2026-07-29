@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-connect-request-duplicate-pseudo-headers-and-order
 - Polished: 2026-07-21
@@ -71,3 +72,7 @@ for header in headers {
 - 修正対象: `src/webtransport/connect.rs:435-525`
 - PBT 追加: `pbt/tests/prop_webtransport/connect.rs`
 - 一次資料: `refs/h3/rfc9114.txt` Section 4.3.1
+
+## 解決方法
+
+コミット f5b5260 で実装した。ConnectRequest::from_headers に疑似ヘッダーの重複検出と順序検証を追加し、RFC 9114 Section 4.3.1 に準拠させた。
