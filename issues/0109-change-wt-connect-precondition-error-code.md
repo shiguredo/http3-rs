@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/change-wt-connect-precondition-error-code
 - Polished: 2026-07-21
@@ -69,3 +70,7 @@ pub enum WtSetupError {
 - 修正対象: `src/connection/mod.rs:3404-3439`, `src/error.rs`
 - 影響: `tests/test_webtransport_draft_connect.rs`, `examples/wt_server`
 - `CHANGES.md` 追記必要
+
+## 解決方法
+
+コミット f5b5260 で実装した。WebTransport CONNECT の前提条件チェックが返すエラーを InternalError から構造化されたエラー variant に変更し、呼び出し側が原因を特定できるようにした。
