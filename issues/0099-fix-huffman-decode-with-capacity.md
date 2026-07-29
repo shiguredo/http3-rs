@@ -2,7 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-15
-- Completed:
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-huffman-decode-with-capacity
 - Polished:
@@ -58,3 +58,7 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, QpackError> {
 
 - 修正対象: `src/qpack/huffman.rs:1100`
 - 規約: `AGENTS.md` ルート (`AGENTS.md` シンボリックリンク)
+
+## 解決方法
+
+コミット f5b5260 で実装した。huffman::decode 内の Vec::with_capacity(data.len() * 2) を Vec::new() に置換し、AGENTS.md 規約への違反と乗算オーバーフローのリスクを解消した。
