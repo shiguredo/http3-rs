@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-remove-english-monologue-comments-in-tests
 - Polished: 2026-07-21
@@ -59,3 +60,7 @@ AGENTS.md:
 
 - 修正対象: `src/connection/mod.rs:4265-4274`
 - 規約: `AGENTS.md`
+
+## 解決方法
+
+コミット f5b5260 で実装した。connection/mod.rs テストコード内の英語独白コメント (Actually, Let me use... 等) を削除した。
