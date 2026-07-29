@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-changes-md-entry-order
 - Polished: 2026-07-21
@@ -59,3 +60,7 @@ AGENTS.md「機能に直接影響しない変更（ドキュメント追加、�
 
 - 修正対象: `CHANGES.md`
 - 規約: `AGENTS.md` (リポジトリルート)
+
+## 解決方法
+
+コミット f5b5260 で実装した。CHANGES.md の develop セクションのエントリ種別順序を規約 (CHANGE → ADD → UPDATE → FIX) に従い整理し、misc セクションへの誤配置を修正した。
