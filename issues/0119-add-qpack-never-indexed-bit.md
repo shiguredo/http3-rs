@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/add-qpack-never-indexed-bit
 - Polished: 2026-07-21
@@ -72,3 +73,7 @@ impl Header {
 - PBT 追加: `pbt/tests/prop_qpack/main.rs`
 - 一次資料: `refs/h3/rfc9204.txt` Section 4.5.4 / 4.5.6
 - `CHANGES.md` 追記必要
+
+## 解決方法
+
+コミット f5b5260 で実装した。Header 型に never_indexed フィールドを追加し、Literal Field Line デコード時に N ビットを保持して中継時の literal 転送を実現した。
