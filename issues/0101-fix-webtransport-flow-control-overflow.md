@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-webtransport-flow-control-overflow
 - Polished: 2026-07-21
@@ -118,3 +119,7 @@ proptest! {
   - `src/webtransport/stream.rs:270, 274`
 - PBT 追加: `pbt/tests/prop_webtransport/session.rs`, `pbt/tests/prop_webtransport/stream.rs`
 - 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-15.txt` Section 5.6
+
+## 解決方法
+
+コミット f5b5260 で実装した。WebTransport のセッション・ストリームフロー制御カウンタの加算を checked_add で安全化し、超過時に WT_FLOW_CONTROL_ERROR でセッションを閉じる経路を実装した。
