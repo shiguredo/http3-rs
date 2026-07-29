@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/add-webtransport-error-display-and-std-error
 - Polished: 2026-07-21
@@ -72,3 +73,7 @@ impl core::error::Error for Error {
 ### 関連ファイル
 
 - 修正対象: `src/webtransport/error.rs`, `src/webtransport/connect.rs:245, 279`, `src/webtransport/capsule.rs` (`CapsuleDecodeError`, `CapsuleValidationError`)
+
+## 解決方法
+
+コミット f5b5260 で実装した。webtransport の各エラー型に Display と std::error::Error を実装し、? 連鎖先での format! や source() を可能にした。
