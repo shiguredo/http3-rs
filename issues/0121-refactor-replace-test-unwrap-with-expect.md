@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
-- Completed:
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/refactor-replace-test-unwrap-with-expect
 - Polished:
@@ -65,3 +65,7 @@ let var = VarInt::new(v).expect("Strategy が 0..=MAX 範囲を保証するた�
 - 修正対象: `tests/**/*.rs`, `pbt/tests/**/*.rs`, `pbt/src/lib.rs`, `interop/**/*.rs`
 - 関連 issue: 0105 (本体コードの `.unwrap()`)
 - 規約: `AGENTS.md`
+
+## 解決方法
+
+コミット f5b5260 で実装した。tests/ と pbt/ 配下の .unwrap() を意図メッセージ付きの .expect() に一括置換し、AGENTS.md 規約に準拠させた。
