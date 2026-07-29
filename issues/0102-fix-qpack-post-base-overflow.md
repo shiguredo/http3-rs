@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-qpack-post-base-overflow
 - Polished: 2026-07-21
@@ -70,3 +71,7 @@ let absolute_index = base
   - `src/qpack/dynamic_table.rs:262`
 - PBT 追加: `pbt/tests/prop_qpack/main.rs`
 - 一次資料: `refs/h3/rfc9204.txt` Section 3.2.6, 4.5.3, 4.5.5
+
+## 解決方法
+
+コミット f5b5260 で実装した。QPACK デコーダーの Post-Base 参照で base + post_base_index の加算に checked_add を使用し、算術オーバーフローを防止した。
