@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-capsule-decode-payload-usize-overflow
 - Polished: 2026-07-21
@@ -67,3 +68,7 @@ if end > buf.len() {
 - 修正対象: `src/webtransport/capsule.rs:317-320`
 - 関連リスク: `src/webtransport/capsule.rs:212` (`encode_as_data_frame`), `Unknown` capsule の再エンコード
 - 一次資料: `refs/webtrans/rfc9297.txt` Section 2.1, `refs/webtrans/draft-ietf-webtrans-http3-15.txt` Section 5.6
+
+## 解決方法
+
+コミット f5b5260 で実装した。Capsule::decode_payload の length as usize キャストを usize::try_from + checked_add に置き換え、32-bit ターゲットでの切り詰めや 64-bit でのオーバーフローのリスクを解消した。
