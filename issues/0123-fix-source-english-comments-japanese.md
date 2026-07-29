@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-source-english-comments-japanese
 - Polished: 2026-07-21
@@ -50,3 +51,7 @@ AGENTS.md:
 
 - 修正対象: `src/qpack/encoder.rs`, `src/qpack/decoder.rs`, `src/connection/mod.rs`, `src/webtransport/stream.rs`, `src/webtransport/capsule.rs`, `src/validation.rs` ほか
 - 規約: `AGENTS.md`
+
+## 解決方法
+
+コミット f5b5260 で実装した。src/qpack、src/connection、src/webtransport に残存していた英語単独コメントを日本語に是正した。
