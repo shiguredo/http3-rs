@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-dynamic-table-insert-with-name-ref-index
 - Polished: 2026-07-21
@@ -110,3 +111,7 @@ pub fn insert_with_name_ref(
 - 修正対象: `src/qpack/dynamic_table.rs:194-209`
 - 参照: `src/qpack/encoder_stream.rs:266-303` (正しい実装の例)
 - 一次資料: `refs/h3/rfc9204.txt` Section 4.3.2
+
+## 解決方法
+
+コミット f5b5260 で実装した。DynamicTable::insert_with_name_ref の relative / absolute インデックス取り違えを修正し、RFC 9204 Section 4.3.2 に準拠する形にした。
