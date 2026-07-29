@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/refactor-merge-encoder-decoder-static-and-dynamic
 - Polished: 2026-07-21
@@ -54,3 +55,7 @@ Medium。Don't live with broken windows。重複の片方を直し忘れると�
 - 修正対象: `src/qpack/encoder.rs`, `src/qpack/decoder.rs`, `src/qpack/mod.rs`, `src/lib.rs`
 - 関連 issue: 0097 (境界判定バグ)
 - `CHANGES.md` 追記必要
+
+## 解決方法
+
+コミット f5b5260 で実装した。QPACK の静的専用 Encoder / Decoder を廃止し、Dynamic 側 (max_table_capacity=0) へ統合して重複コードを解消した。
