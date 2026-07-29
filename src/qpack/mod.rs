@@ -15,13 +15,13 @@
 //! use shiguredo_http3::qpack::{Encoder, Decoder, Header};
 //!
 //! // エンコード
-//! let encoder = Encoder::new();
+//! let mut encoder = Encoder::new();
 //! let headers = vec![
 //!     Header::new(b":method", b"GET").expect("infallible: implementation bug if this panics"),
 //!     Header::new(b":path", b"/").expect("infallible: implementation bug if this panics"),
 //! ];
 //! let mut buf = vec![0u8; 128];
-//! let len = encoder.encode(&mut buf, &headers).expect("infallible: implementation bug if this panics");
+//! let len = encoder.encode(&mut buf, &headers, 0).expect("infallible: implementation bug if this panics");
 //!
 //! // デコード
 //! let decoder = Decoder::new();
