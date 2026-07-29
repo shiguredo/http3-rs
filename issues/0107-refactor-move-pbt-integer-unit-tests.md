@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/refactor-move-pbt-integer-unit-tests
 - Polished: 2026-07-21
@@ -67,3 +68,7 @@ AGENTS.md (テストの役割分担):
 - 新規作成: `tests/test_qpack_integer.rs`
 - 対応モジュール: `src/qpack/integer.rs`
 - 規約: `AGENTS.md` (テスト戦略セクション)
+
+## 解決方法
+
+コミット f5b5260 で実装した。pbt/tests/prop_qpack/integer.rs に混入していた非 proptest の #[test] 関数を適切な場所に移動し、AGENTS.md の「pbt 以下に unittest を書かないこと」規約に準拠させた。
