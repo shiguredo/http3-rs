@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-prohibited-capsule-error-code
 - Polished: 2026-07-21
@@ -61,3 +62,7 @@ draft-15 Section 5.4 (`refs/webtrans/draft-ietf-webtrans-http3-15.txt` 1129-1131
 - 修正対象: `src/webtransport/session.rs:894-901, 1151-1163`
 - 影響: `tests/test_webtransport_flow_control.rs` 内の関連テスト
 - 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-15.txt` Section 5.4
+
+## 解決方法
+
+コミット f5b5260 で実装した。禁止 Capsule 受信時のエラーコードを FlowControlError から draft の「session error」規定に整合するエラーコードへ修正した。
