@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/refactor-split-webtransport-session-and-connect
 - Polished: 2026-07-21
@@ -73,3 +74,7 @@ Medium。AGENTS.md「テストファイルが長くなった場合はファイ�
 
 - 修正対象: `src/webtransport/session.rs`, `src/webtransport/connect.rs`, `src/webtransport/mod.rs`
 - 関連 issue: 0077 (connection/mod.rs 分割), 0108 (PBT 配置)
+
+## 解決方法
+
+コミット f5b5260 で実装した。webtransport/session.rs を session/mod.rs + flow_control.rs に分割し、connect.rs を connect/ ディレクトリモジュールに分割して責務分離を行った。
