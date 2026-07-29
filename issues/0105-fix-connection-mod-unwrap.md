@@ -2,7 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-15
-- Completed:
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-connection-mod-unwrap
 - Polished:
@@ -79,3 +79,7 @@ if stream.is_qpack_blocked() {
 - 修正対象: `src/connection/mod.rs:2641, 2656` および `#[cfg(test)] mod tests` 外の全 `.unwrap()`
 - 規約: `AGENTS.md` (ルート)
 - 関連 issue: 0121 (tests/pbt の `.unwrap()` 一括 expect 化)
+
+## 解決方法
+
+コミット f5b5260 で実装した。src/connection/mod.rs の本番コードにある .unwrap() をメッセージ付き .expect() に置換し、不変条件を明示した。
