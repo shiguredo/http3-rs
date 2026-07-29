@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-test-function-name-language
 - Polished: 2026-07-21
@@ -49,3 +50,7 @@ fn ack_section_returns_error_for_untracked_stream() {
 
 - 修正対象: `src/qpack/encoder.rs` の `#[cfg(test)] mod tests` (テスト関数名)
 - ドキュメント: `AGENTS.md` (規約追加)
+
+## 解決方法
+
+コミット f5b5260 で実装した。テスト関数名に混入していた日本語を英語に統一した。
