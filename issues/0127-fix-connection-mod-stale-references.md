@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-connection-mod-stale-references
 - Polished: 2026-07-21
@@ -62,3 +63,7 @@ L567-585: `deferred_encoder_set_capacity` の doc コメント途中で `wt_tran
 
 - 修正対象: `src/connection/mod.rs:567-585, 1968, 2835, 4365, 5092`
 - 関連 issue: 0077 (connection/mod.rs 分割) と並行で対応すると効率的
+
+## 解決方法
+
+コミット f5b5260 で実装した。connection/mod.rs の陳腐化した nghttp3 行番号参照や誤帰属・混線した doc コメントを整理した。
