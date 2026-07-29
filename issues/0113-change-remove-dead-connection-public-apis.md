@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/change-remove-dead-connection-public-apis
 - Polished: 2026-07-21
@@ -53,3 +54,7 @@ Medium。死に API を残すと利用者を混乱させ、リファクタリン
 - 修正対象: `src/connection/mod.rs:597-604, 3369-3373, 3801-3812, 3960-3963`
 - 影響: `fuzz/fuzz_targets/fuzz_connection.rs`, `fuzz/fuzz_targets/fuzz_stream.rs`
 - 関連 issue: 0111 (Client/Server ラッパ API 拡充)
+
+## 解決方法
+
+コミット f5b5260 で実装した。Connection の死に public API を削除または pub(crate) 化し、API 表面積を縮小した。
