@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/change-remove-dead-error-variants
 - Polished: 2026-07-21
@@ -46,3 +47,7 @@ Medium。死に variant は将来の利用者の混乱を招き、`match` のア
 ### 関連ファイル
 
 - 修正対象: `src/error.rs`, `CHANGES.md`
+
+## 解決方法
+
+コミット f5b5260 で実装した。Error / ErrorCode の死に variant (InvalidStreamId、VarintDecode、ConnectError、VersionFallback) を削除し、API 表面積を縮小した。
