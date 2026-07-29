@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-15
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/fix-wt-available-protocols-sf-parser-dos
 - Polished: 2026-07-21
@@ -74,3 +75,7 @@ fn parse_sf_list_strings(value: &str) -> Result<Vec<String>, ConnectError> {
 - 修正対象: `src/webtransport/connect.rs:583-588, 690-707`
 - PBT 追加: `pbt/tests/prop_webtransport/connect.rs`
 - 一次資料: `refs/rfc9651.txt` Section 4
+
+## 解決方法
+
+コミット f5b5260 で実装した。WT-Available-Protocols Structured Fields パーサにサイズ上限と制御文字検査を追加し、DoS リスクに対処した。
