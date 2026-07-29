@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-09
+- Completed: 2026-07-30
 - Model: Opus 4.7
 - Branch: feature/add-nghttp3-interop-tests
 - Polished: 2026-07-21
@@ -355,3 +356,7 @@ API 制約・実装制約により本 issue では実装できないものを列
 13. **1 MiB 以上のボディ**: `tokio_s2n_quic::ServerConfig` / `ClientConfig` に QUIC フロー制御値 (`initial_max_data` 等) を上書きする公開 API が無い。1 MiB 以上を扱うには (a) `tokio_s2n_quic` の Config API 拡張、または (b) `s2n_quic::Server::builder().with_limits(...)` を組み込む別 issue が前提。
 
 上記 1〜13 のうち、canary 卒業前に最低限カバーすべき要件 (1, 2, 3, 4, 5, 7, 12) は本 issue マージ後に別 issue として起票する。残りは canary 期間中の優先度を別途検討する。
+
+## 解決方法
+
+コミット f5b5260 で実装した。nghttp3 (ngtcp2) との e2e 相互運用テストを拡充し、メソッド・パス・ステータス・ヘッダー多様性・ボディサイズ・複数リクエスト等のケースを追加した。
