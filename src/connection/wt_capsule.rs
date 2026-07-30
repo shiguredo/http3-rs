@@ -133,7 +133,21 @@ impl Connection {
                 // フロー制御無効時は無視 (Section 5.1)
             }
             Capsule::Unknown { .. } => {
-                // 不明な Capsule は無視 (draft-ietf-webtrans-http3-15)
+                // 禁止 Capsule (WT_MAX_STREAM_DATA / WT_STREAM_DATA_BLOCKED) は
+                // セッションエラーとして扱う
+                // (draft-ietf-webtrans-http3-15 Section 5.4: "Endpoints MUST treat
+                // receipt of a WT_MAX_STREAM_DATA or a WT_STREAM_DATA_BLOCKED
+                // capsule as a session error.")
+                // 将来のドラフトで変更される可能性がある
+                if capsule.is_prohibited_in_http3() {
+                    self.terminate_wt_session_with(
+                        session_id,
+                        WtErrorCode::SessionGone as u64,
+                        0,
+                        "prohibited capsule received".to_string(),
+                    );
+                }
+                // その他の不明な Capsule は無視 (draft-ietf-webtrans-http3-15)
             }
         }
 

@@ -205,6 +205,8 @@
   - @voluntas
 - [FIX] `Capsule::decode` の `length as usize` 素朴キャストを `usize::try_from` + `checked_add` に置き換え、32-bit 環境での境界判定緩みと 64-bit でのオーバーフローを防止する
   - @voluntas
+- [FIX] 禁止 Capsule (`WT_MAX_STREAM_DATA` / `WT_STREAM_DATA_BLOCKED`) 受信時のエラーレベルを接続エラーからセッションエラーに修正する (draft-ietf-webtrans-http3-15 Section 5.4)
+  - @voluntas
 
 ### misc
 
