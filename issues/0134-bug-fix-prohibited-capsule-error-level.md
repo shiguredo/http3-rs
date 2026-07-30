@@ -1,7 +1,7 @@
 # 禁止 Capsule 受信時にセッションエラーを返すように修正する
 
 - Created: 2026-07-31
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-07-31
 - Branch: feature/fix-prohibited-capsule-error-level
 - Polished: 2026-07-31
 
@@ -41,9 +41,10 @@ draft-ietf-webtrans-http3-15 Section 5.4 (`refs/webtrans/draft-ietf-webtrans-htt
 
 ## 解決方法
 
-1. `src/connection/wt_capsule.rs` の `Connection::handle_wt_capsule` の `Capsule::Unknown` 分岐に `is_prohibited_in_http3` チェックを追加し、禁止 Capsule 検出時にセッション終了イベントを生成する
-2. `src/webtransport/session/mod.rs` の `Session::process_capsule` 内の禁止 Capsule 分岐を `CapsuleProcessError::Session(Error::application(0, "prohibited capsule received"))` に変更する
-3. 既存テストの期待値を更新し、禁止 Capsule 2 種の両方をカバーする
+1. `src/connection/wt_capsule.rs` の `Connection::handle_wt_capsule` の `Capsule::Unknown` 分岐に `is_prohibited_in_http3` チェックを追加し、禁止 Capsule 検出時に `terminate_wt_session_with` でセッションを終了するようにした
+2. `src/webtransport/session/mod.rs` の `Session::process_capsule` 内の禁止 Capsule 分岐を `CapsuleProcessError::Session(Error::application(0, "prohibited capsule received"))` に変更した
+3. `CapsuleProcessError::Connection` の doc コメントから「など」を削除し、使用例が WT_MAX_STREAMS > 2^60 のみであることを明示した
+4. 既存テスト `test_session_process_prohibited_capsule_returns_error` の期待値を更新し、`WT_STREAM_DATA_BLOCKED` (0x190B4D42) のテスト `test_session_process_prohibited_capsule_stream_data_blocked` を追加した
 
 ### 関連ファイル
 
