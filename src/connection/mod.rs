@@ -1072,6 +1072,18 @@ impl Connection {
                     }
 
                     let wt_settings = settings.wt_settings;
+
+                    // クライアントは SETTINGS_WT_ENABLED > 1 を
+                    // H3_SETTINGS_ERROR 接続エラーとして扱わなければならない
+                    // (draft-ietf-webtrans-http3-16 Section 3.1)
+                    // 将来のドラフトで変更される可能性がある
+                    if self.role == Role::Client
+                        && let Some(ref wt) = wt_settings
+                        && wt.wt_enabled.get() > 1
+                    {
+                        return Err(Error::ConnectionError(ErrorCode::SettingsError));
+                    }
+
                     self.peer_settings = Some(settings);
                     self.events.push_back(Event::SettingsReceived {
                         settings,

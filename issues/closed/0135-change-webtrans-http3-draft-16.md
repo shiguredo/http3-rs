@@ -1,7 +1,7 @@
 # draft-ietf-webtrans-http3-16 に追従する
 
 - Created: 2026-07-31
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-07-31
 - Branch: feature/change-webtrans-http3-draft-16
 - Polished: 2026-07-31
 
@@ -124,7 +124,17 @@ draft-16 追加要件:
 
 ## 解決方法
 
-0134 (禁止 Capsule のエラーレベル修正) と変更箇所が重なるため、0134 を先に実装すること。上記 8 件を順に実装する。各変更は独立しているため、個別のコミットに分ける。
+項目 1, 2, 5, 6, 7, 8 を実装した。項目 3 (0-RTT 検証) と項目 4 (楽観的カプセル) は設計判断を伴うため別 issue に分割した。
+
+1. `src/connection/mod.rs` の `process_control_stream` に `SETTINGS_WT_ENABLED > 1` の `H3_SETTINGS_ERROR` 検証を追加した
+2. `src/webtransport/connect/mod.rs` の Display メッセージと `connect_error.rs` の doc コメントを `"= 1"` に更新した
+3. `examples/wt_server/src/main.rs` の拒否ステータスを 404 から 405 に変更した (4 箇所)
+4. `src/webtransport/session/mod.rs` の `Session::process_capsule` と `src/webtransport/capsule.rs` の `validate_max_streams` / `validate_max_data` で `<` を `<=` に変更した
+5. `CapsuleProcessError::Connection` variant を削除し、WT_MAX_STREAMS > 2^60 を `Session(Error::Protocol(ErrorCode::FlowControlError))` に変更した
+6. `StreamsBlocked` 分岐に `> MAX_STREAMS_LIMIT` の検証を追加した
+7. 項目 8 はワイヤー挙動が既に draft-16 準拠であることを確認し、変更不要と判断した
+8. README.md の対応 draft 表に draft-16 を追加した
+9. PBT テストの戦略を単調増加制約に合わせて更新した
 
 ### 関連ファイル
 

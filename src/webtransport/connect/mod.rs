@@ -74,7 +74,7 @@ impl fmt::Display for CapabilityError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingWebTransportSetting => {
-                write!(f, "SETTINGS_WT_ENABLED with value > 0 is required")
+                write!(f, "SETTINGS_WT_ENABLED with value of 1 is required")
             }
             Self::MissingEnableConnectProtocol => {
                 write!(
