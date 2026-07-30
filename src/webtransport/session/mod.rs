@@ -69,7 +69,7 @@ pub enum CapsuleProcessError {
     Session(Error),
     /// HTTP/3 接続レベルのエラー
     ///
-    /// WT_MAX_STREAMS の値が 2^60 を超える場合など、
+    /// WT_MAX_STREAMS の値が 2^60 を超える場合に
     /// H3_DATAGRAM_ERROR として HTTP/3 接続を閉じる必要がある。
     /// draft-ietf-webtrans-http3-15 Section 5.6.2
     /// 将来のドラフトで変更される可能性がある
@@ -692,10 +692,18 @@ impl Session {
 
     /// 受信した Capsule を処理
     pub fn process_capsule(&mut self, capsule: &Capsule) -> Result<(), CapsuleProcessError> {
-        // WebTransport over HTTP/3 で禁止される Capsule は HTTP/3 接続エラー
-        // (draft-ietf-webtrans-http3-15 Section 5.4: H3_FRAME_UNEXPECTED = 0x105)
+        // WebTransport over HTTP/3 で禁止される Capsule はセッションエラー
+        // (draft-ietf-webtrans-http3-15 Section 5.4: "Endpoints MUST treat
+        // receipt of a WT_MAX_STREAM_DATA or a WT_STREAM_DATA_BLOCKED
+        // capsule as a session error.")
+        // 仕様は具体的なエラーコードを規定していないため、
+        // アプリケーションエラーコード 0 でセッションを閉じる。
+        // 将来のドラフトで変更される可能性がある
         if capsule.is_prohibited_in_http3() {
-            return Err(CapsuleProcessError::Connection(0x105));
+            return Err(CapsuleProcessError::Session(Error::application(
+                0,
+                "prohibited capsule received",
+            )));
         }
 
         // フロー制御が有効化されていない場合は flow control capsules を無視する
@@ -948,12 +956,39 @@ mod tests {
     #[test]
     fn test_session_process_prohibited_capsule_returns_error() {
         let mut session = Session::new(0);
+        // WT_MAX_STREAM_DATA (0x190B4D3E) は禁止 Capsule
         let result = session.process_capsule(&Capsule::Unknown {
             capsule_type: 0x190B4D3E,
             payload: vec![],
         });
-        // 禁止 Capsule は H3_FRAME_UNEXPECTED (0x105) で HTTP/3 接続エラー
-        assert_eq!(result, Err(CapsuleProcessError::Connection(0x105)));
+        // 禁止 Capsule はセッションエラー
+        // (draft-ietf-webtrans-http3-15 Section 5.4)
+        assert_eq!(
+            result,
+            Err(CapsuleProcessError::Session(Error::application(
+                0,
+                "prohibited capsule received"
+            )))
+        );
+    }
+
+    #[test]
+    fn test_session_process_prohibited_capsule_stream_data_blocked() {
+        let mut session = Session::new(0);
+        // WT_STREAM_DATA_BLOCKED (0x190B4D42) も禁止 Capsule
+        let result = session.process_capsule(&Capsule::Unknown {
+            capsule_type: 0x190B4D42,
+            payload: vec![],
+        });
+        // 禁止 Capsule はセッションエラー
+        // (draft-ietf-webtrans-http3-15 Section 5.4)
+        assert_eq!(
+            result,
+            Err(CapsuleProcessError::Session(Error::application(
+                0,
+                "prohibited capsule received"
+            )))
+        );
     }
 
     #[test]
