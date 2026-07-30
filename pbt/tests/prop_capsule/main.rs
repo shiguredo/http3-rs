@@ -164,34 +164,36 @@ proptest! {
 // =============================================================================
 
 proptest! {
-    /// Property: maximum >= current_max かつ maximum <= MAX_STREAMS_LIMIT なら Ok
+    /// Property: maximum > current_max かつ maximum <= MAX_STREAMS_LIMIT なら Ok
     #[test]
     fn prop_validate_max_streams_ok(
         current_max in 0u64..=MAX_STREAMS_LIMIT,
-        delta in 0u64..1000,
+        delta in 1u64..1000,
     ) {
         let maximum = current_max.saturating_add(delta).min(MAX_STREAMS_LIMIT);
+        prop_assume!(maximum > current_max);
         let result = Capsule::validate_max_streams(maximum, current_max);
         prop_assert!(
             result.is_ok(),
-            "maximum >= current_max かつ上限以下なのに Err: maximum={}, current_max={}", maximum, current_max
+            "maximum > current_max かつ上限以下なのに Err: maximum={}, current_max={}", maximum, current_max
         );
     }
 
-    /// Property: maximum < current_max なら MaxStreamsDecreased
+    /// Property: maximum <= current_max なら MaxStreamsDecreased
+    /// (draft-16: "does not increase")
     #[test]
-    fn prop_validate_max_streams_decreased(
+    fn prop_validate_max_streams_not_increased(
         current_max in 1u64..=MAX_STREAMS_LIMIT,
-        delta in 1u64..1000,
+        delta in 0u64..1000,
     ) {
         let maximum = current_max.saturating_sub(delta);
-        prop_assume!(maximum < current_max);
+        prop_assume!(maximum <= current_max);
 
         let result = Capsule::validate_max_streams(maximum, current_max);
         prop_assert_eq!(
             result,
             Err(CapsuleValidationError::MaxStreamsDecreased),
-            "maximum < current_max なのに MaxStreamsDecreased でない: maximum={}, current_max={}", maximum, current_max
+            "maximum <= current_max なのに MaxStreamsDecreased でない: maximum={}, current_max={}", maximum, current_max
         );
     }
 
@@ -215,34 +217,35 @@ proptest! {
 // =============================================================================
 
 proptest! {
-    /// Property: maximum >= current_max なら Ok
+    /// Property: maximum > current_max なら Ok
     #[test]
     fn prop_validate_max_data_ok(
         current_max in 0u64..=MAX_VARINT / 2,
-        delta in 0u64..1000,
+        delta in 1u64..1000,
     ) {
         let maximum = current_max.saturating_add(delta);
         let result = Capsule::validate_max_data(maximum, current_max);
         prop_assert!(
             result.is_ok(),
-            "maximum >= current_max なのに Err: maximum={}, current_max={}", maximum, current_max
+            "maximum > current_max なのに Err: maximum={}, current_max={}", maximum, current_max
         );
     }
 
-    /// Property: maximum < current_max なら MaxDataDecreased
+    /// Property: maximum <= current_max なら MaxDataDecreased
+    /// (draft-16: "does not increase")
     #[test]
-    fn prop_validate_max_data_decreased(
+    fn prop_validate_max_data_not_increased(
         current_max in 1u64..=MAX_VARINT,
-        delta in 1u64..1000,
+        delta in 0u64..1000,
     ) {
         let maximum = current_max.saturating_sub(delta);
-        prop_assume!(maximum < current_max);
+        prop_assume!(maximum <= current_max);
 
         let result = Capsule::validate_max_data(maximum, current_max);
         prop_assert_eq!(
             result,
             Err(CapsuleValidationError::MaxDataDecreased),
-            "maximum < current_max なのに MaxDataDecreased でない: maximum={}, current_max={}", maximum, current_max
+            "maximum <= current_max なのに MaxDataDecreased でない: maximum={}, current_max={}", maximum, current_max
         );
     }
 

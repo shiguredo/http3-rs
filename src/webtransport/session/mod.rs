@@ -67,13 +67,6 @@ impl SessionState {
 pub enum CapsuleProcessError {
     /// セッションレベルのエラー (WT_FLOW_CONTROL_ERROR 等)
     Session(Error),
-    /// HTTP/3 接続レベルのエラー
-    ///
-    /// WT_MAX_STREAMS の値が 2^60 を超える場合に
-    /// H3_DATAGRAM_ERROR として HTTP/3 接続を閉じる必要がある。
-    /// draft-ietf-webtrans-http3-15 Section 5.6.2
-    /// 将来のドラフトで変更される可能性がある
-    Connection(u64),
 }
 
 /// WebTransport セッション
@@ -726,7 +719,9 @@ impl Session {
             }
 
             Capsule::MaxData { maximum } => {
-                if *maximum < self.remote_limits.max_data {
+                // 増加しない値はエラー (draft-16 Section 5.6.4: "does not increase")
+                // 将来のドラフトで変更される可能性がある
+                if *maximum <= self.remote_limits.max_data {
                     return Err(CapsuleProcessError::Session(Error::Protocol(
                         ErrorCode::FlowControlError,
                     )));
@@ -740,14 +735,19 @@ impl Session {
                 bidirectional,
                 maximum,
             } => {
-                // 2^60 を超える値は HTTP/3 接続エラー (draft-15 Section 5.6.2)
+                // 2^60 を超える値はセッションエラー
+                // (draft-16 Section 5.6.2: "MUST close the WebTransport session
+                // with a WT_FLOW_CONTROL_ERROR error code")
+                // 将来のドラフトで変更される可能性がある
                 if *maximum > MAX_STREAMS_LIMIT {
-                    return Err(CapsuleProcessError::Connection(
-                        crate::webtransport::capsule::H3_DATAGRAM_ERROR,
-                    ));
+                    return Err(CapsuleProcessError::Session(Error::Protocol(
+                        ErrorCode::FlowControlError,
+                    )));
                 }
                 if *bidirectional {
-                    if *maximum < self.remote_limits.max_streams_bidi {
+                    // 増加しない値はエラー (draft-16 Section 5.6.2: "does not increase")
+                    // 将来のドラフトで変更される可能性がある
+                    if *maximum <= self.remote_limits.max_streams_bidi {
                         return Err(CapsuleProcessError::Session(Error::Protocol(
                             ErrorCode::FlowControlError,
                         )));
@@ -756,7 +756,9 @@ impl Session {
                     // 新しい制限を受け取ったので BLOCKED 状態をリセット
                     self.send_blocked.last_streams_blocked_bidi = None;
                 } else {
-                    if *maximum < self.remote_limits.max_streams_uni {
+                    // 増加しない値はエラー (draft-16 Section 5.6.2: "does not increase")
+                    // 将来のドラフトで変更される可能性がある
+                    if *maximum <= self.remote_limits.max_streams_uni {
                         return Err(CapsuleProcessError::Session(Error::Protocol(
                             ErrorCode::FlowControlError,
                         )));
@@ -767,7 +769,20 @@ impl Session {
                 }
             }
 
-            Capsule::DataBlocked { .. } | Capsule::StreamsBlocked { .. } => {
+            Capsule::DataBlocked { .. } => {
+                // 情報目的のみ、特に処理は不要
+            }
+
+            Capsule::StreamsBlocked { maximum, .. } => {
+                // 2^60 を超える値はセッションエラー
+                // (draft-16 Section 5.6.3: "MUST close the WebTransport session
+                // with a WT_FLOW_CONTROL_ERROR error code")
+                // 将来のドラフトで変更される可能性がある
+                if *maximum > MAX_STREAMS_LIMIT {
+                    return Err(CapsuleProcessError::Session(Error::Protocol(
+                        ErrorCode::FlowControlError,
+                    )));
+                }
                 // 情報目的のみ、特に処理は不要
             }
 
@@ -1182,12 +1197,18 @@ mod tests {
         let mut session = Session::new(0);
         session.set_established();
 
-        // 2^60 を超える WT_MAX_STREAMS は接続エラー
+        // 2^60 を超える WT_MAX_STREAMS はセッションエラー
+        // (draft-16 Section 5.6.2)
         let result = session.process_capsule(&Capsule::MaxStreams {
             bidirectional: true,
             maximum: (1u64 << 60) + 1,
         });
-        assert!(matches!(result, Err(CapsuleProcessError::Connection(_))));
+        assert!(matches!(
+            result,
+            Err(CapsuleProcessError::Session(Error::Protocol(
+                ErrorCode::FlowControlError
+            )))
+        ));
     }
 
     #[test]

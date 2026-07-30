@@ -4,7 +4,7 @@
 /// クライアントの SETTINGS から draft バージョンを自動判定し、適切な応答を返す
 /// (`shiguredo_http3::Settings::webtransport_draft_pattern()`)。
 ///
-/// `--reject-connect` で全セッションを 404 拒否し、`WtSessionRequest::reject()` の動作を確認できる。
+/// `--reject-connect` で全セッションを 405 拒否し、`WtSessionRequest::reject()` の動作を確認できる。
 ///
 /// 接続後はエコーサーバーとして動作する:
 /// - 双方向ストリーム: 受信データをそのまま返す
@@ -148,8 +148,8 @@ async fn handle_connection(
     );
 
     if reject_connect {
-        tracing::warn!("[{remote}] Rejecting WebTransport session (404, --reject-connect demo)");
-        request.reject(404).await?;
+        tracing::warn!("[{remote}] Rejecting WebTransport session (405, --reject-connect demo)");
+        request.reject(405).await?;
         return Ok(());
     }
 
@@ -556,7 +556,7 @@ async fn handle_datagram_echo(
 /// CLI 引数
 struct Args {
     listen: String,
-    /// `WtSessionRequest::reject()` のデモ用: 全 CONNECT を 404 で拒否する
+    /// `WtSessionRequest::reject()` のデモ用: 全 CONNECT を 405 で拒否する
     reject_connect: bool,
 }
 
@@ -581,7 +581,7 @@ fn parse_args() -> Args {
         .expect("listen option conversion is infallible");
 
     let reject_connect: bool = noargs::flag("reject-connect")
-        .doc("Reject every WebTransport CONNECT with 404 (for testing WtSessionRequest::reject)")
+        .doc("Reject every WebTransport CONNECT with 405 (for testing WtSessionRequest::reject)")
         .take(&mut args)
         .is_present();
 

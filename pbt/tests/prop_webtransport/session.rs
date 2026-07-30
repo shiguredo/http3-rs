@@ -470,11 +470,12 @@ proptest! {
 proptest! {
     /// Property: MaxData/MaxStreams/DataBlocked/StreamsBlocked をランダム順で処理しても
     /// 最終リミットが整合的
+    /// (draft-16: 単調増加制約のため値は 1 以上から生成)
     #[test]
     fn prop_session_interleaved_capsule_processing(
-        max_data_values in prop::collection::vec(0u64..10000, 1..5),
-        max_streams_bidi_values in prop::collection::vec(0u64..1000, 1..5),
-        max_streams_uni_values in prop::collection::vec(0u64..1000, 1..5),
+        max_data_values in prop::collection::vec(1u64..10000, 1..5),
+        max_streams_bidi_values in prop::collection::vec(1u64..1000, 1..5),
+        max_streams_uni_values in prop::collection::vec(1u64..1000, 1..5),
     ) {
         let mut session = Session::new(0);
 

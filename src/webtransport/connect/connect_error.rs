@@ -21,7 +21,7 @@ pub enum ConnectError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityError {
-    /// SETTINGS_WT_ENABLED (> 0) が確認できない
+    /// SETTINGS_WT_ENABLED (= 1) が確認できない
     MissingWebTransportSetting,
     /// SETTINGS_ENABLE_CONNECT_PROTOCOL (= 1) が確認できない
     MissingEnableConnectProtocol,
@@ -35,7 +35,7 @@ pub enum CapabilityError {
 
 #[derive(Debug, Clone)]
 pub struct TransportCapabilities {
-    /// SETTINGS_WT_ENABLED が 0 より大きいか
+    /// SETTINGS_WT_ENABLED が 1 か
     pub wt_enabled: bool,
     /// SETTINGS_ENABLE_CONNECT_PROTOCOL が 1 か
     pub enable_connect_protocol: bool,

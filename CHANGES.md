@@ -117,6 +117,12 @@
   - @voluntas
 - [CHANGE] `qpack::DynamicTable::insert_with_name_ref` を削除する (未使用の公開 API。RFC 9204 Section 4.3.2 の relative index を absolute index として誤解釈するバグを含んでいた)
   - @voluntas
+- [CHANGE] `CapsuleProcessError::Connection` variant を削除し、WT_MAX_STREAMS > 2^60 のエラーを接続エラーからセッションエラー (`WT_FLOW_CONTROL_ERROR`) に変更する (draft-ietf-webtrans-http3-16 Section 5.6.2)
+  - @voluntas
+- [CHANGE] フロー制御カプセルの単調性チェックを「前より小さい」から「前より増加しない」に厳密化し、同値の再送も `WT_FLOW_CONTROL_ERROR` で拒否する (draft-ietf-webtrans-http3-16 Section 5.6.2 / 5.6.4)
+  - @voluntas
+- [CHANGE] クライアントが `SETTINGS_WT_ENABLED > 1` を受信した際に `H3_SETTINGS_ERROR` 接続エラーを返す検証を追加する (draft-ietf-webtrans-http3-16 Section 3.1)
+  - @voluntas
 - [ADD] `VarInt::from_static` / `qpack::Header::from_static` / `frame::GoawayPayload::from_static` の doc に `compile_fail` ブロックを追加し、`const fn` 検査のリグレッションを CI (`cargo test --doc`) で防止する
   - @voluntas
 - [ADD] 構築時検査の `from_static` ↔ `new` 一貫性、`from_validated_parts` ↔ `new` 整合性、`Header::new` ↔ QPACK ラウンドトリップ完全性を検証する PBT を追加する
@@ -251,6 +257,8 @@
 - [UPDATE] `examples/wt_server` の Base64 依存を `base64` から `base64ct` に切り替える
   - @voluntas
 - [UPDATE] shiguredo-rust 規約に合わせ `.unwrap()` を `.expect(...)` に、手書きの `#[allow]` を `#[expect]` に置き換える
+  - @voluntas
+- [UPDATE] `examples/wt_server` の `--reject-connect` デモの拒否ステータスを 404 から 405 に変更する (draft-ietf-webtrans-http3-16 Section 3.2)
   - @voluntas
 - [FIX] `fuzz/fuzz_targets/fuzz_settings.rs` が `Settings::from_payload` の `Result` 戻り値に追従しておらず fuzz crate がコンパイルできなかった問題を修正する
   - @voluntas

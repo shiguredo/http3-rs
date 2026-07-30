@@ -51,17 +51,19 @@ fn decode_exact_varint(payload: &[u8]) -> Result<u64, CapsuleDecodeError> {
 /// Capsule バリデーションエラー
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapsuleValidationError {
-    /// WT_MAX_STREAMS の値が 2^60 を超えている (H3_DATAGRAM_ERROR として扱う)
-    /// draft-ietf-webtrans-http3-15 Section 5.6.2
+    /// WT_MAX_STREAMS の値が 2^60 を超えている (WT_FLOW_CONTROL_ERROR として扱う)
+    /// draft-ietf-webtrans-http3-16 Section 5.6.2
     /// 将来のドラフトで変更される可能性がある
     MaxStreamsExceedsLimit,
-    /// WT_MAX_STREAMS の値が以前の値より小さい (WT_FLOW_CONTROL_ERROR)
-    /// draft-ietf-webtrans-http3-15 Section 5.6.2
+    /// WT_MAX_STREAMS の値が以前の値から増加していない (WT_FLOW_CONTROL_ERROR)
+    /// draft-ietf-webtrans-http3-16 Section 5.6.2
     /// 将来のドラフトで変更される可能性がある
     MaxStreamsDecreased,
     /// WT_MAX_DATA の値が 2^62-1 を超えている (H3_DATAGRAM_ERROR として扱う)
     MaxDataExceedsLimit,
-    /// WT_MAX_DATA の値が以前の値より小さい (WT_FLOW_CONTROL_ERROR)
+    /// WT_MAX_DATA の値が以前の値から増加していない (WT_FLOW_CONTROL_ERROR)
+    /// draft-ietf-webtrans-http3-16 Section 5.6.4
+    /// 将来のドラフトで変更される可能性がある
     MaxDataDecreased,
 }
 
@@ -444,10 +446,10 @@ impl Capsule {
 
     /// WT_MAX_STREAMS の値を検証する
     ///
-    /// - `maximum` が 2^60 を超える場合: `MaxStreamsExceedsLimit` (H3_DATAGRAM_ERROR)
-    /// - `maximum` が `current_max` より小さい場合: `MaxStreamsDecreased` (WT_FLOW_CONTROL_ERROR)
+    /// - `maximum` が 2^60 を超える場合: `MaxStreamsExceedsLimit` (WT_FLOW_CONTROL_ERROR)
+    /// - `maximum` が `current_max` から増加しない場合: `MaxStreamsDecreased` (WT_FLOW_CONTROL_ERROR)
     ///
-    /// draft-ietf-webtrans-http3-15 Section 5.6.2
+    /// draft-ietf-webtrans-http3-16 Section 5.6.2
     /// 将来のドラフトで変更される可能性がある
     pub fn validate_max_streams(
         maximum: u64,
@@ -456,7 +458,7 @@ impl Capsule {
         if maximum > MAX_STREAMS_LIMIT {
             return Err(CapsuleValidationError::MaxStreamsExceedsLimit);
         }
-        if maximum < current_max {
+        if maximum <= current_max {
             return Err(CapsuleValidationError::MaxStreamsDecreased);
         }
         Ok(())
@@ -465,15 +467,15 @@ impl Capsule {
     /// WT_MAX_DATA の値を検証する
     ///
     /// - `maximum` が VarInt 上限 (`2^62-1`) を超える場合: `MaxDataExceedsLimit` (H3_DATAGRAM_ERROR)
-    /// - `maximum` が `current_max` より小さい場合: `MaxDataDecreased` (WT_FLOW_CONTROL_ERROR)
+    /// - `maximum` が `current_max` から増加しない場合: `MaxDataDecreased` (WT_FLOW_CONTROL_ERROR)
     ///
-    /// draft-ietf-webtrans-http3-15 Section 5.6.4
+    /// draft-ietf-webtrans-http3-16 Section 5.6.4
     /// 将来のドラフトで変更される可能性がある
     pub fn validate_max_data(maximum: u64, current_max: u64) -> Result<(), CapsuleValidationError> {
         if maximum > crate::VarInt::MAX.get() {
             return Err(CapsuleValidationError::MaxDataExceedsLimit);
         }
-        if maximum < current_max {
+        if maximum <= current_max {
             return Err(CapsuleValidationError::MaxDataDecreased);
         }
         Ok(())
@@ -565,14 +567,17 @@ mod tests {
     fn test_validate_max_streams() {
         // 正常: 増加
         assert!(Capsule::validate_max_streams(10, 5).is_ok());
-        // 正常: 同じ値
-        assert!(Capsule::validate_max_streams(10, 10).is_ok());
         // 正常: 上限値
         assert!(Capsule::validate_max_streams(MAX_STREAMS_LIMIT, 0).is_ok());
         // エラー: 上限超過
         assert_eq!(
             Capsule::validate_max_streams(MAX_STREAMS_LIMIT + 1, 0),
             Err(CapsuleValidationError::MaxStreamsExceedsLimit)
+        );
+        // エラー: 同値 (draft-16: "does not increase")
+        assert_eq!(
+            Capsule::validate_max_streams(10, 10),
+            Err(CapsuleValidationError::MaxStreamsDecreased)
         );
         // エラー: 減少
         assert_eq!(
@@ -585,10 +590,13 @@ mod tests {
     fn test_validate_max_data() {
         // 正常: 増加
         assert!(Capsule::validate_max_data(100, 50).is_ok());
-        // 正常: 同じ値
-        assert!(Capsule::validate_max_data(100, 100).is_ok());
         // 正常: VarInt 上限値
         assert!(Capsule::validate_max_data(crate::VarInt::MAX.get(), 0).is_ok());
+        // エラー: 同値 (draft-16: "does not increase")
+        assert_eq!(
+            Capsule::validate_max_data(100, 100),
+            Err(CapsuleValidationError::MaxDataDecreased)
+        );
         // エラー: 減少
         assert_eq!(
             Capsule::validate_max_data(50, 100),

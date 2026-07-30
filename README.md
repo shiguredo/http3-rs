@@ -311,6 +311,7 @@ draft-ietf-webtrans-http3 の複数バージョンをサポートし、ピアの
 | draft-07 | 対応 | `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` / セッションゴーン / ドレイン |
 | draft-14 | 対応 | `SETTINGS_WT_MAX_SESSIONS` / カプセルベースフロー制御 |
 | draft-15 | 対応 | `SETTINGS_WT_ENABLED` / `:protocol = webtransport-h3` / ALPN |
+| draft-16 | 対応 | 単調性チェック厳密化 / エラー種別変更 / `SETTINGS_WT_ENABLED > 1` 検証 |
 
 詳細な差分は [`docs/WT_HTTP3.md`](docs/WT_HTTP3.md) を参照してください。
 
