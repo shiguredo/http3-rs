@@ -83,7 +83,7 @@ proptest! {
 }
 
 // =============================================================================
-// フロー制御の単調増加制約 (draft-ietf-webtrans-http3-15 Section 5.6.2, 5.6.4)
+// フロー制御の単調増加制約 (draft-ietf-webtrans-http3-16 Section 5.6.2, 5.6.4)
 // =============================================================================
 
 proptest! {
@@ -106,11 +106,14 @@ proptest! {
         prop_assert_eq!(session.remote_limits().max_data, initial);
     }
 
-    /// Property: MaxData が増加または同値なら成功
+    /// Property: MaxData が厳密に増加すれば成功
+    ///
+    /// draft-16 Section 5.6.4: "does not increase" は WT_FLOW_CONTROL_ERROR。
+    /// セッション初期値は 0 のため、最初の値も 1 以上が必要。
     #[test]
     fn prop_session_max_data_monotonic_ok(
-        initial in 0u64..10000,
-        increase in 0u64..10000,
+        initial in 1u64..10000,
+        increase in 1u64..10000,
     ) {
         let mut session = Session::new(0);
 
