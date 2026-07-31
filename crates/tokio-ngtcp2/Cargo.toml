@@ -13,9 +13,9 @@ shiguredo_ngtcp2 = { path = "../ngtcp2-rs" }
 # ngtcp2 / nghttp3 FFI 型を直接参照するため
 ngtcp2-sys = { path = "../ngtcp2-sys" }
 nghttp3-sys = { path = "../nghttp3-sys" }
-tokio = { version = "1.52", features = ["full"] }
+tokio = { version = "1.53", features = ["full"] }
 
 [dev-dependencies]
 rcgen = "0.14"
-serial_test = "3.4"
+serial_test = "4.0"
 shiguredo_http3.workspace = true

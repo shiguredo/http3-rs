@@ -16,13 +16,13 @@ ngtcp2 = { git = "https://github.com/ngtcp2/ngtcp2", branch = "webtransport" }
 doctest = false
 
 [dependencies]
-aws-lc-sys = { version = "0.41", features = ["ssl"] }
+aws-lc-sys = { version = "0.43", features = ["ssl"] }
 libc = "0.2"
 
 [build-dependencies]
 # overwrite feature でのみ使用 (通常ビルドでは libclang 不要)
 bindgen = { version = "0.72", optional = true }
-shiguredo_cmake = "4.3"
+shiguredo_cmake = "4.4"
 shiguredo_toml = "2026.2"
 
 [features]

@@ -9,7 +9,7 @@ publish = false
 # 本ライブラリ
 shiguredo_http3.workspace = true
 # QUIC / HTTP/3 サーバー実装
-s2n-quic = { version = "1.80", default-features = false, features = ["provider-address-token-default", "provider-tls-rustls", "unstable-provider-datagram", "provider-event-tracing"] }
+s2n-quic = { version = "1.85", default-features = false, features = ["provider-address-token-default", "provider-tls-rustls", "unstable-provider-datagram", "provider-event-tracing"] }
 # rustls サーバー設定
 rustls = "0.23"
 # 自己署名証明書生成
@@ -21,7 +21,7 @@ aws-lc-rs = "1.17"
 # 証明書有効期間の計算
 time = "0.3"
 # 非同期ランタイム
-tokio = { version = "1.52", features = ["full"] }
+tokio = { version = "1.53", features = ["full"] }
 # CLI 引数パース
 noargs = "0.4"
 # JSONC (証明書キャッシュ)
@@ -31,4 +31,4 @@ tracing = "0.1"
 # ログフィルタ
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # バイトバッファ
-bytes = "1.11"
+bytes = "1.12"

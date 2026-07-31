@@ -12,7 +12,7 @@ path = "src/lib.rs"
 # TLS / 暗号 (aws-lc)
 aws-lc-rs = "1.17"
 # OpenSSL 互換 SSL API (ngtcp2 crypto)
-aws-lc-sys = { version = "0.41", features = ["ssl"] }
+aws-lc-sys = { version = "0.43", features = ["ssl"] }
 # C FFI
 libc = "0.2"
 # nghttp3 バインディング

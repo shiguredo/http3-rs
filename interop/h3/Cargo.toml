@@ -6,10 +6,10 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-bytes = "1.11"
+bytes = "1.12"
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
-http = "1.4"
+http = "1.5"
 quiche = "0.29"
 quinn = { version = "0.11", default-features = false, features = [
   "runtime-tokio",
@@ -20,11 +20,11 @@ rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "std"
 ] }
-rustls-pki-types = { version = "1.14", features = ["std"] }
+rustls-pki-types = { version = "1.15", features = ["std"] }
 shiguredo_http3.workspace = true
 shiguredo_ngtcp2 = { path = "../../crates/ngtcp2-rs" }
 tempfile = "3.27"
-tokio = { version = "1.52", features = ["full"] }
+tokio = { version = "1.53", features = ["full"] }
 tokio-ngtcp2 = { path = "../../crates/tokio-ngtcp2" }
 tokio-quiche = "0.19"
 tokio-s2n-quic = { path = "../../crates/tokio-s2n-quic" }

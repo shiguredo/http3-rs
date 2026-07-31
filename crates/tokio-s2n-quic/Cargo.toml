@@ -22,11 +22,11 @@ name = "tokio_s2n_quic_wt_echo_client"
 path = "examples/wt_echo_client.rs"
 
 [dependencies]
-bytes = "1.11"
-s2n-quic = "1.80"
+bytes = "1.12"
+s2n-quic = "1.85"
 shiguredo_http3.workspace = true
-tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "sync"] }
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "sync"] }
 
 [dev-dependencies]
 rcgen = "0.14"
-tokio = { version = "1.52", features = ["full", "test-util"] }
+tokio = { version = "1.53", features = ["full", "test-util"] }
