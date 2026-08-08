@@ -46,7 +46,7 @@ impl ClientWebTransportSession {
     /// # Arguments
     ///
     /// * `remote_addr` - 接続先アドレス
-    /// * `server_name` - サーバー名 (SNI)
+    /// * `server_name` - サーバー名 (SNI 兼ホスト名検証、DNS 名限定)
     /// * `path` - WebTransport パス (例: "/webtransport")
     pub async fn connect(remote_addr: SocketAddr, server_name: &str, _path: &str) -> Result<Self> {
         Self::connect_with_options(remote_addr, server_name, _path, true).await
@@ -59,7 +59,7 @@ impl ClientWebTransportSession {
     /// # Arguments
     ///
     /// * `remote_addr` - 接続先アドレス
-    /// * `server_name` - サーバー名 (SNI)
+    /// * `server_name` - サーバー名 (SNI 兼ホスト名検証、DNS 名限定)
     /// * `path` - WebTransport パス (例: "/webtransport")
     pub async fn connect_insecure(
         remote_addr: SocketAddr,
@@ -69,18 +69,59 @@ impl ClientWebTransportSession {
         Self::connect_with_options(remote_addr, server_name, _path, false).await
     }
 
+    /// WebTransport セッションを作成 (カスタム CA 証明書付き)
+    ///
+    /// サーバー証明書の検証に使用する CA 証明書 (PEM 形式) を指定する。
+    /// ロードした CA はシステムのトラストストアに追加される (置換はしない)。
+    /// PEM バンドル (連結された複数証明書) を渡した場合は先頭の 1 枚のみが
+    /// ロードされる。
+    ///
+    /// # Arguments
+    ///
+    /// * `remote_addr` - 接続先アドレス
+    /// * `server_name` - サーバー名 (SNI 兼ホスト名検証、DNS 名限定)
+    /// * `path` - WebTransport パス (例: "/webtransport")
+    /// * `ca_cert_pem` - CA 証明書の PEM 文字列
+    pub async fn connect_with_ca(
+        remote_addr: SocketAddr,
+        server_name: &str,
+        _path: &str,
+        ca_cert_pem: &str,
+    ) -> Result<Self> {
+        Self::connect_with_options_internal(
+            remote_addr,
+            server_name,
+            _path,
+            Some(ca_cert_pem),
+            true,
+        )
+        .await
+    }
+
     /// WebTransport セッションを作成 (オプション付き)
     ///
     /// # Arguments
     ///
     /// * `remote_addr` - 接続先アドレス
-    /// * `server_name` - サーバー名 (SNI)
+    /// * `server_name` - サーバー名 (SNI 兼ホスト名検証、DNS 名限定)
     /// * `path` - WebTransport パス (例: "/webtransport")
     /// * `verify_peer` - サーバー証明書を検証するかどうか
     async fn connect_with_options(
         remote_addr: SocketAddr,
         server_name: &str,
         _path: &str,
+        verify_peer: bool,
+    ) -> Result<Self> {
+        Self::connect_with_options_internal(remote_addr, server_name, _path, None, verify_peer)
+            .await
+    }
+
+    /// 内部接続メソッド (CA 証明書指定付き)
+    async fn connect_with_options_internal(
+        remote_addr: SocketAddr,
+        server_name: &str,
+        _path: &str,
+        ca_cert_pem: Option<&str>,
         verify_peer: bool,
     ) -> Result<Self> {
         // ローカルアドレスにバインド
@@ -103,7 +144,10 @@ impl ClientWebTransportSession {
         let h3_settings = Http3Settings::new().with_webtransport().into_raw();
 
         // TLS コンテキストとセッションを作成
-        let tls_ctx = TlsContext::new_client_with_options(&[b"h3"], verify_peer)?;
+        let mut tls_ctx = TlsContext::new_client_with_options(&[b"h3"], verify_peer)?;
+        if let Some(ca_cert_pem) = ca_cert_pem {
+            tls_ctx.add_ca_cert_pem(ca_cert_pem)?;
+        }
         let tls_session = tls_ctx.create_session()?;
 
         // コネクション ID を生成

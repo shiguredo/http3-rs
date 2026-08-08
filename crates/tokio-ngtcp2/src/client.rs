@@ -39,10 +39,16 @@ unsafe impl Sync for Client {}
 impl Client {
     /// 新しいクライアントを作成
     ///
+    /// サーバー証明書のチェーン検証とホスト名検証を行う (RFC 9114 Section 3.1)。
+    /// 検証に使うトラストストアはデフォルト CA パスと `SSL_CERT_FILE` /
+    /// `SSL_CERT_DIR` 環境変数に依存する。macOS ではシステムの CA が
+    /// 自動的に読み込まれない環境があるため、`connect_with_ca` で CA を
+    /// 明示指定するか、`SSL_CERT_FILE` を設定すること。
+    ///
     /// # Arguments
     ///
     /// * `remote_addr` - 接続先アドレス
-    /// * `server_name` - サーバー名 (SNI)
+    /// * `server_name` - サーバー名 (SNI 兼ホスト名検証、DNS 名限定)
     /// * `transport_params` - QUIC トランスポートパラメータ (None でデフォルト)
     /// * `h3_settings` - HTTP/3 設定 (None でデフォルト)
     pub async fn connect(
@@ -68,7 +74,7 @@ impl Client {
     /// # Arguments
     ///
     /// * `remote_addr` - 接続先アドレス
-    /// * `server_name` - サーバー名 (SNI)
+    /// * `server_name` - サーバー名 (SNI 兼ホスト名検証、DNS 名限定)
     /// * `transport_params` - QUIC トランスポートパラメータ (None でデフォルト)
     /// * `h3_settings` - HTTP/3 設定 (None でデフォルト)
     pub async fn connect_insecure(
@@ -95,7 +101,7 @@ impl Client {
     /// # Arguments
     ///
     /// * `remote_addr` - 接続先アドレス
-    /// * `server_name` - サーバー名 (SNI)
+    /// * `server_name` - サーバー名 (SNI 兼ホスト名検証、DNS 名限定)
     pub async fn connect_insecure_default(
         remote_addr: SocketAddr,
         server_name: &str,
@@ -104,6 +110,10 @@ impl Client {
     }
 
     /// 内部接続メソッド (デフォルト設定を使用)
+    ///
+    /// `connect_with_options_internal` に委譲すると `Option<nghttp3_settings>`
+    /// 引数 (nghttp3_vec の生ポインタを含み Send でない) が future に保持され、
+    /// `tokio::spawn` 内で呼べなくなるため、直接実装する。
     async fn connect_internal(
         remote_addr: SocketAddr,
         server_name: &str,
@@ -174,13 +184,65 @@ impl Client {
     /// # Arguments
     ///
     /// * `remote_addr` - 接続先アドレス
-    /// * `server_name` - サーバー名 (SNI)
+    /// * `server_name` - サーバー名 (SNI 兼ホスト名検証、DNS 名限定)
     /// * `transport_params` - QUIC トランスポートパラメータ (None でデフォルト)
     /// * `h3_settings` - HTTP/3 設定 (None でデフォルト)
     /// * `verify_peer` - サーバー証明書を検証するかどうか
     async fn connect_with_options(
         remote_addr: SocketAddr,
         server_name: &str,
+        transport_params: Option<ngtcp2_transport_params>,
+        h3_settings: Option<nghttp3_settings>,
+        verify_peer: bool,
+    ) -> Result<Self> {
+        Self::connect_with_options_internal(
+            remote_addr,
+            server_name,
+            None,
+            transport_params,
+            h3_settings,
+            verify_peer,
+        )
+        .await
+    }
+
+    /// 新しいクライアントを作成 (カスタム CA 証明書付き)
+    ///
+    /// サーバー証明書の検証に使用する CA 証明書 (PEM 形式) を指定する。
+    /// ロードした CA はシステムのトラストストアに追加される (置換はしない)。
+    /// PEM バンドル (連結された複数証明書) を渡した場合は先頭の 1 枚のみが
+    /// ロードされる。
+    ///
+    /// # Arguments
+    ///
+    /// * `remote_addr` - 接続先アドレス
+    /// * `server_name` - サーバー名 (SNI 兼ホスト名検証、DNS 名限定)
+    /// * `ca_cert_pem` - CA 証明書の PEM 文字列
+    /// * `transport_params` - QUIC トランスポートパラメータ (None でデフォルト)
+    /// * `h3_settings` - HTTP/3 設定 (None でデフォルト)
+    pub async fn connect_with_ca(
+        remote_addr: SocketAddr,
+        server_name: &str,
+        ca_cert_pem: &str,
+        transport_params: Option<ngtcp2_transport_params>,
+        h3_settings: Option<nghttp3_settings>,
+    ) -> Result<Self> {
+        Self::connect_with_options_internal(
+            remote_addr,
+            server_name,
+            Some(ca_cert_pem),
+            transport_params,
+            h3_settings,
+            true,
+        )
+        .await
+    }
+
+    /// 内部接続メソッド (CA 証明書指定付き)
+    async fn connect_with_options_internal(
+        remote_addr: SocketAddr,
+        server_name: &str,
+        ca_cert_pem: Option<&str>,
         transport_params: Option<ngtcp2_transport_params>,
         h3_settings: Option<nghttp3_settings>,
         verify_peer: bool,
@@ -205,7 +267,10 @@ impl Client {
         let h3_settings = h3_settings.unwrap_or_else(|| Http3Settings::new().into_raw());
 
         // TLS コンテキストとセッションを作成
-        let tls_ctx = TlsContext::new_client_with_options(&[b"h3"], verify_peer)?;
+        let mut tls_ctx = TlsContext::new_client_with_options(&[b"h3"], verify_peer)?;
+        if let Some(ca_cert_pem) = ca_cert_pem {
+            tls_ctx.add_ca_cert_pem(ca_cert_pem)?;
+        }
         let tls_session = tls_ctx.create_session()?;
 
         // コネクション ID を生成

@@ -33,6 +33,10 @@ use crate::error::{Error, Result};
 pub struct TlsContext {
     ctx: *mut SSL_CTX,
     is_server: bool,
+    /// サーバー証明書を検証するかどうか (クライアントコンテキストのみ)
+    ///
+    /// `add_ca_cert_pem` の有効性判定に使用する。
+    verify_peer: bool,
     // ALPN コールバックで使用するデータ (サーバー用)
     // コールバックに渡したポインタを保持し、Drop で解放する
     alpn_data: Option<*mut Vec<u8>>,
@@ -86,6 +90,16 @@ impl TlsContext {
             if !verify_peer {
                 // 証明書検証を無効にする (テスト用の自己署名証明書で使用)
                 aws_lc_sys::SSL_CTX_set_verify(ctx, aws_lc_sys::SSL_VERIFY_NONE, None);
+            } else {
+                // 証明書チェーン検証を有効にする
+                // (RFC 9114 Section 3.1 / RFC 9001 Section 4.4: クライアントは
+                //  サーバー証明書を検証しなければならない MUST)
+                // BoringSSL のデフォルトは SSL_VERIFY_NONE のため明示的に設定する
+                aws_lc_sys::SSL_CTX_set_verify(ctx, aws_lc_sys::SSL_VERIFY_PEER, None);
+                // デフォルトのトラストストア (SSL_CERT_FILE / SSL_CERT_DIR /
+                // システムの CA パス) を読み込む。戻り値は無視し、トラストストアが
+                // 空でも接続作成は成功させる (検証失敗はハンドシェイク時に発生する)
+                aws_lc_sys::SSL_CTX_set_default_verify_paths(ctx);
             }
 
             // ALPN を設定
@@ -101,6 +115,7 @@ impl TlsContext {
             Ok(Self {
                 ctx,
                 is_server: false,
+                verify_peer,
                 alpn_data: None,
             })
         }
@@ -174,8 +189,72 @@ impl TlsContext {
             Ok(Self {
                 ctx,
                 is_server: true,
+                verify_peer: false,
                 alpn_data: Some(alpn_ptr),
             })
+        }
+    }
+
+    /// カスタム CA 証明書をトラストストアに追加する
+    ///
+    /// `verify_peer` が true のクライアントコンテキストでのみ有効。
+    /// PEM 形式の CA 証明書をパースし、システムのトラストストアに**追加**する
+    /// (置換はしない)。PEM バンドル (連結された複数証明書) を渡した場合は
+    /// **先頭の 1 枚のみ**がロードされる。
+    ///
+    /// # Arguments
+    ///
+    /// * `ca_cert_pem` - CA 証明書の PEM 文字列
+    pub fn add_ca_cert_pem(&mut self, ca_cert_pem: &str) -> Result<()> {
+        if self.is_server {
+            return Err(Error::InvalidArgument(
+                "cannot add CA cert on server context".to_string(),
+            ));
+        }
+        if !self.verify_peer {
+            return Err(Error::InvalidArgument(
+                "cannot add CA cert when verify_peer is false".to_string(),
+            ));
+        }
+
+        unsafe {
+            // PEM 文字列を BIO メモリでパースして X509 に変換する
+            let bio = aws_lc_sys::BIO_new_mem_buf(
+                ca_cert_pem.as_ptr() as *const c_void,
+                ca_cert_pem.len() as aws_lc_sys::ossl_ssize_t,
+            );
+            if bio.is_null() {
+                return Err(Error::Internal("BIO_new_mem_buf failed".to_string()));
+            }
+            let x509 = aws_lc_sys::PEM_read_bio_X509(
+                bio,
+                std::ptr::null_mut(),
+                None,
+                std::ptr::null_mut(),
+            );
+            aws_lc_sys::BIO_free(bio);
+            if x509.is_null() {
+                // パース失敗のエラーが aws-lc のエラーキューに残ると後続の
+                // 無関係な呼び出しのデバッグを妨げるためクリアする
+                aws_lc_sys::ERR_clear_error();
+                return Err(Error::InvalidArgument(
+                    "invalid CA certificate PEM".to_string(),
+                ));
+            }
+
+            // トラストストアに追加する
+            let store = aws_lc_sys::SSL_CTX_get_cert_store(self.ctx);
+            if store.is_null() {
+                aws_lc_sys::X509_free(x509);
+                return Err(Error::Internal("SSL_CTX_get_cert_store failed".to_string()));
+            }
+            let rv = aws_lc_sys::X509_STORE_add_cert(store, x509);
+            aws_lc_sys::X509_free(x509);
+            if rv != 1 {
+                aws_lc_sys::ERR_clear_error();
+                return Err(Error::Internal("X509_STORE_add_cert failed".to_string()));
+            }
+            Ok(())
         }
     }
 
@@ -245,13 +324,51 @@ unsafe impl Send for TlsSession {}
 unsafe impl Sync for TlsSession {}
 
 impl TlsSession {
-    /// SNI (Server Name Indication) を設定
+    /// SNI (Server Name Indication) とホスト名検証を設定
     ///
     /// クライアント接続で使用する。接続先のサーバー名を指定する。
+    /// `verify_peer` が true の場合はホスト名検証 (証明書の SAN dNSName との照合。
+    /// SAN に dNSName が無い証明書では CN にフォールバックする。CN-ID の使用は
+    /// RFC 9110 Section 4.3.4 で MUST NOT とされているが、aws-lc の後方互換
+    /// 挙動に従い現状は許容する) にも使用される (RFC 9114 Section 3.1 /
+    /// RFC 9110 Section 4.3.4)。
+    /// `verify_peer` が false の場合は SSL_VERIFY_NONE のためホスト名検証は効かない。
+    ///
+    /// `server_name` は **DNS 名に限定** する。ホスト名検証は IP アドレス SAN を
+    /// 照合しないため、IP アドレスを渡すと正しい証明書でも必ず検証失敗する。
+    /// 空文字列・ワイルドカード・255 文字超はホスト名検証の誤動作や SNI の
+    /// 仕様違反 (RFC 6066 Section 3 は HostName を FQDN に限定) につながるため
+    /// 拒否する。
     pub fn set_server_name(&mut self, server_name: &str) -> Result<()> {
         if self.is_server {
             return Err(Error::InvalidArgument(
                 "cannot set server name on server session".to_string(),
+            ));
+        }
+
+        // ホスト名検証は DNS 名限定。IP アドレス・空文字列・ワイルドカード・
+        // 長すぎる名前を拒否する
+        if server_name.is_empty() {
+            return Err(Error::InvalidArgument(
+                "server_name must be a DNS name, not empty".to_string(),
+            ));
+        }
+        if server_name.parse::<std::net::IpAddr>().is_ok() {
+            return Err(Error::InvalidArgument(
+                "server_name must be a DNS name, not an IP address".to_string(),
+            ));
+        }
+        if server_name.contains('*') {
+            return Err(Error::InvalidArgument(
+                "server_name must be a DNS name, not a wildcard".to_string(),
+            ));
+        }
+        // DNS 名 (FQDN) の長さ制限は 255 オクテット (RFC 1035 Section 2.3.4)。
+        // RFC 6066 Section 3 は HostName を FQDN に限定しており、
+        // これを超える文字列は FQDN として無効
+        if server_name.len() > 255 {
+            return Err(Error::InvalidArgument(
+                "server_name exceeds 255 bytes".to_string(),
             ));
         }
 
@@ -264,6 +381,13 @@ impl TlsSession {
                 return Err(Error::Internal(
                     "SSL_set_tlsext_host_name failed".to_string(),
                 ));
+            }
+
+            // ホスト名検証を設定する (SSL_VERIFY_NONE のときは効かない)
+            // 証明書の dNSName と server_name を照合する
+            let rv = aws_lc_sys::SSL_set1_host(self.ssl, server_name_cstr.as_ptr());
+            if rv != 1 {
+                return Err(Error::Internal("SSL_set1_host failed".to_string()));
             }
         }
 
@@ -386,5 +510,66 @@ mod tests {
     fn test_client_context_creation() {
         let ctx = TlsContext::new_client(&[b"h3"]);
         assert!(ctx.is_ok());
+    }
+
+    #[test]
+    fn test_add_ca_cert_pem_rejects_invalid_pem() {
+        // 不正な PEM 文字列は InvalidArgument で拒否される
+        let mut ctx =
+            TlsContext::new_client_with_options(&[b"h3"], true).expect("test must succeed");
+        let err = ctx.add_ca_cert_pem("not a pem").unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidArgument(_)),
+            "不正な PEM は InvalidArgument であること: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_add_ca_cert_pem_rejects_when_verify_peer_false() {
+        // verify_peer=false のコンテキストでは CA 追加が拒否される
+        // (検証なしのため CA は使われない)
+        let mut ctx =
+            TlsContext::new_client_with_options(&[b"h3"], false).expect("test must succeed");
+        let err = ctx
+            .add_ca_cert_pem("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----")
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidArgument(_)),
+            "verify_peer=false では CA 追加が拒否されること: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_add_ca_cert_pem_rejects_on_server_context() {
+        // サーバーコンテキストでは CA 追加が拒否される
+        let temp = std::env::temp_dir().join(format!(
+            "ngtcp2_crypto_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test must succeed")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).expect("test must succeed");
+        let cert_path = temp.join("cert.pem");
+        let key_path = temp.join("key.pem");
+        // サーバー証明書の生成 (最小限の自己署名 PEM)
+        let key = rcgen::KeyPair::generate().expect("test must succeed");
+        let params = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+            .expect("test must succeed");
+        let cert = params.self_signed(&key).expect("test must succeed");
+        std::fs::write(&cert_path, cert.pem()).expect("test must succeed");
+        std::fs::write(&key_path, key.serialize_pem()).expect("test must succeed");
+
+        let mut ctx =
+            TlsContext::new_server(&cert_path, &key_path, &[b"h3"]).expect("test must succeed");
+        let err = ctx
+            .add_ca_cert_pem("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----")
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidArgument(_)),
+            "サーバーコンテキストでは CA 追加が拒否されること: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }
