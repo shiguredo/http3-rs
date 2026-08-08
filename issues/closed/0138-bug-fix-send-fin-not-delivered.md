@@ -1,7 +1,7 @@
 # リクエスト / レスポンスの FIN が QUIC 層に届かない
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-08
 - Branch: feature/fix-send-fin-not-delivered
 - Polished: 2026-08-08
 
@@ -44,6 +44,22 @@ RFC 9114 Section 4.1 はストリームの送信方向クローズによる終�
 - `cargo test --all` と `cargo fmt --all -- --check` と `cargo clippy --all-targets --all-features -- -D warnings` が通る
 
 ## 解決方法
+
+### 修正内容
+
+- `RequestStream::get_send_data` の fin 計算を「FIN 設定済み && データ全消費済み && 未交付 (`!fin_sent`)」に変更した (旧式 `is_fin() && !has_pending()` は `has_pending` が `(fin && !fin_sent)` を含むため恒 false だった)
+- `SendBuffer` にデータ専用の全消費判定 (`is_data_consumed`) と `is_fin_sent` を追加した
+- `Connection::get_stream_data` は FIN 交付時 (データ全消費後) に `(空, fin=true)` を返し、同時に `mark_fin_sent` を呼ぶことで FIN を 1 回だけ交付するようにした。`take_stream_data` は `get_stream_data` に委譲するため両経路で整合する
+- FIN 交付後は `get_stream_data` / `take_stream_data` がデータ・FIN を返さなくなり、`writable_streams` からも消える (FIN のみが残るストリームは交付まで報告され続ける)
+- `send_request` の doc に残っていた「ストリームの FIN 送信完了を通知」の残骸コメントを掃除し、各公開 API の doc を新仕様 (FIN はデータ消費後の追加呼び出しで交付される) に合わせて更新した
+- 使用例 (README) も新仕様のループ形式に更新した
+
+### テスト
+
+- `src/stream/request.rs` の `#[cfg(test)]` に `get_send_data` の fin 交付の単体テストを追加した
+- `tests/test_connection.rs` に FIN 送達・消失のテストを追加した (take_stream_data 経路 / get_stream_data + consume_stream_data の 2 段階経路 / レスポンス方向 / 複数チャンク / 空ボディ境界 / 部分消費 / 両 API の cross-API 整合)
+- `src/stream/mod.rs` の `test_send_buffer` に `is_data_consumed` / `is_fin_sent` の検証を追加した
+- `pbt/tests/prop_connection.rs` の既存テストが本修正後も成立することを確認した
 
 ### 関連ファイル
 

@@ -8,6 +8,9 @@ use shiguredo_http3::{ClientConnection, Header};
 /// リクエスト送信後の take_stream_data ループ用ヘルパー
 ///
 /// take_stream_data ループを実行し、収集したデータと反復回数を返す。
+/// ループはデータ交付 → FIN 交付 (`(空, fin=true)`) → None の順で終了する。
+/// FIN の 1 回交付は決定的テスト (tests/test_connection.rs) で担保し、
+/// この PBT はループの終了性とデータ完全性だけを検証する。
 fn drain_stream_data(
     conn: &mut ClientConnection,
     stream_id: u64,
@@ -89,7 +92,12 @@ proptest! {
         );
     }
 
-    /// Property: 全データ消費後に get_stream_data が None を返す
+    /// Property: FIN 交付後に get_stream_data が None を返す
+    ///
+    /// drain_stream_data はデータ交付 → FIN 交付 → None の順でループを抜けるため、
+    /// ここでの検証対象は「FIN 交付後の None」である。
+    /// (FIN はデータ全消費後の追加呼び出しで交付されるため、全データ消費直後の
+    ///  get_stream_data は (空, fin=true) を返す)
     #[test]
     fn prop_get_stream_data_returns_none_after_consume(body_len in 0usize..8192) {
         let body = vec![0xEFu8; body_len];
@@ -107,14 +115,14 @@ proptest! {
         let stream_id = client.send_request(&request_headers, false).expect("test must succeed");
         client.send_body(stream_id, &body, true).expect("test must succeed");
 
-        // 全データを消費
+        // データと FIN をすべて消費
         let (_collected, _iterations) = drain_stream_data(&mut client, stream_id, 10);
 
-        // 消費後は None が返ることを検証
+        // FIN 交付後は None が返ることを検証
         let result = client.get_stream_data(stream_id);
         prop_assert!(
             result.is_none(),
-            "全データ消費後に get_stream_data が None ではなく {:?} を返した",
+            "FIN 交付後に get_stream_data が None ではなく {:?} を返した",
             result.map(|(d, f)| (d.len(), f))
         );
     }

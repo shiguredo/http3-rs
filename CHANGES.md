@@ -213,6 +213,8 @@
   - @voluntas
 - [FIX] 禁止 Capsule (`WT_MAX_STREAM_DATA` / `WT_STREAM_DATA_BLOCKED`) 受信時のエラーレベルを接続エラーからセッションエラーに修正する (draft-ietf-webtrans-http3-15 Section 5.4)
   - @voluntas
+- [FIX] `send_request` / `send_body` / `send_response` で `fin=true` を設定しても FIN が交付されず、QUIC 層へ送信方向クローズが通知されない問題を修正する (RFC 9114 Section 4.1)
+  - @voluntas
 
 ### misc
 

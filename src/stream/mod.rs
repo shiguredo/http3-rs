@@ -204,9 +204,22 @@ impl SendBuffer {
         self.consumed < self.data.len() || (self.fin && !self.fin_sent)
     }
 
+    /// データが全て消費済みかどうか
+    ///
+    /// `has_pending` と違い FIN を含まないデータ専用の判定であり、
+    /// 「FIN 設定済み && データ全消費済み && 未交付」の FIN 交付条件に使う。
+    pub fn is_data_consumed(&self) -> bool {
+        self.consumed >= self.data.len()
+    }
+
     /// FIN を引き渡し済みとしてマークする
     pub fn mark_fin_sent(&mut self) {
         self.fin_sent = true;
+    }
+
+    /// FIN が引き渡し済みかどうか
+    pub fn is_fin_sent(&self) -> bool {
+        self.fin_sent
     }
 
     /// すべてのデータが送信済みで FIN も送信済みか
@@ -348,9 +361,11 @@ mod tests {
         buf.push(b"hello");
         assert!(buf.has_pending());
         assert_eq!(buf.peek(), b"hello");
+        assert!(!buf.is_data_consumed());
 
         buf.consume(3);
         assert_eq!(buf.peek(), b"lo");
+        assert!(!buf.is_data_consumed());
 
         buf.set_fin();
         assert!(buf.is_fin());
@@ -358,10 +373,12 @@ mod tests {
 
         buf.consume(2);
         // データは全て消費されたが FIN はまだ引き渡されていない
+        assert!(buf.is_data_consumed());
         assert!(!buf.is_complete());
         assert!(buf.has_pending()); // FIN-only が残っている
 
         buf.mark_fin_sent();
+        assert!(buf.is_fin_sent());
         assert!(buf.is_complete());
         assert!(!buf.has_pending());
     }
