@@ -188,8 +188,10 @@ async fn test_client_server_handshake() {
         }
     });
 
-    // クライアントを作成
-    let mut client = Client::connect(server_addr, "localhost", None, None)
+    // クライアントを作成 (証明書検証なし: 自己署名証明書のため)
+    // verify_peer=true では自己署名証明書の検証に失敗するため、
+    // ハンドシェイクのメカニズム確認は connect_insecure で行う
+    let mut client = Client::connect_insecure(server_addr, "localhost", None, None)
         .await
         .expect("client creation failed");
 
@@ -199,20 +201,11 @@ async fn test_client_server_handshake() {
     // サーバータスクを終了
     server_handle.abort();
 
-    // ハンドシェイクの結果を確認
-    // 自己署名証明書なのでハンドシェイクは失敗する可能性がある
-    match handshake_result {
-        Ok(Ok(())) => {
-            println!("Handshake successful");
-        }
-        Ok(Err(e)) => {
-            // TLS エラーなど (自己署名証明書では期待される動作)
-            println!("Handshake error (expected with self-signed cert): {:?}", e);
-        }
-        Err(_) => {
-            println!("Handshake timed out");
-        }
-    }
+    // ハンドシェイクが成功すること (検証なしのため自己署名でも成功する)
+    assert!(
+        matches!(handshake_result, Ok(Ok(()))),
+        "ハンドシェイクが成功すること: {handshake_result:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

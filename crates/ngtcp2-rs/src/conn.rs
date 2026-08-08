@@ -213,7 +213,7 @@ impl Connection {
     /// * `scid` - 送信元コネクション ID
     /// * `local_addr` - ローカルアドレス
     /// * `remote_addr` - リモートアドレス
-    /// * `server_name` - サーバー名 (SNI)
+    /// * `server_name` - サーバー名 (SNI 兼ホスト名検証、DNS 名限定)
     /// * `tls_session` - TLS セッション
     /// * `params` - トランスポートパラメータ
     /// * `initial_ts` - 初期タイムスタンプ (ナノ秒)

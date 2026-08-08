@@ -13,6 +13,10 @@
 
 - [CHANGE] MSRV (Minimum Supported Rust Version) を 1.88 から 1.93 に引き上げる
   - @voluntas
+- [CHANGE] `Client::connect` / `ClientWebTransportSession::connect` / `TlsContext::new_client` でサーバー証明書のチェーン検証とホスト名検証を有効にする (従来 `verify_peer=true` は検証なしと同等の挙動だった)。検証に失敗する既存接続は失敗するようになる (RFC 9114 Section 3.1 / RFC 9001 Section 4.4)
+  - @voluntas
+- [CHANGE] `server_name` を DNS 名 (FQDN) に限定し、IP アドレス / 空文字列 / ワイルドカード / 255 文字超を `InvalidArgument` エラーで拒否する (`connect_insecure` を含む全接続 API に適用。RFC 6066 Section 3 / RFC 1035 Section 2.3.4)
+  - @voluntas
 - [CHANGE] 公開エラー型 / 設定型などから `#[non_exhaustive]` を撤去し、`match` の網羅性チェックを利用側で保てるようにする
   - @voluntas
 - [CHANGE] `shiguredo_ngtcp2` の `Http3SettingsExt` / `TransportParamsExt` トレイトを `Http3Settings` / `TransportParams` newtype に置き換え、`nghttp3_sys` / `ngtcp2_sys` 型の再エクスポートを廃止する
@@ -122,6 +126,8 @@
 - [CHANGE] フロー制御カプセルの単調性チェックを「前より小さい」から「前より増加しない」に厳密化し、同値の再送も `WT_FLOW_CONTROL_ERROR` で拒否する (draft-ietf-webtrans-http3-16 Section 5.6.2 / 5.6.4)
   - @voluntas
 - [CHANGE] クライアントが `SETTINGS_WT_ENABLED > 1` を受信した際に `H3_SETTINGS_ERROR` 接続エラーを返す検証を追加する (draft-ietf-webtrans-http3-16 Section 3.1)
+  - @voluntas
+- [ADD] `Client::connect_with_ca` / `ClientWebTransportSession::connect_with_ca` / `TlsContext::add_ca_cert_pem` を追加し、検証に使用するカスタム CA 証明書 (PEM) をトラストストアに追加できるようにする
   - @voluntas
 - [ADD] `VarInt::from_static` / `qpack::Header::from_static` / `frame::GoawayPayload::from_static` の doc に `compile_fail` ブロックを追加し、`const fn` 検査のリグレッションを CI (`cargo test --doc`) で防止する
   - @voluntas

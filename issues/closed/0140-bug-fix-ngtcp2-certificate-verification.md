@@ -1,7 +1,7 @@
 # ngtcp2 系クライアントの証明書検証が無効 (verify_peer=true でも検証ゼロ)
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-08
 - Branch: feature/fix-ngtcp2-certificate-verification
 - Polished: 2026-08-08
 
@@ -45,6 +45,22 @@ RFC 9001 Section 4.4 (Peer Authentication) も汎用 QUIC クライアントと�
 - `cargo test --all` と `cargo fmt --all -- --check` と `cargo clippy --all-targets --all-features -- -D warnings` が通る
 
 ## 解決方法
+
+### 修正内容
+
+- `TlsContext::new_client_with_options` で `verify_peer=true` のときに `SSL_VERIFY_PEER` と `SSL_CTX_set_default_verify_paths` (デフォルトトラストストア) を設定するようにした (従来は `SSL_VERIFY_NONE` のデフォルトのままで検証が効いていなかった)
+- `TlsSession::set_server_name` で `SSL_set1_host` を呼び、ホスト名検証 (証明書の SAN dNSName との照合) を有効にした。`server_name` は DNS 名に限定し、IP アドレス / 空文字列 / ワイルドカード / 255 文字超を `InvalidArgument` で拒否する
+- `TlsContext::add_ca_cert_pem` を追加し、PEM 形式のカスタム CA をトラストストアに追加できるようにした (verify_peer=true のみ有効。エラーパスで `ERR_clear_error` を実行)
+- `TlsContext` に `verify_peer` を保持し、`add_ca_cert_pem` の有効性を判定するようにした
+- `Client::connect_with_ca` / `ClientWebTransportSession::connect_with_ca` を追加し、CA の PEM 文字列を受け取れるようにした
+- `Connection::client_new` と各 `connect` 系の doc を「サーバー名 (SNI 兼ホスト名検証、DNS 名限定)」に更新し、`Client::connect` の doc に macOS のトラストストア依存を明記した
+
+### テスト
+
+- `crates/tokio-ngtcp2/tests/certificate_verification.rs` を新規追加 (11 本): 自己署名失敗 / CA + ホスト名一致成功 / ホスト名不一致失敗 / CA 未ロード失敗 / 検証なし成功 / WebTransport CA 成功 / IP・空文字列・ワイルドカード・255 文字超拒否
+- `crates/tokio-ngtcp2/tests/helpers/certs.rs` を新規追加 (rcgen による CA / サーバー証明書生成ヘルパー)
+- `crates/ngtcp2-rs/src/crypto.rs` の `#[cfg(test)]` に `add_ca_cert_pem` のエラーパステスト 3 本を追加
+- `crates/tokio-ngtcp2/tests/integration.rs` の `test_client_server_handshake` を `connect_insecure` に変更し、ハンドシェイク成功を厳密に検証するように更新した
 
 ### 関連ファイル
 
