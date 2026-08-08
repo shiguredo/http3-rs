@@ -1416,6 +1416,9 @@ impl Connection {
     }
 
     /// 送信可能なストリームを取得
+    ///
+    /// FIN のみが残っているストリームは FIN 交付 (取得) まで報告され続け、
+    /// FIN 交付後は報告されなくなる。
     pub fn writable_streams(&self) -> impl Iterator<Item = u64> + '_ {
         // 制御ストリーム
         let control_id = if self.control_send.has_pending() {
@@ -1453,6 +1456,11 @@ impl Connection {
     }
 
     /// ストリームの送信データを取得
+    ///
+    /// リクエストストリームでは FIN を設定済みでもデータが全て消費されるまでは
+    /// `fin=false` を返し、データ消費後の追加呼び出しで `(空, fin=true)` を返す。
+    /// FIN は送信方向クローズ (RFC 9114 Section 4.1) の実現手段として
+    /// 交付と同時に送信済みとして確定し、以降は取得できない (FIN は 1 回だけ交付される)。
     pub fn get_stream_data(&mut self, stream_id: u64) -> Option<(&[u8], bool)> {
         // 制御ストリーム
         if self.control_send.stream_id() == Some(stream_id) {
@@ -1479,10 +1487,19 @@ impl Connection {
         }
 
         // リクエストストリーム
-        if let Some(stream) = self.streams.get(&stream_id) {
-            let (data, fin) = stream.get_send_data();
-            if !data.is_empty() || fin {
-                return Some((data, fin));
+        if let Some(stream) = self.streams.get_mut(&stream_id) {
+            // FIN 交付判定をデータ借用より先に行う
+            // (データ借用が生きている間に mark_fin_sent で可変化できないため)
+            if stream.has_fin_pending() {
+                // FIN 交付と同時に送信済みをマークし、2 回目以降は交付しない
+                // (FIN は交付時点で確定し、QUIC への書き込み失敗時の再交付はない)
+                stream.mark_fin_sent();
+                // fin=true はデータ全消費後にのみ交付されるためデータは必ず空
+                return Some((&[], true));
+            }
+            let (data, _) = stream.get_send_data();
+            if !data.is_empty() {
+                return Some((data, false));
             }
         }
 
@@ -1494,8 +1511,11 @@ impl Connection {
     /// `get_stream_data()` + `consume_stream_data()` を一度に行う convenience メソッド。
     /// データがない場合は `None` を返す。
     ///
-    /// ストリームの送信バッファにある全データを 1 回の呼び出しで返す。
-    /// ループで繰り返し呼ぶ必要はない。
+    /// FIN を設定していないストリームでは送信バッファの全データが 1 回の呼び出しで返る。
+    /// FIN を設定済みのストリームでは、データが全て返った後の追加呼び出しで
+    /// `(空, fin=true)` が返り、FIN 交付後は `None` を返す (FIN は 1 回だけ交付される)。
+    /// 送信方向クローズ (FIN) を QUIC 層へ渡すためにはデータ消費後にもう一度呼び出すこと
+    /// (RFC 9114 Section 4.1)。
     pub fn take_stream_data(&mut self, stream_id: u64) -> Option<(Vec<u8>, bool)> {
         let (data, fin) = self.get_stream_data(stream_id)?;
         if data.is_empty() && !fin {
@@ -1508,6 +1528,10 @@ impl Connection {
     }
 
     /// ストリームの送信データを消費
+    ///
+    /// FIN の交付はこのメソッドでは行われず、データ消費後に `get_stream_data` /
+    /// `take_stream_data` を再度呼び出したときに `fin=true` で交付される
+    /// (RFC 9114 Section 4.1)。
     pub fn consume_stream_data(&mut self, stream_id: u64, len: usize) {
         // 制御ストリーム
         if self.control_send.stream_id() == Some(stream_id) {
@@ -1533,8 +1557,11 @@ impl Connection {
         }
     }
 
-    /// ストリームの FIN 送信完了を通知
     /// リクエストを送信 (クライアント専用)
+    ///
+    /// `fin=true` の場合は送信方向クローズ (FIN) を設定する。FIN はデータが全て
+    /// 消費された後に `get_stream_data` / `take_stream_data` の追加呼び出しで交付される
+    /// (RFC 9114 Section 4.1)。
     pub(crate) fn send_request(&mut self, headers: &[Header], fin: bool) -> Result<u64, Error> {
         if self.role != Role::Client {
             return Err(Error::ConnectionError(ErrorCode::InternalError));

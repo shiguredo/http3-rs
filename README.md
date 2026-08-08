@@ -56,9 +56,17 @@ let stream_id = conn.send_request(&[
     Header::new(b":authority", b"example.com"),
 ], true).unwrap();
 
-// 送信データを取得して QUIC で送信
-if let Some((data, fin)) = conn.get_stream_data(stream_id) {
-    // quic.send_stream_data(stream_id, &data, fin);
+// 送信データを取得して QUIC で送信 (FIN はデータ消費後の追加呼び出しで交付される)
+loop {
+    if let Some((data, fin)) = conn.get_stream_data(stream_id) {
+        // quic.send_stream_data(stream_id, &data, fin);
+        conn.consume_stream_data(stream_id, data.len());
+        if fin {
+            break;
+        }
+    } else {
+        break;
+    }
 }
 
 // QUIC からデータを受信
@@ -112,9 +120,17 @@ while let Some(event) = conn.poll_event().unwrap() {
     }
 }
 
-// 送信データを取得して QUIC で送信
-if let Some((data, fin)) = conn.get_stream_data(stream_id) {
-    // quic.send_stream_data(stream_id, &data, fin);
+// 送信データを取得して QUIC で送信 (FIN はデータ消費後の追加呼び出しで交付される)
+loop {
+    if let Some((data, fin)) = conn.get_stream_data(stream_id) {
+        // quic.send_stream_data(stream_id, &data, fin);
+        conn.consume_stream_data(stream_id, data.len());
+        if fin {
+            break;
+        }
+    } else {
+        break;
+    }
 }
 ```
 

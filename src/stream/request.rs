@@ -393,11 +393,20 @@ impl RequestStream {
     }
 
     /// 送信データを取得
+    ///
+    /// FIN はデータが全て消費された後の追加呼び出しで `(空, true)` として交付される
+    /// (RFC 9114 Section 4.1: ストリームの送信方向クローズ)。
+    /// FIN の交付条件は「FIN 設定済み && データ全消費済み && 未交付 (`!fin_sent`)」であり、
+    /// 交付済み (`fin_sent`) の場合は FIN を返さない (FIN は 1 回だけ交付される)。
     pub fn get_send_data(&self) -> (&[u8], bool) {
-        (
-            self.send_buf.peek(),
-            self.send_buf.is_fin() && !self.send_buf.has_pending(),
-        )
+        (self.send_buf.peek(), self.has_fin_pending())
+    }
+
+    /// FIN を交付すべきかどうか (FIN 設定済み && データ全消費済み && 未交付)
+    ///
+    /// FIN はデータ全消費後にのみ交付されるため、true のとき送信データは必ず空。
+    pub fn has_fin_pending(&self) -> bool {
+        self.send_buf.is_fin() && self.send_buf.is_data_consumed() && !self.send_buf.is_fin_sent()
     }
 
     /// 送信データを消費
@@ -552,6 +561,43 @@ mod tests {
         let (data, _fin) = stream.get_send_data();
         assert!(!data.is_empty());
         // FIN は最後のデータ消費後に true になる
+    }
+
+    #[test]
+    fn test_request_stream_get_send_data_fin_delivery() {
+        // FIN はデータ全消費後の追加呼び出しで (空, fin=true) として交付される
+        // (RFC 9114 Section 4.1)
+        let mut stream = RequestStream::new(0);
+        let headers = vec![Header::new(b":method", b"POST").expect("test must succeed")];
+
+        // QPACK エンコード
+        let mut encoder = QpackEncoder::new();
+        let mut qpack_buf = vec![0u8; 4096];
+        let qpack_len = encoder
+            .encode(&mut qpack_buf, &headers, 0)
+            .expect("test must succeed");
+        qpack_buf.truncate(qpack_len);
+
+        stream
+            .send_encoded_headers(&qpack_buf, false, false)
+            .expect("test must succeed");
+        stream.send_body(b"hello", true).expect("test must succeed");
+
+        // データ消費前は fin=false (FIN はデータと同時に交付されない)
+        let (data, fin) = stream.get_send_data();
+        assert!(!data.is_empty());
+        assert!(!fin);
+
+        // 全データ消費後の追加呼び出しで (空, fin=true) が交付される
+        stream.consume_send_data(data.len());
+        let (data, fin) = stream.get_send_data();
+        assert!(data.is_empty());
+        assert!(fin);
+
+        // mark_fin_sent 後は FIN が交付されない (FIN は 1 回だけ)
+        stream.mark_fin_sent();
+        let (_, fin) = stream.get_send_data();
+        assert!(!fin);
     }
 
     #[test]

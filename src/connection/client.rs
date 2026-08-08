@@ -70,14 +70,20 @@ impl ClientConnection {
     }
 
     /// ストリームの送信データを取得
+    ///
+    /// FIN はデータが全て消費された後の追加呼び出しで `(空, fin=true)` として交付され、
+    /// 交付後は取得できない (FIN は 1 回だけ交付される)。(RFC 9114 Section 4.1)
     pub fn get_stream_data(&mut self, stream_id: u64) -> Option<(&[u8], bool)> {
         self.inner.get_stream_data(stream_id)
     }
 
     /// ストリームデータを取得して内部バッファから消費する
     ///
-    /// ストリームの送信バッファにある全データを 1 回の呼び出しで返す。
-    /// ループで繰り返し呼ぶ必要はない。
+    /// FIN を設定していないストリームでは送信バッファの全データが 1 回の呼び出しで返る。
+    /// FIN を設定済みのストリームでは、データが全て返った後の追加呼び出しで
+    /// `(空, fin=true)` が返り、FIN 交付後は `None` を返す (FIN は 1 回だけ交付される)。
+    /// 送信方向クローズ (FIN) を QUIC 層へ渡すためにはデータ消費後にもう一度呼び出すこと
+    /// (RFC 9114 Section 4.1)。
     pub fn take_stream_data(&mut self, stream_id: u64) -> Option<(Vec<u8>, bool)> {
         self.inner.take_stream_data(stream_id)
     }
@@ -91,11 +97,19 @@ impl ClientConnection {
     ///
     /// 新しいストリームを作成し、ヘッダーを送信。
     /// ストリーム ID を返す。
+    ///
+    /// `fin=true` の場合は送信方向クローズ (FIN) を設定する。FIN はデータが全て
+    /// 消費された後に `get_stream_data` / `take_stream_data` を再度呼び出したときに
+    /// 交付される (RFC 9114 Section 4.1)。
     pub fn send_request(&mut self, headers: &[Header], fin: bool) -> Result<u64, Error> {
         self.inner.send_request(headers, fin)
     }
 
     /// ボディを送信
+    ///
+    /// `fin=true` の場合は送信方向クローズ (FIN) を設定する。FIN はデータが全て
+    /// 消費された後に `get_stream_data` / `take_stream_data` を再度呼び出したときに
+    /// 交付される (RFC 9114 Section 4.1)。
     pub fn send_body(&mut self, stream_id: u64, data: &[u8], fin: bool) -> Result<(), Error> {
         self.inner.send_body(stream_id, data, fin)
     }
