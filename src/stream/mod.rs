@@ -199,6 +199,18 @@ impl SendBuffer {
         }
     }
 
+    /// 送信待ちデータと FIN を破棄する
+    ///
+    /// STOP_SENDING 受信時など、送信方向が閉じられて以降のデータを送れない
+    /// 状態になった場合に使用する。破棄後は `is_data_consumed` が true になるため、
+    /// 両方向クローズ後に `Connection::remove_stream_if_done` で除去される。
+    pub fn discard(&mut self) {
+        self.data.clear();
+        self.consumed = 0;
+        self.fin = false;
+        self.fin_sent = false;
+    }
+
     /// 送信待ちデータがあるか (FIN-only も含む)
     pub fn has_pending(&self) -> bool {
         self.consumed < self.data.len() || (self.fin && !self.fin_sent)

@@ -212,6 +212,15 @@ pub struct Connection {
     /// セッションのライフサイクルと関連ストリームを追跡する。
     /// (draft-ietf-webtrans-http3-15 Section 3, 4.6, 6)
     wt_sessions: HashMap<u64, WtSession>,
+    /// 終了済み WebTransport セッション ID (tombstone)
+    ///
+    /// セッション終了時に `wt_sessions` から除去したエントリの ID を記録し、
+    /// 終了後に届く DATA / FIN / RESET / 新規ストリーム / データグラムの拒否・破棄に
+    /// 使う (zombie Pending セッションの再生成を防ぐ)。
+    /// セッション ID のみの軽量な記録であり、接続終了まで保持する
+    /// (元の WtSession エントリは解放される)。
+    /// (draft-ietf-webtrans-http3-16 Section 6)
+    closed_wt_sessions: HashSet<u64>,
     /// エンコーダーストリーム初期化前に受信した SET_CAPACITY 値
     ///
     /// peer SETTINGS がエンコーダーストリーム ID 設定前に到着した場合に
@@ -349,6 +358,7 @@ impl Connection {
             pending_wt_bidi_streams: HashMap::new(),
             pending_bidi_dispatch: HashMap::new(),
             wt_sessions: HashMap::new(),
+            closed_wt_sessions: HashSet::new(),
             wt_transport_verified: false,
             wt_reset_stream_at_supported: false,
             deferred_encoder_set_capacity: None,
@@ -562,6 +572,30 @@ impl Connection {
         &mut self.qpack_dynamic_decoder
     }
 
+    /// ストリームが終了条件を満たした場合に `streams` から除去する
+    ///
+    /// 除去条件は次の 3 つ (RFC 9114 Section 4.1 / 4.1.1):
+    /// - Reset になった場合 (RESET_STREAM 受信。ローカル送信データは破棄する)
+    /// - `StreamState::Closed` (両方向クローズ) かつ送信バッファ完全消費済み
+    ///   (FIN 交付済み)。データ全消費時点では除去しない (FIN 交付のための
+    ///   追加呼び出しが残っているため)
+    /// - セッション終了済み (tombstone) の CONNECT ストリーム。CONNECT ストリームは
+    ///   セッション中 FIN を送らず受信側も open のままのため、両方向クローズに
+    ///   到達しないケースがあり、セッション終了を除去トリガにする
+    ///   (RFC 9114 Section 4.4 / draft-ietf-webtrans-http3-16 Section 6)
+    ///
+    /// StreamEnd (受信側 FIN) 時点や STOP_SENDING 受信時点では除去しない
+    /// (サーバーが応答を送る必要がある / 受信側が open のままのため)。
+    fn remove_stream_if_done(&mut self, stream_id: u64) {
+        let done = self.streams.get(&stream_id).is_some_and(|s| {
+            s.state() == StreamState::Reset
+                || (s.state() == StreamState::Closed && s.is_send_complete())
+        });
+        if done || self.closed_wt_sessions.contains(&stream_id) {
+            self.streams.remove(&stream_id);
+        }
+    }
+
     /// QUIC からストリームデータを受信
     pub fn feed_stream(&mut self, stream_id: u64, data: &[u8], fin: bool) -> Result<(), Error> {
         if let Some(ref err) = self.error {
@@ -614,7 +648,13 @@ impl Connection {
         }
 
         // 双方向ストリーム (リクエスト/レスポンス)
-        self.handle_bidirectional_stream(stream_id, data, fin)?;
+        let result = self.handle_bidirectional_stream(stream_id, data, fin);
+
+        // ストリームが両方向クローズ + 送信完了済みなら除去する
+        // (受信経路からも除去条件を満たすことがあるため。エラー経路でも
+        //  セッション終了 (tombstone) 済みの CONNECT ストリームは除去する)
+        self.remove_stream_if_done(stream_id);
+        result?;
         Ok(())
     }
 
@@ -1179,6 +1219,17 @@ impl Connection {
         data: &[u8],
         fin: bool,
     ) -> Result<(), Error> {
+        // 終了済みセッション (tombstone) の CONNECT ストリームへの遅延 DATA は
+        // H3_MESSAGE_ERROR で拒否する (zombie Pending セッションの再生成を防ぐ)。
+        // FIN のみの場合は受理して何もしない (正常な終了手順のため)。
+        // (draft-ietf-webtrans-http3-16 Section 6)
+        if self.closed_wt_sessions.contains(&stream_id) {
+            if data.is_empty() && fin {
+                return Ok(());
+            }
+            return Err(Error::StreamError(ErrorCode::MessageError));
+        }
+
         // ストリームを取得または作成
         self.streams
             .entry(stream_id)
@@ -1302,10 +1353,19 @@ impl Connection {
                     // 0077 Phase 5: WT 分岐を wt_capsule.rs のヘルパーに委譲
                     self.handle_wt_stream_end(stream_id)?;
 
-                    self.events.push_back(Event::StreamEnd { stream_id });
+                    // 終了済みセッション (tombstone) の CONNECT ストリームの FIN は
+                    // 受理するが汎用 StreamEnd イベントは発行しない
+                    // (draft-ietf-webtrans-http3-16 Section 6)
+                    if !self.closed_wt_sessions.contains(&stream_id) {
+                        self.events.push_back(Event::StreamEnd { stream_id });
+                    }
                 }
             }
         }
+
+        // ループ外で除去チェックを行う (ループ内で除去すると
+        // `expect("stream must exist while processing frames")` が panic する)
+        self.remove_stream_if_done(stream_id);
 
         Ok(())
     }
@@ -1554,6 +1614,10 @@ impl Connection {
         // リクエストストリーム
         if let Some(stream) = self.streams.get_mut(&stream_id) {
             stream.consume_send_data(len);
+            // データ消費後に両方向クローズ + 送信完了済みなら除去する
+            // (クライアントは送信完了後に take_stream_data を呼び直さないため、
+            //  受信経路のチェックが必須だが、送信経路でも除去条件を満たし得る)
+            self.remove_stream_if_done(stream_id);
         }
     }
 
@@ -1613,6 +1677,12 @@ impl Connection {
         qpack_buf.truncate(qpack_len);
 
         let mut stream = RequestStream::new(stream_id);
+        // WebTransport CONNECT の場合は WT CONNECT フラグを設定する
+        // (DATA を recv_body に累積しない。Capsule データは handle_wt_data_frame が処理する)
+        let is_wt_connect = is_webtransport_connect(headers);
+        if is_wt_connect {
+            stream.set_wt_connect();
+        }
         // HEAD リクエストの場合は Content-Length 検証でのレスポンス body チェックをスキップする
         if headers
             .iter()
@@ -1648,7 +1718,7 @@ impl Connection {
 
         // WebTransport CONNECT の場合、セッションを Pending 状態で登録
         // (draft-ietf-webtrans-http3-15 Section 3)
-        if is_webtransport_connect(headers) {
+        if is_wt_connect {
             let mut session = WtSession::new();
             // WT-Available-Protocols を保存 (Section 3.3)
             for h in headers {
@@ -1817,15 +1887,7 @@ impl Connection {
             state.reset();
         }
         // QPACK ブロック状態をクリアする
-        if let Some(stream) = self.streams.get(&stream_id)
-            && stream.is_qpack_blocked()
-        {
-            let ricnt = stream.qpack_ricnt();
-            self.blocked_by_ricnt.remove(&(ricnt, stream_id));
-        }
-        if let Some(stream) = self.streams.get_mut(&stream_id) {
-            stream.set_qpack_blocked(false, 0, None);
-        }
+        self.clear_qpack_blocked(stream_id);
         // QPACK Stream Cancellation を送信 (RFC 9204 Section 2.2.2.2)
         // max_dynamic_table_capacity が 0 の場合は省略可能
         self.send_stream_cancellation_if_needed(stream_id);
@@ -1840,7 +1902,32 @@ impl Connection {
             });
         }
 
+        // Reset になった時点で除去する。ピア RESET 後は QUIC 層が追加データを
+        // 配達しないため、feed_stream の出口や process_stream_frames のループ後
+        // チェックでは発火しない。送信バッファに未交付のローカル送信データが
+        // ある場合は破棄する (RFC 9114 Section 4.1.1 の未クローズ方向の急停止
+        // SHOULD。RFC 9000 Section 4.4 により送信方向は RESET の影響を受けず
+        // 維持されるが、キャンセル時は送信を継続しない)
+        self.remove_stream_if_done(stream_id);
+
         Ok(())
+    }
+
+    /// QPACK ブロック状態と `blocked_by_ricnt` エントリをクリアする
+    ///
+    /// `stream_reset` / `stop_sending` の共通処理。ブロック中ストリームの
+    /// ricnt エントリが残ると、`blocked_by_ricnt` の上限チェック
+    /// (QPACK_DECOMPRESSION_FAILED 接続エラー) にカウントされ続けるため除去する。
+    fn clear_qpack_blocked(&mut self, stream_id: u64) {
+        if let Some(stream) = self.streams.get(&stream_id)
+            && stream.is_qpack_blocked()
+        {
+            let ricnt = stream.qpack_ricnt();
+            self.blocked_by_ricnt.remove(&(ricnt, stream_id));
+        }
+        if let Some(stream) = self.streams.get_mut(&stream_id) {
+            stream.set_qpack_blocked(false, 0, None);
+        }
     }
 
     /// QUIC から STOP_SENDING 受信時に呼ぶ
@@ -1861,7 +1948,17 @@ impl Connection {
         if let Some(stream) = self.streams.get_mut(&stream_id) {
             let state = stream.state_mut();
             state.close_local();
+            // STOP_SENDING は送信停止の要求であり、以後データを送れないため
+            // 送信バッファを破棄する (RFC 9000 Section 3.5)。
+            // 破棄しないと両方向クローズ後も is_send_complete が false のまま
+            // ストリームが除去されず残留する。
+            // なお STOP_SENDING への RESET_STREAM 応答 (RFC 9000 Section 3.5)
+            // は統合層の責務であり、統合層は Event::StopSending を受けて
+            // 送信ストリームをリセットすること
+            stream.discard_send_data();
         }
+        // QPACK ブロック状態をクリアする (stream_reset と同じ)
+        self.clear_qpack_blocked(stream_id);
         // QPACK Stream Cancellation を送信 (RFC 9204 Section 2.2.2.2)
         self.send_stream_cancellation_if_needed(stream_id);
 
@@ -1873,6 +1970,8 @@ impl Connection {
                 error_code,
             });
         }
+        // セッション終了済み (tombstone) の CONNECT ストリームを除去する
+        self.remove_stream_if_done(stream_id);
         Ok(())
     }
 
@@ -3193,6 +3292,56 @@ mod tests {
         (client, server)
     }
 
+    /// クライアント・サーバー間で WT CONNECT ハンドシェイクを完了させるヘルパー
+    ///
+    /// サーバー側セッションが Established になる。戻り値は CONNECT stream ID。
+    fn establish_wt_session(client: &mut Connection, server: &mut Connection) -> u64 {
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
+        ];
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
+        let (req_data, _) = client
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
+        server
+            .feed_stream(stream_id, &req_data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        let response = vec![Header::new(b":status", b"200").expect("test must succeed")];
+        server
+            .send_response(stream_id, &response, false)
+            .expect("test must succeed");
+        let (resp_data, _) = server
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
+        client
+            .feed_stream(stream_id, &resp_data, false)
+            .expect("test must succeed");
+        let _ = client.drain_events().expect("test must succeed");
+
+        stream_id
+    }
+
+    /// WT_CLOSE_SESSION カプセルを DATA フレームとしてエンコードするヘルパー
+    fn close_session_data_frame() -> Vec<u8> {
+        let mut capsule = Vec::new();
+        crate::webtransport::Capsule::CloseSession {
+            error_code: 0,
+            message: String::new(),
+        }
+        .encode(&mut capsule);
+        let mut data = vec![0x00, capsule.len() as u8];
+        data.extend_from_slice(&capsule);
+        data
+    }
+
     #[test]
     fn test_wt_session_registered_on_connect_send() {
         let (mut client, _server) = setup_wt_pair();
@@ -3433,10 +3582,10 @@ mod tests {
         });
         assert!(closed_event.is_some());
 
-        // セッションが Closed 状態であること
-        assert_eq!(
-            client.wt_sessions[&session_id].state,
-            WtSessionState::Closed
+        // セッションエントリが除去されていること (tombstone に記録される)
+        assert!(
+            !client.wt_sessions.contains_key(&session_id),
+            "セッション終了後は wt_sessions から除去されること"
         );
     }
 
@@ -3487,7 +3636,18 @@ mod tests {
             Event::WebTransport(WebTransportEvent::SessionClosed { session_id: sid, .. }) if *sid == stream_id
         )));
 
-        assert_eq!(client.wt_sessions[&stream_id].state, WtSessionState::Closed);
+        assert!(
+            !client.wt_sessions.contains_key(&stream_id),
+            "セッション終了後は wt_sessions から除去されること"
+        );
+        assert!(
+            !client.streams.contains_key(&stream_id),
+            "セッション終了後は CONNECT ストリームも streams から除去されること"
+        );
+        assert!(
+            client.closed_wt_sessions.contains(&stream_id),
+            "終了済みセッション ID が tombstone に記録されること"
+        );
     }
 
     #[test]
@@ -3734,9 +3894,9 @@ mod tests {
             event,
             Event::WebTransport(WebTransportEvent::SessionClosed { session_id: 0, .. })
         ));
-        assert_eq!(
-            conn.wt_sessions.get(&0).expect("test must succeed").state,
-            WtSessionState::Closed
+        assert!(
+            !conn.wt_sessions.contains_key(&0),
+            "セッション終了後は wt_sessions から除去されること"
         );
     }
 
@@ -3949,9 +4109,9 @@ mod tests {
         conn.process_wt_capsule_data(0, &payload)
             .expect("test must succeed");
 
-        assert_eq!(
-            conn.wt_sessions.get(&0).expect("test must succeed").state,
-            WtSessionState::Closed
+        assert!(
+            !conn.wt_sessions.contains_key(&0),
+            "セッション終了後は wt_sessions から除去されること"
         );
     }
 
@@ -4072,6 +4232,756 @@ mod tests {
         assert_eq!(
             stream_id, 0,
             "WebTransport CONNECT で fin=false は成功すること"
+        );
+    }
+
+    // =========================================================================
+    // ストリーム / WT セッションのリーク防止 (終了時の除去)
+    // =========================================================================
+
+    #[test]
+    fn test_streams_removed_after_request_completion() {
+        // リクエスト完走 → レスポンス送信完了で両方向クローズ + 送信完了になり、
+        // クライアント / サーバー双方の streams から除去されることを検証する
+        let mut client = Connection::client(Settings::default());
+        client.set_control_stream_id(2).expect("test must succeed");
+        let mut server = Connection::server(Settings::default());
+        server.set_control_stream_id(3).expect("test must succeed");
+
+        // 制御ストリームの SETTINGS 交換
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+        let (server_ctrl, _) = server.take_stream_data(3).expect("test must succeed");
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("test must succeed");
+        let _ = client.drain_events().expect("test must succeed");
+
+        let headers = vec![
+            Header::new(b":method", b"GET").expect("test must succeed"),
+            Header::new(b":path", b"/").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+        ];
+        let stream_id = client
+            .send_request(&headers, true)
+            .expect("test must succeed");
+
+        // リクエストデータ + FIN をサーバーに送る (FIN はデータ消費後の追加呼び出しで交付される)
+        let mut req_data = Vec::new();
+        while let Some((data, fin)) = client.take_stream_data(stream_id) {
+            req_data.extend_from_slice(&data);
+            if fin {
+                break;
+            }
+        }
+        server
+            .feed_stream(stream_id, &req_data, true)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        // サーバーがレスポンスを送信 (実運用と同じ send_response + send_body 経路)
+        let response = vec![Header::new(b":status", b"200").expect("test must succeed")];
+        server
+            .send_response(stream_id, &response, false)
+            .expect("test must succeed");
+        server
+            .send_body(stream_id, b"hello", true)
+            .expect("test must succeed");
+        let mut resp_data = Vec::new();
+        while let Some((data, fin)) = server.take_stream_data(stream_id) {
+            resp_data.extend_from_slice(&data);
+            if fin {
+                break;
+            }
+        }
+        client
+            .feed_stream(stream_id, &resp_data, true)
+            .expect("test must succeed");
+        let _ = client.drain_events().expect("test must succeed");
+
+        // 両側で streams から除去されていること
+        assert!(
+            !client.streams.contains_key(&stream_id),
+            "クライアント側: 両方向クローズ + 送信完了でストリームが除去されること"
+        );
+        assert!(
+            !server.streams.contains_key(&stream_id),
+            "サーバー側: 両方向クローズ + 送信完了でストリームが除去されること"
+        );
+    }
+
+    #[test]
+    fn test_streams_removed_on_reset() {
+        // stream_reset でストリームが Reset になり、streams から即時除去されることを検証する
+        let mut client = Connection::client(Settings::default());
+        client.set_control_stream_id(2).expect("test must succeed");
+
+        let headers = vec![
+            Header::new(b":method", b"GET").expect("test must succeed"),
+            Header::new(b":path", b"/").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+        ];
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
+        assert!(client.streams.contains_key(&stream_id));
+
+        client
+            .stream_reset(stream_id, 0, 0)
+            .expect("test must succeed");
+
+        assert!(
+            !client.streams.contains_key(&stream_id),
+            "Reset 後は streams から除去されること"
+        );
+    }
+
+    #[test]
+    fn test_wt_session_end_removes_connect_stream() {
+        // セッション終了 (CONNECT stream の FIN) で wt_sessions と streams の
+        // 両方から CONNECT ストリームが除去され、tombstone に記録されることを検証する
+        let (mut client, mut server) = setup_wt_pair();
+        let stream_id = establish_wt_session(&mut client, &mut server);
+        assert!(server.wt_sessions.contains_key(&stream_id));
+
+        // クライアントが CONNECT stream を FIN で閉じる (セッション終了)
+        client
+            .feed_stream(stream_id, &[], true)
+            .expect("test must succeed");
+        let _ = client.drain_events().expect("test must succeed");
+
+        assert!(
+            !client.wt_sessions.contains_key(&stream_id),
+            "セッション終了後は wt_sessions から除去されること"
+        );
+        assert!(
+            !client.streams.contains_key(&stream_id),
+            "セッション終了後は CONNECT ストリームも streams から除去されること"
+        );
+        assert!(
+            client.closed_wt_sessions.contains(&stream_id),
+            "終了済みセッション ID が tombstone に記録されること"
+        );
+    }
+
+    #[test]
+    fn test_wt_connect_data_after_session_close_rejected() {
+        // WT_CLOSE_SESSION を含む DATA と同一バッファに続く追加 DATA は
+        // H3_MESSAGE_ERROR で拒否されることを検証する
+        // (draft-ietf-webtrans-http3-16 Section 6)
+        let (mut client, mut server) = setup_wt_pair();
+        let stream_id = establish_wt_session(&mut client, &mut server);
+
+        let mut data = close_session_data_frame();
+        // セッション終了後の追加 DATA (同一 feed_stream バッファ内)
+        data.extend_from_slice(&[0x00, 0x02, 0xAA, 0xBB]);
+
+        let err = server.feed_stream(stream_id, &data, false).unwrap_err();
+        assert!(
+            matches!(err, Error::StreamError(ErrorCode::MessageError)),
+            "WT_CLOSE_SESSION 後の追加 DATA は H3_MESSAGE_ERROR であること: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_wt_connect_fin_after_session_close_ignored() {
+        // WT_CLOSE_SESSION を含む DATA と同一バッファに続く FIN は受理され、
+        // 汎用 StreamEnd イベントを発行しないことを検証する
+        // (draft-ietf-webtrans-http3-16 Section 6: WT_CLOSE_SESSION 送信後に
+        //  MUST immediately send a FIN)
+        let (mut client, mut server) = setup_wt_pair();
+        let stream_id = establish_wt_session(&mut client, &mut server);
+
+        let data = close_session_data_frame();
+        server
+            .feed_stream(stream_id, &data, true)
+            .expect("test must succeed");
+        let events = server.drain_events().expect("test must succeed");
+
+        // SessionClosed イベントは発行される
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::WebTransport(WebTransportEvent::SessionClosed { session_id, .. })
+                if *session_id == stream_id
+        )));
+        // 汎用 StreamEnd イベントは発行されない
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::StreamEnd { stream_id: sid } if *sid == stream_id
+        )));
+        // セッションと CONNECT ストリームが除去されている
+        assert!(!server.wt_sessions.contains_key(&stream_id));
+        assert!(!server.streams.contains_key(&stream_id));
+    }
+
+    #[test]
+    fn test_wt_connect_recv_body_not_accumulated() {
+        // WT CONNECT ストリームの DATA は Capsule データであり、
+        // recv_body に累積されないことを検証する
+        // (転送量に比例したメモリ消費を防ぐ)
+        let (mut client, mut server) = setup_wt_pair();
+        let stream_id = establish_wt_session(&mut client, &mut server);
+
+        // WT CONNECT フラグが立っていること
+        assert!(
+            server
+                .streams
+                .get(&stream_id)
+                .expect("test must succeed")
+                .is_wt_connect()
+        );
+
+        // 無視される Unknown Capsule (type=0x01, len=2, payload=[0xAA, 0xBB])
+        // を DATA フレームとして送る
+        let data = [0x00, 0x04, 0x01, 0x02, 0xAA, 0xBB];
+        server
+            .feed_stream(stream_id, &data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        // recv_body に累積されないこと
+        assert!(
+            server
+                .streams
+                .get(&stream_id)
+                .expect("test must succeed")
+                .received_body()
+                .is_empty(),
+            "WT CONNECT の DATA は recv_body に累積されないこと"
+        );
+    }
+
+    #[test]
+    fn test_wt_connect_with_content_length_rejected() {
+        // content-length ヘッダー付きの WT CONNECT は送信時に H3_MESSAGE_ERROR で拒否される
+        // (RFC 9297 Section 3.2: Capsule Protocol との併用は MUST NOT)
+        let (mut client, _server) = setup_wt_pair();
+
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
+            Header::new(b"content-length", b"0").expect("test must succeed"),
+        ];
+        let err = client.send_request(&headers, false).unwrap_err();
+        assert!(
+            matches!(err, Error::StreamError(ErrorCode::MessageError)),
+            "content-length 付き WT CONNECT は送信時に拒否されること: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_wt_connect_response_with_content_length_rejected() {
+        // content-length ヘッダー付きの WT CONNECT レスポンスは送信時に
+        // H3_MESSAGE_ERROR で拒否される
+        // (RFC 9297 Section 3.2: Capsule Protocol との併用は MUST NOT)
+        let (mut client, mut server) = setup_wt_pair();
+
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
+        ];
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
+        let (req_data, _) = client
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
+        server
+            .feed_stream(stream_id, &req_data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        let response = vec![
+            Header::new(b":status", b"200").expect("test must succeed"),
+            Header::new(b"content-length", b"0").expect("test must succeed"),
+        ];
+        let err = server
+            .send_response(stream_id, &response, false)
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::StreamError(ErrorCode::MessageError)),
+            "content-length 付き WT CONNECT レスポンスは送信時に拒否されること: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_wt_datagram_after_session_close_dropped() {
+        // セッション終了後に届いたデータグラムは破棄され、
+        // zombie Pending セッションを再生成しないことを検証する
+        let (mut client, mut server) = setup_wt_pair();
+        let stream_id = establish_wt_session(&mut client, &mut server);
+
+        // サーバー側セッションを WT_CLOSE_SESSION で終了する
+        let data = close_session_data_frame();
+        server
+            .feed_stream(stream_id, &data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+        assert!(server.closed_wt_sessions.contains(&stream_id));
+
+        // 終了後セッションへの HTTP Datagram (quarter stream id + payload)
+        let mut datagram = Vec::new();
+        crate::varint::encode_into_vec(
+            &mut datagram,
+            crate::varint::VarInt::new(stream_id / 4).expect("test must succeed"),
+        );
+        datagram.push(0xAA);
+        server.feed_datagram(&datagram).expect("test must succeed");
+
+        assert!(
+            !server.wt_sessions.contains_key(&stream_id),
+            "終了後セッションへのデータグラムで zombie セッションが再生成されないこと"
+        );
+    }
+
+    #[test]
+    fn test_wt_uni_stream_after_session_close_rejected() {
+        // セッション終了後に届いた新規 WT uni stream は拒否され、
+        // zombie Pending セッションを再生成しないことを検証する
+        let (mut client, mut server) = setup_wt_pair();
+        let stream_id = establish_wt_session(&mut client, &mut server);
+
+        // サーバー側セッションを WT_CLOSE_SESSION で終了する
+        let data = close_session_data_frame();
+        server
+            .feed_stream(stream_id, &data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+        assert!(server.closed_wt_sessions.contains(&stream_id));
+
+        // 終了済みセッション ID (stream_id) 宛の新規 uni stream
+        // (draft-ietf-webtrans-http3-16 Section 6: セッション終了後の追加データ)
+        // stream_id 6 は client-initiated uni stream (2 はクライアント制御ストリーム)
+        let mut uni_data = vec![0x40, 0x54]; // stream type 0x54 (varint)
+        uni_data.push(stream_id as u8); // session_id (1 バイト varint)
+        uni_data.push(0xAA);
+        server
+            .feed_stream(6, &uni_data, false)
+            .expect("test must succeed");
+        let events = server.drain_events().expect("test must succeed");
+
+        // WT_SESSION_GONE で拒否される
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::WebTransport(WebTransportEvent::BufferedStreamRejected { .. })
+        )));
+        assert!(
+            !server.wt_sessions.contains_key(&stream_id),
+            "終了済みセッションへの新規ストリームで zombie セッションが再生成されないこと"
+        );
+    }
+
+    #[test]
+    fn test_wt_reset_after_session_close_ignored() {
+        // セッション終了後に届いた RESET_STREAM は静かに無視され、
+        // 汎用 StreamReset イベントを発行しないことを検証する
+        // (RFC 9000 Section 4.4: RESET_STREAM 受信時は以降のデータを無視する)
+        let (mut client, mut server) = setup_wt_pair();
+        let stream_id = establish_wt_session(&mut client, &mut server);
+
+        // サーバー側セッションを WT_CLOSE_SESSION で終了する
+        let data = close_session_data_frame();
+        server
+            .feed_stream(stream_id, &data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        // 終了後の RESET_STREAM はエラーにならず、イベントも発行されない
+        server
+            .stream_reset(stream_id, 0, 0)
+            .expect("test must succeed");
+        let events = server.drain_events().expect("test must succeed");
+        assert!(
+            !events.iter().any(
+                |e| matches!(e, Event::StreamReset { stream_id: sid, .. } if *sid == stream_id)
+            ),
+            "終了後セッションへの RESET は汎用 StreamReset イベントを発行しないこと"
+        );
+        assert!(
+            !server.wt_sessions.contains_key(&stream_id),
+            "終了後の RESET で zombie セッションが再生成されないこと"
+        );
+    }
+
+    #[test]
+    fn test_wt_session_terminated_on_stop_sending() {
+        // CONNECT stream への STOP_SENDING でセッション終了し、
+        // wt_sessions と streams の両方から除去されることを検証する
+        let (mut client, mut server) = setup_wt_pair();
+        let stream_id = establish_wt_session(&mut client, &mut server);
+
+        server
+            .stop_sending(stream_id, 0)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        assert!(
+            !server.wt_sessions.contains_key(&stream_id),
+            "STOP_SENDING でセッションが終了し wt_sessions から除去されること"
+        );
+        assert!(
+            !server.streams.contains_key(&stream_id),
+            "STOP_SENDING で CONNECT ストリームも streams から除去されること"
+        );
+        assert!(
+            server.closed_wt_sessions.contains(&stream_id),
+            "終了済みセッション ID が tombstone に記録されること"
+        );
+    }
+
+    #[test]
+    fn test_wt_connect_late_data_after_session_close_rejected() {
+        // セッション終了後の別呼び出しで CONNECT ストリームに DATA が届くと
+        // H3_MESSAGE_ERROR、FIN のみは受理されることを検証する
+        // (draft-ietf-webtrans-http3-16 Section 6)
+        let (mut client, mut server) = setup_wt_pair();
+        let stream_id = establish_wt_session(&mut client, &mut server);
+
+        // セッション終了
+        let data = close_session_data_frame();
+        server
+            .feed_stream(stream_id, &data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        // 遅延 DATA は H3_MESSAGE_ERROR
+        let err = server
+            .feed_stream(stream_id, &[0x00, 0x02, 0xAA, 0xBB], false)
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::StreamError(ErrorCode::MessageError)),
+            "終了後の遅延 DATA は H3_MESSAGE_ERROR であること: {err:?}"
+        );
+
+        // FIN のみは受理され、汎用 StreamEnd は発行されない
+        server
+            .feed_stream(stream_id, &[], true)
+            .expect("test must succeed");
+        let events = server.drain_events().expect("test must succeed");
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::StreamEnd { stream_id: sid } if *sid == stream_id
+        )));
+        assert!(
+            !server.streams.contains_key(&stream_id),
+            "終了後の FIN で streams に再生成されないこと"
+        );
+    }
+
+    #[test]
+    fn test_wt_connect_client_recv_body_not_accumulated() {
+        // クライアント側でも WT CONNECT ストリームの DATA は recv_body に
+        // 累積されないことを検証する
+        let (mut client, mut server) = setup_wt_pair();
+        let stream_id = establish_wt_session(&mut client, &mut server);
+
+        // クライアント側の WT CONNECT フラグが立っていること
+        assert!(
+            client
+                .streams
+                .get(&stream_id)
+                .expect("test must succeed")
+                .is_wt_connect()
+        );
+
+        // 無視される Unknown Capsule を DATA フレームとして送る
+        let data = [0x00, 0x04, 0x01, 0x02, 0xAA, 0xBB];
+        client
+            .feed_stream(stream_id, &data, false)
+            .expect("test must succeed");
+        let _ = client.drain_events().expect("test must succeed");
+
+        assert!(
+            client
+                .streams
+                .get(&stream_id)
+                .expect("test must succeed")
+                .received_body()
+                .is_empty(),
+            "クライアント側でも WT CONNECT の DATA は recv_body に累積されないこと"
+        );
+    }
+
+    #[test]
+    fn test_wt_connect_request_with_content_type_rejected() {
+        // content-type ヘッダー付きの WT CONNECT は送信時に H3_MESSAGE_ERROR で拒否される
+        // (RFC 9297 Section 3.2: Capsule Protocol との併用は MUST NOT)
+        let (mut client, _server) = setup_wt_pair();
+
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
+            Header::new(b"content-type", b"text/plain").expect("test must succeed"),
+        ];
+        let err = client.send_request(&headers, false).unwrap_err();
+        assert!(
+            matches!(err, Error::StreamError(ErrorCode::MessageError)),
+            "content-type 付き WT CONNECT は送信時に拒否されること: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_wt_connect_response_with_content_type_rejected() {
+        // content-type ヘッダー付きの WT CONNECT レスポンスは送信時に
+        // H3_MESSAGE_ERROR で拒否される
+        // (RFC 9297 Section 3.2: Capsule Protocol との併用は MUST NOT)
+        let (mut client, mut server) = setup_wt_pair();
+
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
+        ];
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
+        let (req_data, _) = client
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
+        server
+            .feed_stream(stream_id, &req_data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        let response = vec![
+            Header::new(b":status", b"200").expect("test must succeed"),
+            Header::new(b"content-type", b"text/plain").expect("test must succeed"),
+        ];
+        let err = server
+            .send_response(stream_id, &response, false)
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::StreamError(ErrorCode::MessageError)),
+            "content-type 付き WT CONNECT レスポンスは送信時に拒否されること: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_wt_connect_response_204_rejected() {
+        // 204 (No Content) レスポンスは Capsule Protocol と併用できないため
+        // H3_MESSAGE_ERROR で拒否される (RFC 9297 Section 3.2)
+        let (mut client, mut server) = setup_wt_pair();
+
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
+        ];
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
+        let (req_data, _) = client
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
+        server
+            .feed_stream(stream_id, &req_data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        // サーバー側送信時点で 204 が拒否される (送信側も RFC 9297 Section 3.2)
+        let response = vec![Header::new(b":status", b"204").expect("test must succeed")];
+        let err = server
+            .send_response(stream_id, &response, false)
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::StreamError(ErrorCode::MessageError)),
+            "204 レスポンスは送信時に拒否されること: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_normal_204_response_accepted() {
+        // 通常 HTTP リクエストの 204 (No Content) レスポンスは拒否されないことを検証する
+        // (RFC 9297 Section 3.2 の 204/205/206 禁止は Capsule Protocol を使用する
+        //  レスポンスのみが対象)
+        let mut client = Connection::client(Settings::default());
+        client.set_control_stream_id(2).expect("test must succeed");
+        let mut server = Connection::server(Settings::default());
+        server.set_control_stream_id(3).expect("test must succeed");
+
+        // 制御ストリームの SETTINGS 交換
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+        let (server_ctrl, _) = server.take_stream_data(3).expect("test must succeed");
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("test must succeed");
+        let _ = client.drain_events().expect("test must succeed");
+
+        let headers = vec![
+            Header::new(b":method", b"DELETE").expect("test must succeed"),
+            Header::new(b":path", b"/item").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+        ];
+        let stream_id = client
+            .send_request(&headers, true)
+            .expect("test must succeed");
+        let mut req_data = Vec::new();
+        while let Some((data, fin)) = client.take_stream_data(stream_id) {
+            req_data.extend_from_slice(&data);
+            if fin {
+                break;
+            }
+        }
+        server
+            .feed_stream(stream_id, &req_data, true)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        // サーバーが通常の 204 レスポンスを送信
+        let response = vec![Header::new(b":status", b"204").expect("test must succeed")];
+        server
+            .send_response(stream_id, &response, true)
+            .expect("test must succeed");
+        let mut resp_data = Vec::new();
+        while let Some((data, fin)) = server.take_stream_data(stream_id) {
+            resp_data.extend_from_slice(&data);
+            if fin {
+                break;
+            }
+        }
+        // クライアントは 204 をエラーなく受信できること
+        client
+            .feed_stream(stream_id, &resp_data, true)
+            .expect("test must succeed");
+        let events = client.drain_events().expect("test must succeed");
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::HeadersEnd { stream_id: sid } if *sid == stream_id
+        )));
+    }
+
+    #[test]
+    fn test_send_buffer_discarded_on_stop_sending() {
+        // STOP_SENDING 受信で送信バッファが破棄され、writable_streams から
+        // 消えることを検証する
+        let mut client = Connection::client(Settings::default());
+        client.set_control_stream_id(2).expect("test must succeed");
+
+        // クライアントがリクエストを送信 (fin=false) し、一部だけ消費する
+        // (送信バッファに未消費データが残る状態を作る)
+        let headers = vec![
+            Header::new(b":method", b"POST").expect("test must succeed"),
+            Header::new(b":path", b"/").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+        ];
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
+        let (data, _) = client
+            .get_stream_data(stream_id)
+            .expect("test must succeed");
+        let half = data.len() / 2;
+        client.consume_stream_data(stream_id, half);
+        assert!(
+            client
+                .writable_streams()
+                .collect::<Vec<_>>()
+                .contains(&stream_id),
+            "未消費データが writable_streams に載っていること"
+        );
+
+        // サーバーが STOP_SENDING を送信 → クライアントが受信
+        client
+            .stop_sending(stream_id, 0)
+            .expect("test must succeed");
+        // 送信バッファが破棄されたこと (writable_streams から消える)
+        assert!(
+            !client
+                .writable_streams()
+                .collect::<Vec<_>>()
+                .contains(&stream_id),
+            "STOP_SENDING 受信後は送信データが破棄され writable_streams に残らないこと"
+        );
+    }
+
+    #[test]
+    fn test_streams_removed_after_stop_sending_and_peer_fin() {
+        // STOP_SENDING 受信後のレスポンス (FIN) で Closed になったストリームが
+        // 除去されることを検証する
+        let mut client = Connection::client(Settings::default());
+        client.set_control_stream_id(2).expect("test must succeed");
+        let mut server = Connection::server(Settings::default());
+        server.set_control_stream_id(3).expect("test must succeed");
+
+        // 制御ストリームの SETTINGS 交換
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+        let (server_ctrl, _) = server.take_stream_data(3).expect("test must succeed");
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("test must succeed");
+        let _ = client.drain_events().expect("test must succeed");
+
+        // クライアントがリクエストを送信 (fin=false) し、サーバーが受信
+        let headers = vec![
+            Header::new(b":method", b"POST").expect("test must succeed"),
+            Header::new(b":path", b"/").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+        ];
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
+        let (req_data, _) = client
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
+        server
+            .feed_stream(stream_id, &req_data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        // サーバーが STOP_SENDING を送信 → クライアントが受信
+        client
+            .stop_sending(stream_id, 0)
+            .expect("test must succeed");
+
+        // サーバーがレスポンス (fin=true) を送信 → クライアント側は Closed
+        let response = vec![Header::new(b":status", b"204").expect("test must succeed")];
+        server
+            .send_response(stream_id, &response, true)
+            .expect("test must succeed");
+        let mut resp_data = Vec::new();
+        while let Some((data, fin)) = server.take_stream_data(stream_id) {
+            resp_data.extend_from_slice(&data);
+            if fin {
+                break;
+            }
+        }
+        client
+            .feed_stream(stream_id, &resp_data, true)
+            .expect("test must succeed");
+        let _ = client.drain_events().expect("test must succeed");
+
+        assert!(
+            !client.streams.contains_key(&stream_id),
+            "STOP_SENDING + ピア FIN で Closed になったストリームが除去されること"
         );
     }
 }

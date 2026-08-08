@@ -168,6 +168,13 @@ impl Connection {
         data: &[u8],
     ) -> Result<bool, Error> {
         let Some(session) = self.wt_sessions.get(&stream_id) else {
+            // 終了済みセッション (tombstone) の CONNECT ストリームへの追加 DATA は
+            // H3_MESSAGE_ERROR で拒否する
+            // (draft-ietf-webtrans-http3-16 Section 6: WT_CLOSE_SESSION 後の
+            //  追加データは H3_MESSAGE_ERROR)
+            if self.closed_wt_sessions.contains(&stream_id) {
+                return Err(Error::StreamError(ErrorCode::MessageError));
+            }
             return Ok(false);
         };
 
@@ -202,6 +209,13 @@ impl Connection {
                 return Err(Error::StreamError(ErrorCode::MessageError));
             }
             self.terminate_wt_session(stream_id);
+            return Ok(true);
+        }
+        // 終了済みセッション (tombstone) の CONNECT ストリームの FIN は受理して何もしない
+        // (WT_CLOSE_SESSION を含む DATA と FIN が同一バッファに連続するのは正常な
+        //  終了手順であり、FIN を H3_MESSAGE_ERROR にしてはならない。
+        //  draft-ietf-webtrans-http3-16 Section 6)
+        if self.closed_wt_sessions.contains(&stream_id) {
             return Ok(true);
         }
         Ok(false)

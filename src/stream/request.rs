@@ -83,6 +83,12 @@ pub struct RequestStream {
     ///
     /// HEADERS/Trailers フレームのペイロード。ブロック解除時にデコードする。
     qpack_blocked_header: Option<(Vec<u8>, bool)>,
+    /// WebTransport CONNECT ストリームかどうか
+    ///
+    /// WT CONNECT ストリームの DATA は Capsule データであり、`recv_body` に
+    /// 累積しない (転送量に比例したメモリ消費を防ぐ)。Capsule データは
+    /// `Connection::handle_wt_data_frame` が処理する。
+    is_wt_connect: bool,
 }
 
 impl RequestStream {
@@ -103,6 +109,7 @@ impl RequestStream {
             qpack_blocked: false,
             qpack_ricnt: 0,
             qpack_blocked_header: None,
+            is_wt_connect: false,
         }
     }
 
@@ -359,7 +366,11 @@ impl RequestStream {
                         return Err(Error::ConnectionError(ErrorCode::FrameUnexpected));
                     }
                     let data = payload.into_data();
-                    self.recv_body.extend_from_slice(&data);
+                    // WebTransport CONNECT ストリームの DATA は Capsule データであり、
+                    // recv_body に累積しない (転送量に比例したメモリ消費を防ぐ)
+                    if !self.is_wt_connect {
+                        self.recv_body.extend_from_slice(&data);
+                    }
                     return Ok(Some(RawReceivedData::Data(data)));
                 }
                 Frame::Unknown(_) => {
@@ -409,9 +420,29 @@ impl RequestStream {
         self.send_buf.is_fin() && self.send_buf.is_data_consumed() && !self.send_buf.is_fin_sent()
     }
 
+    /// 送信バッファが完全に消費済みかどうか
+    ///
+    /// FIN 設定済みの場合は FIN 交付済み、FIN 未設定の場合はデータ全消費で真になる。
+    /// `Connection` がストリームを除去する条件 (Closed && 送信完了) の判定に使う。
+    pub fn is_send_complete(&self) -> bool {
+        if self.send_buf.is_fin() {
+            self.send_buf.is_fin_sent()
+        } else {
+            self.send_buf.is_data_consumed()
+        }
+    }
+
     /// 送信データを消費
     pub fn consume_send_data(&mut self, len: usize) {
         self.send_buf.consume(len);
+    }
+
+    /// 送信待ちデータと FIN を破棄する
+    ///
+    /// STOP_SENDING 受信時など、送信方向が閉じられて以降のデータを送れない
+    /// 状態になった場合に使用する。
+    pub fn discard_send_data(&mut self) {
+        self.send_buf.discard();
     }
 
     /// FIN 送信完了をマークする
@@ -462,6 +493,20 @@ impl RequestStream {
     /// plain CONNECT および WebTransport CONNECT の両方で設定する。
     pub fn set_connect(&mut self) {
         self.is_connect = true;
+    }
+
+    /// WebTransport CONNECT ストリームとしてマークする
+    ///
+    /// WT CONNECT ストリームの DATA は Capsule データであり、`recv_body` に累積しない。
+    /// クライアント側は `send_request` の戻り値から、サーバー側は受信ヘッダーから
+    /// 判定して設定する。
+    pub fn set_wt_connect(&mut self) {
+        self.is_wt_connect = true;
+    }
+
+    /// WebTransport CONNECT ストリームかどうかを取得する
+    pub fn is_wt_connect(&self) -> bool {
+        self.is_wt_connect
     }
 
     /// QPACK ブロック中かどうかを取得する

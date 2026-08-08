@@ -1,7 +1,7 @@
 # Connection のストリーム / WT セッションが無制限に蓄積する
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-08
 - Branch: feature/fix-connection-resource-leak
 - Polished: 2026-08-08
 
@@ -54,6 +54,19 @@
 - `cargo test --all` と `cargo fmt --all -- --check` と `cargo clippy --all-targets --all-features -- -D warnings` が通る
 
 ## 解決方法
+
+### 修正内容
+
+- `Connection::remove_stream_if_done` を追加し、ストリームを次の 3 条件で `streams` から除去するようにした: Reset になった時点 (`stream_reset`) / `StreamState::Closed` かつ送信バッファ完全消費済み (FIN 交付済み、`RequestStream::is_send_complete`) / セッション終了済み (tombstone) の CONNECT ストリーム。除去チェックは `feed_stream` の出口 (エラー経路を含む) / `process_stream_frames` のループ後 / `stream_reset` / `stop_sending` / `consume_stream_data` に配置した
+- `terminate_wt_session_with` が `wt_sessions` からエントリを除去し、終了済みセッション ID を `closed_wt_sessions` (tombstone) に記録するようにした。終了後に届いた DATA (`handle_wt_data_frame` / `handle_bidirectional_stream` 入口) は `H3_MESSAGE_ERROR`、FIN は受理して汎用 StreamEnd を抑止、RESET / STOP_SENDING は静かに無視、新規ストリーム (`associate_or_buffer_stream`) とデータグラム (`feed_datagram`) は拒否・破棄し zombie Pending セッションの再生成を防ぐ
+- `RequestStream` に WT CONNECT フラグ (`is_wt_connect`) を追加し、WT CONNECT ストリームの DATA を `recv_body` に累積しないようにした。content-length / content-type ヘッダー付きの WT CONNECT (リクエスト送信 / サーバー受信 / レスポンス送受信) と 204 / 205 / 206 レスポンスを `H3_MESSAGE_ERROR` で拒否する (RFC 9297 Section 3.2)
+- `stop_sending` 受信時に送信バッファを破棄 (`SendBuffer::discard`) し、QPACK ブロック状態をクリアするようにした (リーク経路の解消)
+- 統合層 (tokio-s2n-quic) の送信経路 4 箇所を FIN 交付までドレインするループに更新し、受信ループ 4 箇所で `StreamError` を RESET_STREAM に変換してピアへ伝えるようにした
+
+### テスト
+
+- `src/connection/mod.rs` の `#[cfg(test)]` に 20 本以上を追加した (ストリーム除去 3 条件 / セッション終了後の拒否・破棄 6 経路 / recv_body 非累積 2 方向 / content-length・content-type・204 拒否 / STOP_SENDING 経路 / 通常 204 の回帰)
+- 既存テスト 4 本の `wt_sessions[&id].state == Closed` 検証を「除去後の存在しないこと」に更新した
 
 ### 関連ファイル
 
