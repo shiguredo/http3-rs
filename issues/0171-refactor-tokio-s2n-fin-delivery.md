@@ -1,7 +1,7 @@
 # tokio-s2n-quic の送信経路を FIN 交付ループに追従させる
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-08
 - Branch: feature/refactor-s2n-fin-delivery
 - Polished: {YYYY-MM-DD}
 
@@ -31,3 +31,7 @@ sans-I/O 層の FIN 交付仕様 (FIN はデータ全消費後の追加呼び出
 ## 解決方法
 
 (実装時に追記)
+
+## 備考
+
+0139 (Connection のストリーム / WT セッションが無制限に蓄積する) の完了条件に統合層の FIN ドレイン対応が必須として含まれており、本 issue の内容と完全に重複するため、0139 に吸収して closed にする。0139 の実装ブランチ (feature/fix-connection-resource-leak) で対応する。
