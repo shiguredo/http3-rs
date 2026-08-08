@@ -73,6 +73,14 @@ impl Connection {
                 }
             }
         } else {
+            // 終了済みセッションへのデータグラムは破棄する
+            // (draft-ietf-webtrans-http3-16 Section 6 は終了後に新規データグラムを
+            //  送らない送信者義務を定める (MUST NOT send any new datagrams)。
+            //  受信側の扱いは実装判断として破棄し、zombie Pending セッションの
+            //  再生成を防ぐ)
+            if self.closed_wt_sessions.contains(&session_id) {
+                return Ok(());
+            }
             // クライアントは自身が開始していない session_id を拒否する
             // (draft-ietf-webtrans-http3-15 Section 4.6)
             if self.role == Role::Client {

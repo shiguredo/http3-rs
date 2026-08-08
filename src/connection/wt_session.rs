@@ -6,11 +6,32 @@
 
 use crate::error::{Error, ErrorCode, WtSetupError};
 use crate::event::{Event, WebTransportEvent, WtStreamReset};
+use crate::qpack::Header;
 use crate::webtransport::DraftVersion;
 use crate::webtransport::error::ErrorCode as WtErrorCode;
 
 use super::wt_types::{AssocOutcome, WT_MAX_PENDING_SESSIONS, WtSession, WtSessionState};
 use super::{Connection, Role};
+
+/// RFC 9297 Section 3.2 の Capsule Protocol 併用禁止ヘッダー (Content-Length / Content-Type)
+///
+/// Capsule Protocol を使用するメッセージに付与してはならない (MUST NOT)。
+/// Transfer-Encoding は接続固有ヘッダーとして全リクエストで既に拒否される。
+fn has_forbidden_capsule_headers(headers: &[Header]) -> bool {
+    headers
+        .iter()
+        .any(|h| h.name() == b"content-length" || h.name() == b"content-type")
+}
+
+/// RFC 9297 Section 3.2 の Capsule Protocol 併用禁止ステータス (204 / 205 / 206)
+///
+/// Capsule Protocol を使用するレスポンスに付与してはならない (MUST NOT)。
+fn is_forbidden_capsule_status(headers: &[Header]) -> bool {
+    headers.iter().any(|h| {
+        h.name() == b":status"
+            && (h.value() == b"204" || h.value() == b"205" || h.value() == b"206")
+    })
+}
 
 impl Connection {
     pub(crate) fn peer_requires_initial_wt_capsules(&self) -> bool {
@@ -270,7 +291,8 @@ impl Connection {
     /// WebTransport セッションを終了する
     ///
     /// CONNECT stream の FIN、RESET_STREAM、WT_CLOSE_SESSION 受信時に呼ばれる。
-    /// (draft-ietf-webtrans-http3-15 Section 6)
+    /// セッションエントリを `wt_sessions` から除去し、終了済みセッション ID を
+    /// tombstone に記録する (draft-ietf-webtrans-http3-16 Section 6)。
     pub(crate) fn terminate_wt_session_with(
         &mut self,
         session_id: u64,
@@ -322,6 +344,14 @@ impl Connection {
                     close_message,
                 }));
         }
+
+        // セッションエントリを除去し、終了済みセッション ID を tombstone に記録する
+        // 終了後に届く DATA / FIN / RESET / 新規ストリーム / データグラムの拒否・破棄と
+        // zombie Pending セッションの再生成防止に使う
+        // (draft-ietf-webtrans-http3-16 Section 6)
+        if self.wt_sessions.remove(&session_id).is_some() {
+            self.closed_wt_sessions.insert(session_id);
+        }
     }
 
     /// WebTransport セッションを WT_SESSION_GONE で終了する
@@ -365,6 +395,14 @@ impl Connection {
             // クライアントは自身が開始していない session_id を拒否する
             // (draft-ietf-webtrans-http3-15 Section 4.6)
             if self.role == Role::Client {
+                return Err(());
+            }
+
+            // 終了済みセッションへの新規ストリームは拒否する
+            // (draft-ietf-webtrans-http3-16 Section 6: 終了済みセッションには
+            //  新規ストリームを送ってはならない (MUST NOT open any new streams)。
+            //  zombie Pending セッションの再生成を防ぐ)
+            if self.closed_wt_sessions.contains(&session_id) {
                 return Err(());
             }
 
@@ -467,6 +505,12 @@ impl Connection {
             self.terminate_wt_session(stream_id);
             return true;
         }
+        // 終了済みセッションの CONNECT ストリームへの RESET_STREAM は静かに無視する
+        // (RFC 9000 Section 4.4: RESET_STREAM 受信時はストリームの状態を破棄し、
+        //  以降のデータを無視する)
+        if self.closed_wt_sessions.contains(&stream_id) {
+            return true;
+        }
         if let Some(session_id) = self
             .wt_uni_streams
             .remove(&stream_id)
@@ -497,6 +541,11 @@ impl Connection {
             self.terminate_wt_session(stream_id);
             return true;
         }
+        // 終了済みセッションの CONNECT ストリームへの STOP_SENDING は静かに無視する
+        // (draft-ietf-webtrans-http3-16 Section 6)
+        if self.closed_wt_sessions.contains(&stream_id) {
+            return true;
+        }
         if let Some(session_id) = self
             .wt_uni_streams
             .get(&stream_id)
@@ -525,6 +574,13 @@ impl Connection {
     ) -> Result<(), Error> {
         if !super::is_webtransport_connect(headers) {
             return Ok(());
+        }
+
+        // RFC 9297 Section 3.2: Capsule Protocol を使用するメッセージに
+        // Content-Length / Content-Type ヘッダーを付与してはならない (MUST NOT)。
+        // 送信側も違反メッセージを生成しない
+        if has_forbidden_capsule_headers(headers) {
+            return Err(Error::StreamError(ErrorCode::MessageError));
         }
 
         let peer = self
@@ -574,6 +630,14 @@ impl Connection {
     ) -> Result<(), Error> {
         if self.role != Role::Server || !super::is_webtransport_connect(headers) {
             return Ok(());
+        }
+
+        // RFC 9297 Section 3.2: Capsule Protocol を使用するメッセージに
+        // Content-Length / Content-Type ヘッダーを付与してはならない (MUST NOT)。
+        // 違反は malformed として H3_MESSAGE_ERROR で拒否する。
+        // (Transfer-Encoding は接続固有ヘッダーとして全リクエストで既に拒否される)
+        if has_forbidden_capsule_headers(headers) {
+            return Err(Error::StreamError(ErrorCode::MessageError));
         }
 
         if !self.local_settings.is_webtransport_enabled() {
@@ -669,6 +733,8 @@ impl Connection {
         }
         if let Some(stream) = self.streams.get_mut(&stream_id) {
             stream.set_connect();
+            // WT CONNECT ストリームの DATA は Capsule データであり recv_body に累積しない
+            stream.set_wt_connect();
         }
     }
 
@@ -684,6 +750,23 @@ impl Connection {
     ) -> Result<(), Error> {
         if self.role != Role::Client || !super::is_success_status(headers) {
             return Ok(());
+        }
+
+        // RFC 9297 Section 3.2: Capsule Protocol を使用するレスポンスに
+        // Content-Length / Content-Type ヘッダーを付与してはならない (MUST NOT)。
+        // 違反は malformed として H3_MESSAGE_ERROR で拒否する。
+        // (WT セッションのレスポンスのみが対象)
+        if self.wt_sessions.contains_key(&stream_id) && has_forbidden_capsule_headers(headers) {
+            return Err(Error::StreamError(ErrorCode::MessageError));
+        }
+
+        // RFC 9297 Section 3.2: HTTP status codes 204 (No Content) / 205 (Reset
+        // Content) / 206 (Partial Content) は Capsule Protocol を使用する
+        // レスポンスに付与してはならない (MUST NOT)。違反は malformed。
+        // (WT セッションのレスポンスのみが対象。通常 HTTP の 204/205/206 は
+        //  この制約の対象外)
+        if self.wt_sessions.contains_key(&stream_id) && is_forbidden_capsule_status(headers) {
+            return Err(Error::StreamError(ErrorCode::MessageError));
         }
 
         // WT-Protocol 検証 (Section 3.3)
@@ -776,6 +859,20 @@ impl Connection {
         let Some(session) = self.wt_sessions.get(&stream_id) else {
             return Ok(());
         };
+
+        // RFC 9297 Section 3.2: Capsule Protocol を使用するレスポンスに
+        // Content-Length / Content-Type ヘッダーを付与してはならない (MUST NOT)。
+        // 送信側も違反メッセージを生成しない (受信側は malformed として拒否する)
+        if has_forbidden_capsule_headers(headers) {
+            return Err(Error::StreamError(ErrorCode::MessageError));
+        }
+
+        // RFC 9297 Section 3.2: HTTP status codes 204 / 205 / 206 は Capsule
+        // Protocol を使用するレスポンスに付与してはならない (MUST NOT)。
+        // 送信側も違反メッセージを生成しない
+        if is_forbidden_capsule_status(headers) {
+            return Err(Error::StreamError(ErrorCode::MessageError));
+        }
 
         let selected = headers.iter().find_map(|h| {
             if h.name() == b"wt-protocol" {

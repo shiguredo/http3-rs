@@ -191,7 +191,7 @@ impl WtSessionRequest {
             .ok_or(crate::Error::ConnectionClosed)?;
 
         let connect_stream_id: u64 = stream.id();
-        let (mut recv_stream, send_stream) = stream.split();
+        let (mut recv_stream, mut send_stream) = stream.split();
 
         // Sans I/O にストリームの存在を通知
         {
@@ -261,7 +261,18 @@ impl WtSessionRequest {
 
                     let events = {
                         let mut s = state.lock().expect("mutex should not be poisoned");
-                        s.process_stream_data(connect_stream_id, &data, fin)?
+                        match s.process_stream_data(connect_stream_id, &data, fin) {
+                            Ok(events) => events,
+                            Err(e) => {
+                                // ストリームレベルのエラーは RESET_STREAM でピアに伝える
+                                // (接続は維持する: RFC 9114 Section 8)
+                                crate::internal::reset_stream_on_stream_error(
+                                    &mut send_stream,
+                                    &e,
+                                );
+                                return Err(e);
+                            }
+                        }
                     };
 
                     for event in events {
@@ -322,14 +333,23 @@ impl WtSessionRequest {
         let response_headers = ConnectResponse::new(200).to_headers()?;
 
         // Sans I/O でレスポンスをエンコード
-        let data = {
+        let (data, fin) = {
             let mut s = self.state.lock().expect("mutex should not be poisoned");
             s.h3_conn
                 .send_response(self.stream_id, &response_headers, false)?;
 
-            s.get_stream_data(self.stream_id)
-                .map(|(data, _fin)| data)
-                .unwrap_or_default()
+            // エンコード済みデータを取得 (fin=false のためデータのみ)
+            // fin=true を交付する場合に備えて fin 受領で break し finish() すること
+            let mut buf = Vec::new();
+            let mut fin = false;
+            while let Some((chunk, f)) = s.get_stream_data(self.stream_id) {
+                buf.extend_from_slice(&chunk);
+                fin = f;
+                if fin {
+                    break;
+                }
+            }
+            (buf, fin)
         };
 
         // レスポンスを送信
@@ -338,6 +358,11 @@ impl WtSessionRequest {
             .send(Bytes::from(data))
             .await
             .map_err(crate::Error::transport)?;
+
+        // FIN 交付を受領した場合のみ finish() する
+        if fin {
+            send_stream.finish().map_err(crate::Error::transport)?;
+        }
 
         Ok(WtSession::new(
             self.stream_id,
@@ -360,14 +385,24 @@ impl WtSessionRequest {
 
         let response_headers = ConnectResponse::new(status).to_headers()?;
 
-        let data = {
+        let (data, fin) = {
             let mut s = self.state.lock().expect("mutex should not be poisoned");
             s.h3_conn
                 .send_response(self.stream_id, &response_headers, true)?;
 
-            s.get_stream_data(self.stream_id)
-                .map(|(data, _fin)| data)
-                .unwrap_or_default()
+            // エンコード済みデータを取得 (FIN 交付までループする)
+            // FIN (送信方向クローズ) はデータ全消費後の追加呼び出しで交付される。
+            // 送信方向クローズがメッセージ終端を表すことは RFC 9114 Section 4.1 が定める
+            let mut buf = Vec::new();
+            let mut fin = false;
+            while let Some((chunk, f)) = s.get_stream_data(self.stream_id) {
+                buf.extend_from_slice(&chunk);
+                fin = f;
+                if fin {
+                    break;
+                }
+            }
+            (buf, fin)
         };
 
         let mut send_stream = self.send_stream;
@@ -376,7 +411,12 @@ impl WtSessionRequest {
             .await
             .map_err(crate::Error::transport)?;
 
-        send_stream.finish().map_err(crate::Error::transport)
+        // FIN 交付を受領した場合のみ finish() する
+        if fin {
+            send_stream.finish().map_err(crate::Error::transport)?;
+        }
+
+        Ok(())
     }
 }
 

@@ -167,7 +167,7 @@ impl H3Client {
         let (mut recv_stream, mut send_stream) = stream.split();
 
         // Sans I/O でリクエストをエンコード
-        let request_data = {
+        let (request_data, request_fin) = {
             let mut s = self.state.lock().expect("mutex should not be poisoned");
 
             let mut headers = Vec::new();
@@ -192,10 +192,19 @@ impl H3Client {
             // s2n-quic の stream_id と一致するはず
             assert_eq!(h3_stream_id, stream_id);
 
-            // エンコード済みデータを取得
-            s.get_stream_data(h3_stream_id)
-                .map(|(data, _fin)| data)
-                .unwrap_or_default()
+            // エンコード済みデータを取得 (FIN 交付までループする)
+            // FIN (送信方向クローズ) はデータ全消費後の追加呼び出しで交付される。
+            // 送信方向クローズがメッセージ終端を表すことは RFC 9114 Section 4.1 が定める
+            let mut request_data = Vec::new();
+            let mut request_fin = false;
+            while let Some((data, fin)) = s.get_stream_data(h3_stream_id) {
+                request_data.extend_from_slice(&data);
+                request_fin = fin;
+                if fin {
+                    break;
+                }
+            }
+            (request_data, request_fin)
         };
 
         // エンコード時に QPACK データが生成される可能性がある
@@ -203,7 +212,10 @@ impl H3Client {
 
         // リクエスト送信
         send_stream.send(Bytes::from(request_data)).await?;
-        send_stream.finish()?;
+        // FIN 交付を受領した場合のみ finish() する
+        if request_fin {
+            send_stream.finish()?;
+        }
 
         // レスポンス受信
         let mut response_headers: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
@@ -220,7 +232,17 @@ impl H3Client {
 
             let events = {
                 let mut s = self.state.lock().expect("mutex should not be poisoned");
-                s.process_stream_data(stream_id, &data, fin)?
+                match s.process_stream_data(stream_id, &data, fin) {
+                    Ok(events) => events,
+                    Err(e) => {
+                        // ストリームレベルのエラーは RESET_STREAM でピアに伝える
+                        // (接続は維持する: RFC 9114 Section 8)。
+                        // リクエスト送信は常に FIN 交付済みのため、s2n-quic が
+                        // FIN ACK 済みストリームの reset を no-op にすることがある
+                        crate::internal::reset_stream_on_stream_error(&mut send_stream, &e);
+                        return Err(e);
+                    }
+                }
             };
 
             // ヘッダーデコード後に Section Ack が生成される可能性がある

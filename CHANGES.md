@@ -215,6 +215,12 @@
   - @voluntas
 - [FIX] `send_request` / `send_body` / `send_response` で `fin=true` を設定しても FIN が交付されず、QUIC 層へ送信方向クローズが通知されない問題を修正する (RFC 9114 Section 4.1)
   - @voluntas
+- [FIX] 完走・リセット・セッション終了後のストリームと WT セッションが接続終了まで蓄積し続けるメモリリークを修正する。終了済みセッションへの DATA / FIN / RESET / 新規ストリーム / データグラムの拒否・破棄を追加する (RFC 9297 Section 3.2 / draft-ietf-webtrans-http3-16 Section 6)
+  - @voluntas
+- [FIX] WebTransport CONNECT ストリームの DATA が受信バッファに累積され続ける問題を修正し、content-length / content-type ヘッダー付きの WT CONNECT を H3_MESSAGE_ERROR で拒否する (RFC 9297 Section 3.2)
+  - @voluntas
+- [FIX] tokio-s2n-quic の送信経路が FIN 交付をループで取得せず、H3 層に FIN 未交付状態が残留する問題を修正する (RFC 9114 Section 4.1)
+  - @voluntas
 
 ### misc
 

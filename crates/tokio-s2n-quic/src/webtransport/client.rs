@@ -156,6 +156,8 @@ impl WtClient {
                 )));
             }
 
+            // CONNECT リクエストは fin=false のため、データのみを取得する
+            // (fin 交付は発生しない)
             s.get_stream_data(h3_stream_id)
                 .map(|(data, _fin)| data)
                 .unwrap_or_default()
@@ -200,7 +202,18 @@ impl WtClient {
 
                     let events = {
                         let mut s = state.lock().expect("mutex should not be poisoned");
-                        s.process_stream_data(connect_stream_id, &data, fin)?
+                        match s.process_stream_data(connect_stream_id, &data, fin) {
+                            Ok(events) => events,
+                            Err(e) => {
+                                // ストリームレベルのエラーは RESET_STREAM でピアに伝える
+                                // (接続は維持する: RFC 9114 Section 8)
+                                crate::internal::reset_stream_on_stream_error(
+                                    &mut send_stream,
+                                    &e,
+                                );
+                                return Err(e);
+                            }
+                        }
                     };
 
                     for event in events {
