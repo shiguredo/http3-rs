@@ -12,7 +12,6 @@ WebTransport 相互運用性テスト
 |---|---|---|---|
 | s2n-quic + shiguredo_http3 | tokio 統合 | draft-02 / draft-07 / draft-15 | 全ドラフトバージョン対応 |
 | ngtcp2 + nghttp3 | tokio 統合 | draft-15 のみ | RFC トラック版のみ |
-| neqo (Mozilla) | Sans I/O | draft-02 のみ | NSS 依存、古いドラフト版 |
 | quinn + h3-webtransport | tokio 統合 | draft-02 | h3-webtransport (0.1.2) + h3-quinn (0.0.10) |
 | tquic (Tencent) | Sans I/O | 未対応 | HTTP/3 のみ |
 | quiche (Cloudflare) | Sans I/O | 未対応 | HTTP/3 のみ |
@@ -22,7 +21,6 @@ WebTransport 相互運用性テスト
 ```
 interop/wt/
   src/lib.rs          -- 共通ヘルパー関数
-  neqo-db/            -- neqo 用 NSS テスト証明書データベース
   tests/
     ngtcp2_client_s2n_server.rs   -- ngtcp2 クライアント ↔ s2n-quic サーバー
     s2n_client_ngtcp2_server.rs   -- s2n-quic クライアント ↔ ngtcp2 サーバー
@@ -87,33 +85,18 @@ SETTINGS_ENABLE_CONNECT_PROTOCOL (0x08) = 1           // RFC 9220
 SETTINGS_H3_DATAGRAM (0x33) = 1                       // RFC 9297
 ```
 
-#### neqo (Mozilla)
+#### 相互運用性マトリクス (WebTransport)
 
-draft-02 のみ対応:
+| クライアント \ サーバー | s2n-quic | ngtcp2 | quinn |
+|---|---|---|---|
+| **s2n-quic** | -- | OK (draft-15) | OK (draft-02) |
+| **ngtcp2** | OK (draft-15) | -- | NG (*1) |
+| **quinn** | OK (draft-02) | NG (*1) | -- |
 
-```
-SETTINGS_ENABLE_WEBTRANSPORT (0x2b603742) = 1        // draft-02
-SETTINGS_ENABLE_CONNECT_PROTOCOL (0x08) = 1           // RFC 9220
-SETTINGS_H3_DATAGRAM (0x33) = 1                       // RFC 9297
-```
-
-### 相互運用性マトリクス (WebTransport)
-
-| クライアント \ サーバー | s2n-quic | ngtcp2 | quinn | neqo |
-|---|---|---|---|---|
-| **s2n-quic** | -- | OK (draft-15) | OK (draft-02) | NG (*1) |
-| **ngtcp2** | OK (draft-15) | -- | NG (*4) | NG (*2) |
-| **quinn** | OK (draft-02) | NG (*4) | -- | 未テスト |
-| **neqo** | NG (*3) | NG (*2) | 未テスト | 未テスト |
-
-- *1: neqo の NSS テスト証明書が有効期限切れ (2019年) のため s2n-quic クライアントが接続不可
-- *2: neqo は draft-02 のみ、ngtcp2 は draft-15 のみ対応のため SETTINGS ネゴシエーション失敗 (`WT negotiated: false`)
-- *3: neqo クライアントと s2n-quic サーバー間ではネゴシエーションは成功するが (s2n-quic が draft-02 対応のため)、draft-15 で必要なフロー制御パラメータが不足しセッション即時クローズ (`SessionClosed { Error(0) }`)
-- *4: h3-webtransport (draft-02) と ngtcp2 (draft-15) の SETTINGS ドラフトバージョン不一致でセッション確立不可
+- *1: h3-webtransport (draft-02) と ngtcp2 (draft-15) の SETTINGS ドラフトバージョン不一致でセッション確立不可
 
 ### 今後の展望
 
-- neqo が draft-15 に対応すれば ngtcp2 / s2n-quic との相互運用が可能になる
 - quinn + h3-webtransport の統合により、更に多くの実装間テストが可能になる
 - tquic / quiche は現時点で WebTransport 未対応
 
@@ -132,5 +115,4 @@ cargo test -p interop_wt --test s2n_client_ngtcp2_server
 
 - s2n-quic: AWS の QUIC 実装 (Rust)
 - ngtcp2 / nghttp3: IETF リファレンス実装 (C)
-- neqo: Mozilla Firefox の QUIC 実装 (Rust, NSS 依存)
 - shiguredo_http3: Sans I/O HTTP/3 ライブラリ
