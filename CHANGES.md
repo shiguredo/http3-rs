@@ -274,6 +274,8 @@
   - @voluntas
 - [UPDATE] `examples/wt_server` の `--reject-connect` デモの拒否ステータスを 404 から 405 に変更する (draft-ietf-webtrans-http3-16 Section 3.2)
   - @voluntas
+- [UPDATE] CI の GitHub Actions ワークフローから neqo-crypto ビルド用の NSS セットアップステップを削除する (neqo は既に依存から削除済みのため)
+  - @voluntas
 - [FIX] `fuzz/fuzz_targets/fuzz_settings.rs` が `Settings::from_payload` の `Result` 戻り値に追従しておらず fuzz crate がコンパイルできなかった問題を修正する
   - @voluntas
 - [FIX] CI の共通 workspace job から `interop/h3` / `interop/wt` を除外し、相互運用テストは macOS 専用 step でのみ実行する
