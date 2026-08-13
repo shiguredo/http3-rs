@@ -44,6 +44,11 @@ struct ConnectionUserData {
     stream_data_queue: VecDeque<StreamData>,
     // 受信した DATAGRAM のキュー
     datagram_queue: VecDeque<Datagram>,
+    // NEW_CONNECTION_ID フレームでピアに発行した CID の記録
+    //
+    // サーバー実装はピアが DCID として使用する可能性のある CID を
+    // ルーティングテーブルに登録するために使用する (RFC 9000 Section 5.1.1)。
+    issued_cids: Vec<ConnectionId>,
 }
 
 /// ngtcp2_crypto_conn_ref のラッパー
@@ -120,6 +125,7 @@ impl Connection {
         let user_data_box = Box::new(ConnectionUserData {
             stream_data_queue: VecDeque::new(),
             datagram_queue: VecDeque::new(),
+            issued_cids: Vec::new(),
         });
 
         Ok(Self {
@@ -193,6 +199,7 @@ impl Connection {
         let user_data_box = Box::new(ConnectionUserData {
             stream_data_queue: VecDeque::new(),
             datagram_queue: VecDeque::new(),
+            issued_cids: Vec::new(),
         });
 
         Ok(Self {
@@ -246,6 +253,7 @@ impl Connection {
         let mut user_data_box = Box::new(ConnectionUserData {
             stream_data_queue: VecDeque::new(),
             datagram_queue: VecDeque::new(),
+            issued_cids: Vec::new(),
         });
         let user_data_ptr = &mut *user_data_box as *mut ConnectionUserData as *mut c_void;
 
@@ -371,6 +379,7 @@ impl Connection {
         let mut user_data_box = Box::new(ConnectionUserData {
             stream_data_queue: VecDeque::new(),
             datagram_queue: VecDeque::new(),
+            issued_cids: Vec::new(),
         });
         let user_data_ptr = &mut *user_data_box as *mut ConnectionUserData as *mut c_void;
 
@@ -877,6 +886,16 @@ impl Connection {
         !self.user_data.datagram_queue.is_empty()
     }
 
+    /// NEW_CONNECTION_ID フレームで発行した CID を取り出す
+    ///
+    /// ngtcp2 はピアの `active_connection_id_limit` に応じて追加の CID を発行する。
+    /// サーバー実装は発行済み CID をルーティングテーブルに登録し、ピアが DCID として
+    /// 使用するパケットを正しく接続に振り分ける (RFC 9000 Section 5.1.1)。
+    /// 一度取り出した CID は再度返さない。
+    pub fn poll_issued_cids(&mut self) -> Vec<ConnectionId> {
+        std::mem::take(&mut self.user_data.issued_cids)
+    }
+
     /// トランスポートエラーの CONNECTION_CLOSE パケットを書き込む
     ///
     /// QUIC 接続を閉じるために使用する。
@@ -1101,7 +1120,7 @@ unsafe extern "C" fn get_new_connection_id_callback(
     cid: *mut ngtcp2_cid,
     token: *mut u8,
     cidlen: usize,
-    _user_data: *mut c_void,
+    user_data: *mut c_void,
 ) -> c_int {
     // SAFETY: cid と token は呼び出し元から渡された有効なポインタ
     unsafe {
@@ -1117,6 +1136,17 @@ unsafe extern "C" fn get_new_connection_id_callback(
             std::slice::from_raw_parts_mut(token, NGTCP2_STATELESS_RESET_TOKENLEN as usize);
         if aws_lc_rs::rand::fill(token_slice).is_err() {
             return NGTCP2_ERR_CALLBACK_FAILURE;
+        }
+
+        // 発行した CID を記録する
+        // サーバー実装はこの CID をルーティングテーブルに登録し、
+        // ピアが DCID として使うパケットを接続に振り分ける (RFC 9000 Section 5.1.1)。
+        if !user_data.is_null() {
+            let conn_user_data = &mut *(user_data as *mut ConnectionUserData);
+            let cid_slice = std::slice::from_raw_parts((*cid).data.as_ptr(), cidlen);
+            if let Some(issued_cid) = ConnectionId::new(cid_slice) {
+                conn_user_data.issued_cids.push(issued_cid);
+            }
         }
     }
 

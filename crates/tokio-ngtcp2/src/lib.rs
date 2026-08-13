@@ -3,6 +3,7 @@
 //! ngtcp2/nghttp3 を tokio と統合し、非同期 HTTP/3 クライアント/サーバーを提供する。
 
 mod client;
+mod conn;
 mod server;
 mod webtransport;
 
