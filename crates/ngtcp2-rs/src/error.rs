@@ -53,6 +53,46 @@ impl std::error::Error for Error {}
 /// Result 型エイリアス
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// サーバー実装向けの接続エラー種別
+///
+/// ngtcp2 の API 契約では `ngtcp2_conn_read_pkt` や `ngtcp2_conn_handle_expiry` が
+/// 返す一部の負エラーは接続単位の非致命的エラーであり、サーバー全体を停止させては
+/// ならない (`ngtcp2_conn_read_pkt` のドキュメント参照)。サーバー実装はこの分類に
+/// 従ってエラーを接続単位で処理する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionErrorKind {
+    /// 無視してよいエラー (パケットの破棄指示やストリーム単位のシグナル)
+    Ignore,
+
+    /// 接続を黙って破棄する
+    ///
+    /// NGTCP2_ERR_DROP_CONN / NGTCP2_ERR_IDLE_CLOSE / NGTCP2_ERR_RETRY。
+    /// CONNECTION_CLOSE は送らない。
+    SilentDrop,
+
+    /// 終了状態 (closing / draining) に移行済みの接続
+    ///
+    /// NGTCP2_ERR_DRAINING / NGTCP2_ERR_CLOSING。
+    /// 接続は閉じられつつあるため、そのままにして除去処理に任せる。
+    Terminal,
+
+    /// トランスポートエラー。CONNECTION_CLOSE (0x1c) を送って closing 状態にする
+    ///
+    /// NGTCP2_ERR_CRYPTO などの致命的エラー (RFC 9000 Section 11.1)。
+    TransportClose,
+
+    /// アプリケーションエラー。CONNECTION_CLOSE (0x1d) を送って closing 状態にする
+    ///
+    /// nghttp3 (HTTP/3 層) のエラー (RFC 9000 Section 11.1)。
+    ApplicationClose,
+
+    /// 内部エラー。CONNECTION_CLOSE を送らずに接続を破棄する
+    ///
+    /// プロトコル違反ではなく実装側の問題であるため、ピアに通知する
+    /// エラーコードが存在しない。
+    Internal,
+}
+
 impl Error {
     /// ngtcp2 エラーコードからエラーを生成
     pub fn from_ngtcp2(code: libc::c_int) -> Self {
@@ -78,6 +118,41 @@ impl Error {
             }
         };
         Error::Nghttp3(msg, code)
+    }
+
+    /// サーバー実装向けにエラーを接続単位の種別へ分類する
+    ///
+    /// 分類は ngtcp2 の API 契約 (`ngtcp2_conn_read_pkt` /
+    /// `ngtcp2_conn_handle_expiry` のドキュメント) に従う。各種別の詳細は
+    /// `ConnectionErrorKind` の各 variant のドキュメント参照。
+    ///
+    /// NGTCP2_ERR_RETRY は Retry パケット送信の要求だが、本実装では
+    /// Retry を送らないため SilentDrop に分類する (将来 Retry 送信を
+    /// 実装する場合は分類を見直すこと)。
+    pub fn classify_connection_error(&self) -> ConnectionErrorKind {
+        match self {
+            Error::Ngtcp2(_, code) => {
+                let code = *code;
+                match code {
+                    ngtcp2_sys::NGTCP2_ERR_DISCARD_PKT => ConnectionErrorKind::Ignore,
+                    ngtcp2_sys::NGTCP2_ERR_DROP_CONN
+                    | ngtcp2_sys::NGTCP2_ERR_IDLE_CLOSE
+                    | ngtcp2_sys::NGTCP2_ERR_RETRY => ConnectionErrorKind::SilentDrop,
+                    ngtcp2_sys::NGTCP2_ERR_DRAINING | ngtcp2_sys::NGTCP2_ERR_CLOSING => {
+                        ConnectionErrorKind::Terminal
+                    }
+                    _ => ConnectionErrorKind::TransportClose,
+                }
+            }
+            Error::Nghttp3(_, _) => ConnectionErrorKind::ApplicationClose,
+            // ストリーム単位のフロー制御シグナル。接続エラーとして扱わない
+            Error::StreamDataBlocked(_) | Error::StreamShutWr(_) => ConnectionErrorKind::Ignore,
+            Error::InvalidArgument(_)
+            | Error::BufferTooSmall
+            | Error::StreamNotFound(_)
+            | Error::ConnectionClosing
+            | Error::Internal(_) => ConnectionErrorKind::Internal,
+        }
     }
 }
 

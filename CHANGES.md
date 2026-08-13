@@ -179,6 +179,14 @@
   - @voluntas
 - [ADD] SETTINGS フレームに GREASE 予約設定 (RFC 9114 Section 7.2.4.1, ID=0x21) を追加する
   - @voluntas
+- [ADD] `Error::classify_connection_error` / `ConnectionErrorKind` を追加し、ngtcp2 の API 契約に従った接続単位のエラー種別をサーバー実装に提供する
+  - @voluntas
+- [ADD] `Connection::poll_issued_cids` を追加し、NEW_CONNECTION_ID で発行した CID をサーバーがルーティングテーブルに登録できるようにする (RFC 9000 Section 5.1.1)
+  - @voluntas
+- [ADD] `Server::get_conn_ids` / `Server::send_response_by_conn_id` を追加し、同一アドレスからの複数接続をコネクション ID で指定できるようにする
+  - @voluntas
+- [ADD] `ServerWebTransportSession::get_established_conn_ids` / `open_bidi_stream_by_conn_id` / `open_uni_stream_by_conn_id` / `send_stream_data_by_conn_id` / `send_datagram_by_conn_id` / `recv_datagram_by_conn_id` を追加し、同一アドレスからの複数接続をコネクション ID で指定できるようにする
+  - @voluntas
 - [FIX] QPACK エンコーダーストリームレシーバーでテーブル操作前にバッファを drain していた処理順序を修正する
   - @voluntas
 - [FIX] send_request で GOAWAY 境界超過およびフロー制御なし WT セッション上限超過時に ConnectionError ではなく StreamError を返すよう修正する
@@ -276,7 +284,13 @@
   - @voluntas
 - [UPDATE] CI の GitHub Actions ワークフローから neqo-crypto ビルド用の NSS セットアップステップを削除する (neqo は既に依存から削除済みのため)
   - @voluntas
+- [UPDATE] ngtcp2 1.25.90 に合わせて `ngtcp2-sys` の bindings を再生成する
+  - @voluntas
+- [UPDATE] `s2n-tls` を 0.3.42 に更新する
+  - @voluntas
 - [FIX] `fuzz/fuzz_targets/fuzz_settings.rs` が `Settings::from_payload` の `Result` 戻り値に追従しておらず fuzz crate がコンパイルできなかった問題を修正する
   - @voluntas
 - [FIX] CI の共通 workspace job から `interop/h3` / `interop/wt` を除外し、相互運用テストは macOS 専用 step でのみ実行する
+  - @voluntas
+- [FIX] `Server` / `ServerWebTransportSession` が 1 クライアントアドレスあたり 1 接続しか保持できず、不正なパケット 1 個や接続単位のエラーでサーバーが停止していた問題を修正する。到着パケットを DCID で接続に振り分け (RFC 9000 Section 5.2)、パケット処理・ストリーム処理・タイムアウトのエラーを接続単位で処理してサーバーループを継続するようにする。併せて `Server::send_response` 等のアドレス指定 API は同一アドレスからの複数接続時に一意に特定できないためエラーを返すようになる
   - @voluntas

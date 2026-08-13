@@ -14,7 +14,7 @@ pub mod varint;
 pub use config::{Http3Settings, TransportParams};
 pub use conn::{Connection, Datagram, StreamData};
 pub use crypto::{TlsContext, TlsSession};
-pub use error::{Error, Result};
+pub use error::{ConnectionErrorKind, Error, Result};
 pub use h3::Http3Connection;
 pub use types::{
     ConnectionId, Header, Http3Event, PacketInfo, PathInfo, QuicVersion, SessionId,

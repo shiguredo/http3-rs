@@ -1,7 +1,7 @@
 # tokio-ngtcp2 サーバーが単一パケットでプロセス全体停止する
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Branch: feature/fix-ngtcp2-server-packet-dos
 - Polished: 2026-08-08
 
@@ -47,10 +47,23 @@
 
 ## 解決方法
 
+`Server` / `ServerWebTransportSession` を DCID ベースのルーティングに変更し、パケット処理・ストリーム処理・タイムアウト処理のエラーを接続単位で処理してサーバーループを継続するようにした。
+
+- 接続マップを `HashMap<SocketAddr, _>` から `HashMap<ConnectionId, _>` に変更し、`cid_map` (DCID -> 接続キー) と `short_cid_lengths` (Short header の DCID 照合用長さ集合) を追加した
+- 到着パケットは DCID で既存接続を解決し、未登録 DCID の Long header は新規接続として処理する。未知 DCID の Short header は破棄する (RFC 9000 Section 5.2 / 5.2.2)
+- 新規接続は Initial のみを受け付ける。非 Initial の Long header・1200 バイト未満の datagram・DCID 8 バイト未満・サポート外バージョンは状態を作らずに破棄する (RFC 9000 Section 5.2.2 / 7.2 / 14.1)
+- エラーは `Error::classify_connection_error` で分類する。DROP_CONN / IDLE_CLOSE / RETRY は黙って破棄、DRAINING / CLOSING は除去処理に任せ、致命的な ngtcp2 / nghttp3 エラーは CONNECTION_CLOSE (0x1c / 0x1d) を送って closing 状態にする。サーバーループにはエラーを伝播させない
+- NEW_CONNECTION_ID で発行した CID は `Connection::poll_issued_cids` で回収してルーティングテーブルに登録する (RFC 9000 Section 5.1.1)
+- `Server::bind` に渡したトランスポートパラメータが新規接続で使用されていなかった不具合を併せて修正した
+- 同一アドレスからの複数接続を扱うためのコネクション ID 指定の公開 API (`send_response_by_conn_id` / `open_bidi_stream_by_conn_id` 等) を追加した。既存のアドレス指定 API は複数接続時に一意に特定できないためエラーを返す
+- テストを追加した: `test_server_two_connections_same_socket` (同一 SocketAddr から 2 接続)、`test_server_survives_malformed_packets`、`test_server_survives_idle_timeout`、`test_server_survives_malformed_h3_frame`、`test_server_survives_client_connection_close`、`test_webtransport_server_survives_malformed_packets` (WT 側)、`test_error.rs` (エラー分類の単体テスト)
+
 ### 関連ファイル
 
-- `crates/tokio-ngtcp2/src/server.rs` (`Server::run` / `handle_recv` / `handle_timeouts` / `flush_all` / `remove_closed_connections` / `Server::send_response` / `connections` のキー構造)
-- `crates/tokio-ngtcp2/src/webtransport.rs` (`ServerWebTransportSession::run` / `recv_once` / `connections` のキー構造 / 公開 API 群)
-- `crates/ngtcp2-rs/src/error.rs` (`Error::Ngtcp2` のエラーコード判別)
-- `crates/ngtcp2-rs/src/conn.rs` (`write_connection_close` の使用)
-- 一次資料: `refs/quic/rfc9000.txt` Section 5.1 (接続 ID によるルーティング)、Section 8.1 (Retry / アドレス検証)、Section 11.1 (不正 Initial の破棄・CONNECTION_CLOSE)
+- `crates/tokio-ngtcp2/src/server.rs` (DCID ルーティング・接続単位エラー処理・コネクション ID 指定 API)
+- `crates/tokio-ngtcp2/src/webtransport.rs` (ServerWebTransportSession の同様の書き換え)
+- `crates/tokio-ngtcp2/src/conn.rs` (新規: パケットパース・DCID 解決・CONNECTION_CLOSE 送信・ストリームデータ供給の共有ヘルパー)
+- `crates/ngtcp2-rs/src/error.rs` (`ConnectionErrorKind` と `classify_connection_error`)
+- `crates/ngtcp2-rs/src/conn.rs` (NEW_CONNECTION_ID 発行 CID の記録と `poll_issued_cids`)
+- `crates/tokio-ngtcp2/tests/server_e2e.rs` / `tests/webtransport_server_e2e.rs` / `tests/helpers/multi_conn_client.rs` (新規テスト)
+- `crates/ngtcp2-rs/tests/test_error.rs` (エラー分類の単体テスト)
