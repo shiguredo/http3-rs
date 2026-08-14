@@ -3033,7 +3033,7 @@ dependencies = [
 
 [[package]]
 name = "shiguredo_http3"
-version = "2026.1.0-canary.5"
+version = "2026.1.0-canary.6"
 
 [[package]]
 name = "shiguredo_ngtcp2"
