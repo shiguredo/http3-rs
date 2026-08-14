@@ -107,6 +107,12 @@ pub(crate) struct WtSession {
     /// 受信側データフロー制御
     /// (draft-ietf-webtrans-http3-15 Section 5.4)
     pub(crate) recv_data_fc: Option<DataFlowControl>,
+    /// ストリームごとの計上済み受信ボディ量 (ストリーム ID → ボディバイト数)
+    ///
+    /// RESET_STREAM 受信時に final_size から既計上分を引いて残差を求めるために
+    /// 使う (二重計上防止。draft-ietf-webtrans-http3-16 Section 5.4)。
+    /// ストリームの FIN / RESET / セッション終了時に掃除する。
+    pub(crate) stream_received_data: HashMap<u64, u64>,
     /// Connection 層で生成された送信待ちカプセル (WT_MAX_STREAMS, WT_MAX_DATA)
     /// アプリケーション層が `take_wt_pending_capsules()` で取り出して送信する。
     pub(crate) pending_capsules: Vec<crate::webtransport::Capsule>,
@@ -147,6 +153,7 @@ impl WtSession {
             recv_stream_fc_uni: None,
             recv_stream_fc_bidi: None,
             recv_data_fc: None,
+            stream_received_data: HashMap::new(),
             pending_capsules: Vec::new(),
         }
     }
@@ -285,6 +292,39 @@ impl WtSession {
     /// 送信待ちカプセルを取り出す
     pub(crate) fn take_pending_capsules(&mut self) -> Vec<crate::webtransport::Capsule> {
         std::mem::take(&mut self.pending_capsules)
+    }
+
+    /// ストリームの計上済み受信ボディ量を加算する
+    ///
+    /// `add_received_data_and_track` からのみ呼ばれる (計上と追跡の対を
+    /// 構造的に保証するため)。
+    fn add_stream_received_data(&mut self, stream_id: u64, bytes: u64) {
+        let entry = self.stream_received_data.entry(stream_id).or_insert(0);
+        *entry = entry.saturating_add(bytes);
+    }
+
+    /// データ FC の計上と per-stream 追跡を同時に行う
+    ///
+    /// 受信経路では必ず両方を対で呼ぶ (RESET 時の残差計算が
+    /// 正しくなるための不変条件)。
+    pub(crate) fn add_received_data_and_track(&mut self, stream_id: u64, bytes: u64) {
+        self.add_received_data(bytes);
+        self.add_stream_received_data(stream_id, bytes);
+    }
+
+    /// ストリームの計上済み受信ボディ量を取得する
+    pub(crate) fn get_stream_received_data(&self, stream_id: u64) -> u64 {
+        self.stream_received_data
+            .get(&stream_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// ストリームの計上済み受信ボディ量の追跡を掃除する
+    ///
+    /// ストリームの FIN / RESET 時に呼ぶ (無制限の成長を防ぐ)。
+    pub(crate) fn remove_stream_received_data(&mut self, stream_id: u64) {
+        self.stream_received_data.remove(&stream_id);
     }
 
     /// ストリームをセッションに関連付ける
