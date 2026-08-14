@@ -237,6 +237,8 @@
   - @voluntas
 - [FIX] リクエストストリーム・制御ストリームで誤った位置に受信した WT_STREAM (0x41) を H3_FRAME_ERROR 接続エラーとして検出する (draft-ietf-webtrans-http3-16 Section 4.3)
   - @voluntas
+- [FIX] WebTransport ネゴシエーション未完了時に受信した 0x54 単方向ストリームを接続エラーではなくストリームエラー (H3_STREAM_CREATION_ERROR) で拒否する (RFC 9114 Section 6.2 / draft-ietf-webtrans-http3-16 Section 4.6)
+  - @voluntas
 - [FIX] tokio-s2n-quic の送信経路が FIN 交付をループで取得せず、H3 層に FIN 未交付状態が残留する問題を修正する (RFC 9114 Section 4.1)
   - @voluntas
 

@@ -720,6 +720,11 @@ impl Connection {
             // セッション ID 未確定の WT 単方向ストリームの FIN
             // (セッション ID が未確定のまま FIN が来た場合は単に破棄)
             self.pending_wt_uni_streams.remove(&stream_id);
+
+            // ストリームタイプ varint が未完のまま FIN が来た場合はバッファを破棄する
+            // (RFC 9114 Section 6.2: ストリームヘッダー受信前に閉じられた
+            //  単方向ストリームは許容される)
+            self.pending_uni_streams.remove(&stream_id);
         }
 
         Ok(())
@@ -748,6 +753,13 @@ impl Connection {
             Ok(result) => result,
             Err(crate::varint::DecodeError::BufferTooShort) => {
                 // バッファ不足: 次のチャンクを待つ
+                if fin {
+                    // varint 未完のまま FIN が来た場合はバッファを破棄する
+                    // (RFC 9114 Section 6.2: ストリームヘッダー受信前に閉じられた
+                    //  単方向ストリームは許容される)
+                    self.pending_uni_streams.remove(&stream_id);
+                    return Ok(());
+                }
                 if !has_pending {
                     self.pending_uni_streams.insert(stream_id, data.to_vec());
                 }
@@ -817,13 +829,29 @@ impl Connection {
                 return Err(Error::ConnectionError(ErrorCode::IdError));
             }
             0x54 => {
-                // WebTransport 単方向ストリーム (draft-ietf-webtrans-http3-15 Section 4.2)
+                // WebTransport 単方向ストリーム (draft-ietf-webtrans-http3-16 Section 4.2)
                 //
                 // ネゴシエーション完了 (peer SETTINGS 受信 + WT 広告 + H3_DATAGRAM +
                 // QUIC transport parameter 検証) を bidi 経路と同じ条件で確認する
-                // (draft-ietf-webtrans-http3-15 Section 4.2 / 7.1)。
+                // (draft-ietf-webtrans-http3-16 Section 3.1 / 7.1)。
                 if !self.is_wt_fully_negotiated() {
-                    return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
+                    // ネゴシエーション未完了の 0x54 は「recipient がサポートしない
+                    // ストリームタイプ」に該当し、ストリーム単位の拒否で対処する
+                    // (RFC 9114 Section 6.2: 未知ストリームタイプは接続エラーにしては
+                    //  ならない MUST NOT。abort 時のエラーコードは
+                    //  H3_STREAM_CREATION_ERROR またはリザーブドエラーコードが
+                    //  SHOULD)。
+                    // ストリームエラーは RESET_STREAM / STOP_SENDING の送信を
+                    // QUIC 統合層に委ねる (error.rs の「ストリームエラー (ストリームを
+                    // リセットすべき)」)。統合層の一部経路では対応が未実装のため、
+                    // ピアへの拒否通知が届かないケースがあり得る (統合層側の対応は
+                    // 本変更のスコープ外)。
+                    // バッファリングでネゴシエーション完了を待つ方式は採らない。
+                    // draft-ietf-webtrans-http3-16 Section 4.6 のバッファリングは
+                    // 確立済みセッションに関連付けられるまでの SHOULD であり
+                    // MUST ではない。RFC 9114 Section 6.2 の MUST が定める
+                    // 2 択 (abort / discard) のうち abort 方式を採用する。
+                    return Err(Error::StreamError(ErrorCode::StreamCreationError));
                 }
                 // セッション ID (varint) をパース
                 self.resolve_wt_uni_stream_session_id(stream_id, remaining)?;
@@ -2497,17 +2525,125 @@ mod tests {
     }
 
     #[test]
-    fn test_wt_uni_stream_disabled_returns_error() {
-        // WebTransport 無効な接続
+    fn test_wt_uni_stream_not_negotiated_returns_stream_error() {
+        // WebTransport ネゴシエーション未完了の接続
         let mut conn = Connection::server(Settings::default());
-        conn.set_control_stream_id(3).expect("test must succeed");
 
         // ストリームタイプ 0x54 (varint 2 バイト: [0x40, 0x54])
+        // 未ネゴシエーションの 0x54 は「recipient がサポートしないストリームタイプ」
+        // に該当し、ストリーム単位の拒否で対処する (RFC 9114 Section 6.2)。
+        // 接続エラーにしてはならない (MUST NOT)。
         let err = conn.feed_stream(2, &[0x40, 0x54, 0x04], false).unwrap_err();
         assert!(matches!(
             err,
-            Error::ConnectionError(ErrorCode::StreamCreationError)
+            Error::StreamError(ErrorCode::StreamCreationError)
         ));
+    }
+
+    #[test]
+    fn test_wt_uni_stream_not_negotiated_followup_data_returns_stream_error() {
+        // ストリームエラー後の後続データは、stream_id がどのマップにも登録されて
+        // いないため再びストリームタイプとして解釈される。
+        // 後続データが 0x54 の varint エンコーディング (例: [0x40, 0x54, ...]) で
+        // 始まる場合は同じストリームエラーが返る。
+        let mut conn = Connection::server(Settings::default());
+
+        // 1 回目: ストリームエラー
+        let err = conn.feed_stream(2, &[0x40, 0x54, 0x04], false).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::StreamError(ErrorCode::StreamCreationError)
+        ));
+
+        // 2 回目: 後続データも同じストリームエラー
+        let err = conn.feed_stream(2, &[0x40, 0x54, 0x05], false).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::StreamError(ErrorCode::StreamCreationError)
+        ));
+    }
+
+    #[test]
+    fn test_wt_uni_stream_not_negotiated_fin_only_is_ok() {
+        // データなしの FIN のみはストリームタイプが解釈されないため、
+        // ストリームエラーにならず Ok(()) を返す
+        // (RFC 9114 Section 6.2: ストリームヘッダー受信前に閉じられた
+        //  単方向ストリームは許容される)
+        let mut conn = Connection::server(Settings::default());
+
+        conn.feed_stream(2, &[], true).expect("test must succeed");
+    }
+
+    #[test]
+    fn test_wt_uni_stream_not_negotiated_partial_type_then_fin_is_ok() {
+        // ストリームタイプ varint が未完のまま FIN が来た場合はバッファを破棄し、
+        // Ok(()) を返す (RFC 9114 Section 6.2)
+        let mut conn = Connection::server(Settings::default());
+
+        // 0x54 の 1 バイト目のみ (varint 未完)
+        conn.feed_stream(2, &[0x40], false)
+            .expect("test must succeed");
+        // 未完のまま FIN
+        conn.feed_stream(2, &[], true).expect("test must succeed");
+    }
+
+    #[test]
+    fn test_wt_uni_stream_not_negotiated_partial_type_with_fin_is_ok() {
+        // 同一チャンクで varint 未完 + FIN が届いた場合もバッファを破棄し、
+        // Ok(()) を返す (RFC 9114 Section 6.2)
+        let mut conn = Connection::server(Settings::default());
+
+        // 0x54 の 1 バイト目のみ (varint 未完) + FIN
+        conn.feed_stream(2, &[0x40], true)
+            .expect("test must succeed");
+
+        // バッファが破棄されていることを確認するため、後続チャンク (本来は
+        // 到着しないが) があってもバッファに残留していないことを確認する。
+        // 新規ストリームとして再解釈されるため、未知タイプとして無視される。
+        conn.feed_stream(2, &[0x41], false)
+            .expect("test must succeed");
+    }
+
+    #[test]
+    fn test_wt_uni_stream_not_negotiated_split_type_returns_stream_error() {
+        // ストリームタイプ varint が分割到着しても、ネゴシエーション未完了の
+        // 0x54 はストリームエラーになる
+        let mut conn = Connection::server(Settings::default());
+
+        // 0x54 の 1 バイト目のみ (varint 未完: バッファリングされる)
+        conn.feed_stream(2, &[0x40], false)
+            .expect("test must succeed");
+
+        // 2 バイト目 + セッション ID: ストリームタイプが確定しストリームエラー
+        let err = conn.feed_stream(2, &[0x54, 0x04], false).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::StreamError(ErrorCode::StreamCreationError)
+        ));
+    }
+
+    #[test]
+    fn test_wt_uni_stream_not_negotiated_error_keeps_connection_alive() {
+        // ストリームエラー後も接続は生存し、別ストリーム (制御ストリーム) の
+        // feed_stream が成功する
+        let mut conn = Connection::server(Settings::default());
+
+        // 0x54 でストリームエラー
+        let err = conn.feed_stream(2, &[0x40, 0x54, 0x04], false).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::StreamError(ErrorCode::StreamCreationError)
+        ));
+
+        // 制御ストリーム (stream_id=6) は引き続き処理できる
+        // ストリームタイプ 0x00 + SETTINGS フレーム
+        conn.feed_stream(6, &[0x00, 0x04, 0x00], false)
+            .expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(matches!(event, Event::SettingsReceived { .. }));
     }
 
     #[test]
