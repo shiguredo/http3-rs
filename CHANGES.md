@@ -189,6 +189,8 @@
   - @voluntas
 - [ADD] `ServerWebTransportSession::get_established_conn_ids` / `open_bidi_stream_by_conn_id` / `open_uni_stream_by_conn_id` / `send_stream_data_by_conn_id` / `send_datagram_by_conn_id` / `recv_datagram_by_conn_id` を追加し、同一アドレスからの複数接続をコネクション ID で指定できるようにする
   - @voluntas
+- [ADD] `Connection::register_local_wt_stream` / `ClientConnection::register_local_wt_stream` / `ServerConnection::register_local_wt_stream` を追加し、ローカル開始の WebTransport 双方向ストリームをセッションに登録できるようにする (RFC 9000 Section 2.1 / draft-ietf-webtrans-http3-16 Section 4.3)
+  - @voluntas
 - [FIX] QPACK エンコーダーストリームレシーバーでテーブル操作前にバッファを drain していた処理順序を修正する
   - @voluntas
 - [FIX] send_request で GOAWAY 境界超過およびフロー制御なし WT セッション上限超過時に ConnectionError ではなく StreamError を返すよう修正する
@@ -238,6 +240,8 @@
 - [FIX] リクエストストリーム・制御ストリームで誤った位置に受信した WT_STREAM (0x41) を H3_FRAME_ERROR 接続エラーとして検出する (draft-ietf-webtrans-http3-16 Section 4.3)
   - @voluntas
 - [FIX] WebTransport ネゴシエーション未完了時に受信した 0x54 単方向ストリームを接続エラーではなくストリームエラー (H3_STREAM_CREATION_ERROR) で拒否する (RFC 9114 Section 6.2 / draft-ietf-webtrans-http3-16 Section 4.6)
+  - @voluntas
+- [FIX] ローカル開始の WebTransport 双方向ストリームにピアから受信したデータが HTTP/3 リクエストストリームとして誤処理される問題を修正する。FIN 時は WT_MAX_STREAMS クレジットを返却せず、RESET_STREAM_AT の reliable size 計算のため登録をセッション終了時まで維持する (RFC 9000 Section 2.1 / draft-ietf-webtrans-http3-16 Section 4.3 / 4.4 / 5.3)
   - @voluntas
 - [FIX] tokio-s2n-quic の送信経路が FIN 交付をループで取得せず、H3 層に FIN 未交付状態が残留する問題を修正する (RFC 9114 Section 4.1)
   - @voluntas
