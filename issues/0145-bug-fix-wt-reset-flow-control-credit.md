@@ -1,7 +1,7 @@
 # RESET_STREAM 受信時にフロー制御クレジットが計上・回復されない
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-14
 - Branch: feature/fix-wt-reset-flow-control-credit
 - Polished: 2026-08-08
 
@@ -41,8 +41,30 @@
 
 ### 関連ファイル
 
-- `src/connection/wt_session.rs` (`Connection::handle_wt_stream_reset` / `WtSession::on_remote_stream_closed` の呼び出し追加 / `deliver_buffered_streams` の計上経路)
-- `src/connection/wt_types.rs` (`WtSession::on_remote_stream_closed` の定義 / per-stream の計上済みボディ量の追跡)
-- `src/connection/wt_stream.rs` (`Connection::wt_stream_header_len` / 計上済み量の記録箇所)
-- 関連 issue: 0144 (ローカル開始 bidi ストリームの登録。RESET 時の `on_remote_stream_closed` 対象外。実装順序は 0144 → 0145)、0146 (バッファリング中ストリームの stale エントリ。同一関数を変更)、0139 (ストリームのリソースリーク。tombstone 等で RESET 経路に触れる)
-- 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 5.3 / 5.4 / 5.6.2 / 5.6.4、`refs/quic/rfc9000.txt` Section 4.5 / 19.4 (final size と RESET_STREAM の定義)
+- `src/connection/wt_session.rs` (`Connection::handle_wt_stream_reset` / `Connection::account_wt_stream_reset` / `Connection::deliver_buffered_streams`)
+- `src/connection/wt_types.rs` (`WtSession::stream_received_data` フィールド / `add_received_data_and_track` / `get_stream_received_data` / `remove_stream_received_data`)
+- `src/connection/wt_stream.rs` (受信経路 4 箇所の計上追跡 / FIN 経路の掃除 / `is_local_initiated_bidi` の pub(crate) 化)
+- `src/connection/mod.rs` (テスト 13 件 + テストヘルパー 1 件)
+- 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 5.3 / 5.4 / 5.6.4、`refs/quic/rfc9000.txt` Section 3.2 / 4.5 / 19.4
+
+### 修正内容
+
+- `handle_wt_stream_reset` で、RESET_STREAM の `final_size` からストリームヘッダー長と既計上分を引いた残差を受信側データ FC に計上するようにした (`account_wt_stream_reset`)。残差は RESET により破棄扱いとなるため自動消費として扱い、ウィンドウ (WT_MAX_DATA) を回復する (RFC 9000 Section 19.4)
+- 残差計算の二重計上を防ぐため、`WtSession` にストリームごとの計上済みボディ量 (`stream_received_data`) を追加し、受信経路 5 箇所 (通常受信 4 箇所 + バッファリング配達 1 箇所) で `add_received_data` と同時に記録するようにした。追跡エントリは FIN / RESET / セッション終了時に掃除する
+- ヘッダー減算はピアがヘッダーを送った場合のみ適用する (ピア開始ストリーム)。ローカル開始 bidi はヘッダーを自側が送るため減算 0
+- ローカル開始 bidi の FIN 後は登録が維持されるため、FIN 後の RESET (RFC 9000 Section 3.2 で受信しうる) で二重計上しないよう計上済み量を残す
+- ピア開始ストリームの RESET で `on_remote_stream_closed` を呼び、WT_MAX_STREAMS クレジットを回復する (ローカル開始 bidi は対象外。WT_MAX_STREAMS はピアが開くストリーム数の制限)
+- 残差がデータ FC を超過する場合は `WT_FLOW_CONTROL_ERROR` でセッション終了する (draft-16 Section 5.6.4 の MUST)。セッション終了時は StreamReset イベントを発火しない (SessionClosed の reset_streams に含まれるため)
+
+### 追加・修正したテスト
+
+- `test_wt_stream_reset_no_double_accounting`: データ受信 → RESET (final_size > 受信済み) で二重計上が起きないこと
+- `test_wt_stream_reset_recovers_stream_credit` / `test_wt_stream_reset_no_stream_credit_local_initiated`: ピア開始の RESET で WT_MAX_STREAMS が回復され、ローカル開始 bidi では誤回復されないこと
+- `test_wt_stream_reset_subtracts_header_peer_initiated` / `test_wt_stream_reset_no_header_subtraction_local_initiated`: ピア開始で final_size - ヘッダー長が計上され、ローカル開始 bidi で減算 0 であること
+- `test_wt_stream_reset_uni_stream_accounts_data`: uni ストリームの RESET でも計上されること
+- `test_wt_stream_reset_auto_consumes_window`: RESET の自動消費で WT_MAX_DATA カプセル (再広告値の増加) が発行されること
+- `test_wt_stream_reset_exceeds_data_fc`: データ FC 超過の RESET で WT_FLOW_CONTROL_ERROR セッション終了になること
+- `test_wt_stream_reset_after_fin_local_initiated_no_double_accounting` / `test_wt_stream_reset_after_fin_peer_initiated_is_generic`: FIN 後の RESET の扱い (ローカル開始は計上済み量を残して二重計上防止 / ピア開始は汎用 StreamReset)
+- `test_wt_stream_reset_after_session_close_is_ignored`: 終了済みセッションのデータストリームへの RESET が汎用 StreamReset になること
+- `test_wt_stream_reset_draining_session_accounts`: Draining セッションの既存ストリームの RESET で計上が継続されること
+- `test_wt_stream_reset_final_size_smaller_than_received`: final_size が受信済み量より小さい場合に残差 0 として扱われること
