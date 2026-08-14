@@ -234,7 +234,7 @@ impl Connection {
     /// ストリーム ID の下位ビット (RFC 9000 Section 2.1) から求めた種別と
     /// ロールから判定する。クライアント側はクライアント開始 bidi (0x00)、
     /// サーバー側はサーバー開始 bidi (0x01) がローカル開始になる。
-    fn is_local_initiated_bidi(&self, kind: crate::stream::StreamKind) -> bool {
+    pub(crate) fn is_local_initiated_bidi(&self, kind: crate::stream::StreamKind) -> bool {
         match self.role {
             Role::Client => kind == crate::stream::StreamKind::ClientBidi,
             Role::Server => kind == crate::stream::StreamKind::ServerBidi,
@@ -359,7 +359,7 @@ impl Connection {
                             );
                             return Ok(());
                         }
-                        session.add_received_data(data_len);
+                        session.add_received_data_and_track(stream_id, data_len);
                     }
                     self.events
                         .push_back(Event::WebTransport(WebTransportEvent::UniStreamData {
@@ -430,7 +430,7 @@ impl Connection {
                         );
                         return Ok(());
                     }
-                    session.add_received_data(data_len);
+                    session.add_received_data_and_track(stream_id, data_len);
                 }
                 self.events
                     .push_back(Event::WebTransport(WebTransportEvent::BidiStreamData {
@@ -443,20 +443,24 @@ impl Connection {
                 // 返却する (WT_MAX_STREAMS はピアが開くストリーム数の制限。
                 //  draft-ietf-webtrans-http3-16 Section 5.3)。
                 // ローカル開始ストリームは自側がヘッダーを送信済みのため、FIN 後も
-                // RESET_STREAM_AT の reliable size (ヘッダー長) 計算に登録が
-                // 必要 (draft-ietf-webtrans-http3-16 Section 4.4)。ローカル開始
-                // ストリームの登録解除はセッション終了時 (terminate_wt_session_with)
-                // に委ねる。
-                // BidiStreamEnd イベントの発火はローカル開始でも行う
-                // (ピアの送信方向終了の通知はアプリのストリームクローズ判断に必要)
+                // RESET_STREAM_AT の reliable size (ヘッダー長) 計算に登録が必要
+                // (draft-ietf-webtrans-http3-16 Section 4.4)。
                 if !self
                     .is_local_initiated_bidi(crate::stream::StreamKind::from_stream_id(stream_id))
                 {
                     self.wt_bidi_streams.remove(&stream_id);
                     if let Some(session) = self.wt_sessions.get_mut(&session_id) {
                         session.on_remote_stream_closed(true);
+                        // ピア開始は登録解除されるため FIN 後の RESET は WT 経路に
+                        // 到達しない。計上済み量の追跡をここで掃除する。
+                        session.remove_stream_received_data(stream_id);
                     }
                 }
+                // ローカル開始は登録解除をセッション終了時 (terminate_wt_session_with)
+                // に委ね、計上済み量も FIN 後の RESET (RFC 9000 Section 3.2: FIN 受信
+                // 後に RESET_STREAM を受信しうる) で二重計上しないよう残す。
+                // BidiStreamEnd イベントの発火はローカル開始でも行う
+                // (ピアの送信方向終了の通知はアプリのストリームクローズ判断に必要)
                 self.events
                     .push_back(Event::WebTransport(WebTransportEvent::BidiStreamEnd {
                         stream_id,
@@ -484,6 +488,9 @@ impl Connection {
                     // ストリーム閉鎖: WT_MAX_STREAMS 更新判定 (Section 5.6)
                     if let Some(session) = self.wt_sessions.get_mut(&session_id) {
                         session.on_remote_stream_closed(true);
+                        // ピア開始は登録解除されるため RESET は WT 経路に到達しない。
+                        // 計上済み量の追跡を掃除する。
+                        session.remove_stream_received_data(stream_id);
                     }
                     self.events
                         .push_back(Event::WebTransport(WebTransportEvent::BidiStreamEnd {
@@ -661,7 +668,7 @@ impl Connection {
                             );
                             return Ok(());
                         }
-                        session.add_received_data(data_len);
+                        session.add_received_data_and_track(stream_id, data_len);
                     }
                     self.events
                         .push_back(Event::WebTransport(WebTransportEvent::BidiStreamData {
@@ -723,7 +730,7 @@ impl Connection {
                     );
                     return Ok(true);
                 }
-                session.add_received_data(data_len);
+                session.add_received_data_and_track(stream_id, data_len);
             }
             self.events
                 .push_back(Event::WebTransport(WebTransportEvent::UniStreamData {
@@ -758,6 +765,9 @@ impl Connection {
         } else {
             if let Some(session) = self.wt_sessions.get_mut(&session_id) {
                 session.on_remote_stream_closed(false);
+                // 計上済み量の追跡を掃除する (ピア開始は FIN で登録解除される
+                // ため、FIN 後の RESET は WT 経路に到達せず二重計上の機会がない)
+                session.remove_stream_received_data(stream_id);
             }
             self.events
                 .push_back(Event::WebTransport(WebTransportEvent::UniStreamEnd {

@@ -110,7 +110,7 @@ impl Connection {
                     fc_violation = true;
                     break;
                 }
-                session.add_received_data(data_len);
+                session.add_received_data_and_track(buffered_stream_id, data_len);
                 buffered_events.push(if is_bidi {
                     Event::WebTransport(WebTransportEvent::BidiStreamData {
                         stream_id: buffered_stream_id,
@@ -126,6 +126,9 @@ impl Connection {
             // End
             if entry_fin {
                 session.on_remote_stream_closed(is_bidi);
+                // 計上済み量の追跡を掃除する (ピア開始は FIN で登録解除される
+                // ため、FIN 後の RESET は WT 経路に到達せず二重計上の機会がない)
+                session.remove_stream_received_data(buffered_stream_id);
                 closed_buffered.push((buffered_stream_id, is_bidi));
                 buffered_events.push(if is_bidi {
                     Event::WebTransport(WebTransportEvent::BidiStreamEnd {
@@ -492,7 +495,7 @@ impl Connection {
 
     /// RESET_STREAM 受信時の WebTransport 伝播処理 (0077 Phase 5: 混在関数抽出)
     ///
-    /// (draft-ietf-webtrans-http3-15 Section 4.4 / Section 6)
+    /// (draft-ietf-webtrans-http3-16 Section 4.4 / Section 6)
     /// CONNECT stream の RESET_STREAM はセッション終了、データストリームの
     /// RESET_STREAM はセッションに通知する。非 WT ストリームは `false` を返す。
     pub(crate) fn handle_wt_stream_reset(
@@ -511,23 +514,102 @@ impl Connection {
         if self.closed_wt_sessions.contains(&stream_id) {
             return true;
         }
-        if let Some(session_id) = self
+        // 除去前に session_id とストリーム種別を解決する
+        // (データ FC 計上とヘッダー長の計算に必要なため)
+        let Some(session_id) = self
             .wt_uni_streams
-            .remove(&stream_id)
-            .or_else(|| self.wt_bidi_streams.remove(&stream_id))
-        {
-            if let Some(session) = self.wt_sessions.get_mut(&session_id) {
-                session.disassociate_stream(stream_id);
-            }
-            self.events
-                .push_back(Event::WebTransport(WebTransportEvent::StreamReset {
-                    session_id,
-                    stream_id,
-                    error_code,
-                    final_size,
-                }));
+            .get(&stream_id)
+            .copied()
+            .or_else(|| self.wt_bidi_streams.get(&stream_id).copied())
+        else {
+            return false;
+        };
+        let is_bidi = self.wt_bidi_streams.contains_key(&stream_id);
+
+        // データ FC の計上と自動消費 (draft-ietf-webtrans-http3-16 Section 5.4)
+        // 超過でセッション終了した場合は StreamReset イベントを発火しない
+        // (SessionClosed の reset_streams に含まれるため)
+        if self.account_wt_stream_reset(session_id, stream_id, final_size) {
             return true;
         }
+
+        // ストリーム数クレジットの回復 (ピア開始のみ。WT_MAX_STREAMS は
+        // ピアが開くストリーム数の制限。draft-ietf-webtrans-http3-16 Section 5.3)
+        let kind = crate::stream::StreamKind::from_stream_id(stream_id);
+        let local_initiated = self.is_local_initiated_bidi(kind);
+        if let Some(session) = self.wt_sessions.get_mut(&session_id) {
+            if !local_initiated {
+                session.on_remote_stream_closed(is_bidi);
+            }
+            // 計上済み量の追跡を掃除し、ストリーム関連付けを解除する
+            session.remove_stream_received_data(stream_id);
+            session.disassociate_stream(stream_id);
+        }
+
+        // 登録を除去する
+        self.wt_uni_streams.remove(&stream_id);
+        self.wt_bidi_streams.remove(&stream_id);
+        self.events
+            .push_back(Event::WebTransport(WebTransportEvent::StreamReset {
+                session_id,
+                stream_id,
+                error_code,
+                final_size,
+            }));
+        true
+    }
+
+    /// RESET_STREAM 受信時のデータフロー制御の計上
+    ///
+    /// final_size からストリームヘッダー長と既計上分を引いた残差を受信側
+    /// データ FC に計上し、RESET により破棄扱いとなるデータを自動消費として
+    /// 扱ってウィンドウ (WT_MAX_DATA) を回復する (RFC 9000 Section 19.4)。
+    /// 残差が FC 超過の場合は WT_FLOW_CONTROL_ERROR でセッション終了し、
+    /// `true` を返す (draft-ietf-webtrans-http3-16 Section 5.6.4)。
+    fn account_wt_stream_reset(
+        &mut self,
+        session_id: u64,
+        stream_id: u64,
+        final_size: u64,
+    ) -> bool {
+        // ヘッダー減算はピアがヘッダーを送った場合のみ適用する
+        // (ローカル開始 bidi は開始側 (ローカル) がヘッダーを送るため、
+        //  ピアの final_size にヘッダーは含まれない)
+        let kind = crate::stream::StreamKind::from_stream_id(stream_id);
+        let header_len = if self.is_local_initiated_bidi(kind) {
+            0
+        } else {
+            self.wt_stream_header_len(stream_id)
+        };
+        // 既計上分を引いた残差 (二重計上を防ぐ。受信済みが final_size を
+        // 超えるケースは QUIC 層の不正 (RFC 9000 Section 4.5 の
+        // FINAL_SIZE_ERROR) であり、残差 0 として扱う)
+        let accounted = self
+            .wt_sessions
+            .get(&session_id)
+            .map(|s| s.get_stream_received_data(stream_id))
+            .unwrap_or(0);
+        let residual = final_size
+            .saturating_sub(header_len)
+            .saturating_sub(accounted);
+
+        let Some(session) = self.wt_sessions.get_mut(&session_id) else {
+            return false;
+        };
+        // 超過検出 (draft-ietf-webtrans-http3-16 Section 5.6.4)
+        if !session.check_received_data(residual) {
+            self.terminate_wt_session_with(
+                session_id,
+                WtErrorCode::FlowControlError as u64,
+                0,
+                String::new(),
+            );
+            return true;
+        }
+        session.add_received_data(residual);
+        // RESET により破棄扱いとなりアプリが消費を報告しないため、
+        // 残差を自動消費してウィンドウを回復する (RFC 9000 Section 19.4)
+        session.on_data_consumed(residual);
         false
     }
 

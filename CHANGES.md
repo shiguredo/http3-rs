@@ -243,6 +243,8 @@
   - @voluntas
 - [FIX] ローカル開始の WebTransport 双方向ストリームにピアから受信したデータが HTTP/3 リクエストストリームとして誤処理される問題を修正する。FIN 時は WT_MAX_STREAMS クレジットを返却せず、RESET_STREAM_AT の reliable size 計算のため登録をセッション終了時まで維持する (RFC 9000 Section 2.1 / draft-ietf-webtrans-http3-16 Section 4.3 / 4.4 / 5.3)
   - @voluntas
+- [FIX] RESET_STREAM 受信時に final_size を受信側データフロー制御に計上し、RESET により破棄されるデータのウィンドウ (WT_MAX_DATA) を回復する。既計上分との二重計上を防ぎ、ピア開始ストリームでは WT_MAX_STREAMS クレジットも回復する (RFC 9000 Section 19.4 / draft-ietf-webtrans-http3-16 Section 5.3 / 5.4 / 5.6.4)
+  - @voluntas
 - [FIX] tokio-s2n-quic の送信経路が FIN 交付をループで取得せず、H3 層に FIN 未交付状態が残留する問題を修正する (RFC 9114 Section 4.1)
   - @voluntas
 

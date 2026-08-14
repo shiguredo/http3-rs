@@ -3807,6 +3807,21 @@ mod tests {
         server
     }
 
+    /// Established 状態かつフロー制御が有効で、WT_MAX_DATA が小さい
+    /// (初期 100 バイト) セッションを持つサーバーを作成するヘルパ
+    ///
+    /// RESET 時のデータ FC 計上 (残差・二重計上・超過検出) のテストに使う。
+    fn make_server_with_fc_small_data_wt_session(session_id: u64) -> Connection {
+        let mut server = make_server_with_fc_established_wt_session(session_id);
+        let session = server
+            .wt_sessions
+            .get_mut(&session_id)
+            .expect("test must succeed");
+        session.recv_data_fc =
+            Some(crate::webtransport::session::flow_control::DataFlowControl::new(100));
+        server
+    }
+
     fn make_negotiated_wt_server() -> Connection {
         let wt_settings = wt_enabled_settings();
         // クライアント制御ストリームは 6 に置く (テスト本体が stream_id 2 を WT 用に使うため)
@@ -4609,6 +4624,350 @@ mod tests {
         assert_eq!(stream_id, 2);
         assert_eq!(error_code, 0xab);
         assert_eq!(final_size, 42);
+    }
+
+    // =========================================================================
+    // RESET_STREAM 受信時のフロー制御クレジット
+    // final_size からのデータ FC 計上と WT_MAX_STREAMS 回復
+    // (draft-ietf-webtrans-http3-16 Section 5.3 / 5.4 / 5.6.4)
+    // =========================================================================
+
+    #[test]
+    fn test_wt_stream_reset_no_double_accounting() {
+        // RESET_STREAM 受信時に既計上分を差し引いた残差だけがデータ FC に
+        // 計上される (二重計上すると正規のピアが WT_FLOW_CONTROL_ERROR になる)
+        let mut conn = make_server_with_fc_small_data_wt_session(0);
+
+        // ピア開始 bidi (stream_id=4): ヘッダー + データ 50 バイト
+        // (stream_id=0 は CONNECT ストリームのため WT データストリームには使わない)
+        let mut data = vec![0x40, 0x41, 0x00];
+        data.extend_from_slice(&[0xAA; 50]);
+        conn.feed_stream(4, &data, false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
+
+        // RESET (final_size = 63 = ヘッダー 3 + ボディ 60)
+        // 残差 = 63 - 3 - 50 = 10 が計上される (total_received = 60)
+        conn.stream_reset(4, 0xab, 63)
+            .unwrap_or_else(|e| panic!("stream_reset error: {e:?}"));
+        let _ = conn.drain_events().expect("test must succeed");
+
+        // セッションは生きている (二重計上していれば超過でセッション終了する)。
+        // 自動消費により advertised_max が 110 に回復し、残り 50 バイト受信可能
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.check_received_data(50));
+        assert!(!session.check_received_data(51));
+    }
+
+    #[test]
+    fn test_wt_stream_reset_recovers_stream_credit() {
+        // ピア開始ストリームの RESET で WT_MAX_STREAMS クレジットが回復される
+        let mut conn = make_server_with_fc_established_wt_session(0);
+        // 受信ストリーム数をしきい値超過にしておく (RESET でクレジット返却が
+        // 発生しうる状態にする。concurrent_limit = 100、しきい値 = 50 のため
+        // 残り 49 以下で返却が発生する)
+        {
+            let session = conn.wt_sessions.get_mut(&0).expect("test must succeed");
+            let fc = session
+                .recv_stream_fc_bidi
+                .as_mut()
+                .expect("test must succeed");
+            for _ in 0..51 {
+                fc.on_stream_received();
+            }
+        }
+
+        // ピア開始 bidi (stream_id=4) を開いて RESET
+        conn.feed_stream(4, &[0x40, 0x41, 0x00], false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
+        conn.stream_reset(4, 0xab, 3).expect("test must succeed");
+
+        // WT_MAX_STREAMS カプセルが生成される (maximum = 101)
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.pending_capsules.iter().any(|c| matches!(
+            c,
+            crate::webtransport::Capsule::MaxStreams {
+                bidirectional: true,
+                maximum: 101,
+            }
+        )));
+    }
+
+    #[test]
+    fn test_wt_stream_reset_no_stream_credit_local_initiated() {
+        // ローカル開始 bidi の RESET では WT_MAX_STREAMS クレジットが
+        // 誤回復されない (WT_MAX_STREAMS はピアが開くストリーム数の制限)
+        let mut conn = make_server_with_fc_established_wt_session(0);
+        {
+            let session = conn.wt_sessions.get_mut(&0).expect("test must succeed");
+            let fc = session
+                .recv_stream_fc_bidi
+                .as_mut()
+                .expect("test must succeed");
+            for _ in 0..51 {
+                fc.on_stream_received();
+            }
+        }
+
+        // ローカル開始 bidi (stream_id=1) を登録して RESET
+        conn.register_local_wt_stream(0, 1)
+            .expect("test must succeed");
+        conn.stream_reset(1, 0xab, 0).expect("test must succeed");
+
+        // WT_MAX_STREAMS カプセルが生成されない
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.pending_capsules.is_empty());
+    }
+
+    #[test]
+    fn test_wt_stream_reset_subtracts_header_peer_initiated() {
+        // ピア開始ストリームの RESET では final_size からヘッダー長が引かれる
+        let mut conn = make_server_with_fc_small_data_wt_session(0);
+
+        // ピア開始 bidi (stream_id=4): ヘッダーのみ送信して RESET
+        // final_size = 10 (ヘッダー 3 + ボディ 7)
+        conn.feed_stream(4, &[0x40, 0x41, 0x00], false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
+        conn.stream_reset(4, 0xab, 10).expect("test must succeed");
+
+        // ヘッダー減算あり: 残差 7 が計上される → 残り 93 バイト
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.check_received_data(93));
+        assert!(!session.check_received_data(94));
+    }
+
+    #[test]
+    fn test_wt_stream_reset_no_header_subtraction_local_initiated() {
+        // ローカル開始 bidi の RESET ではヘッダーは自側が送るため
+        // final_size から減算しない
+        let mut conn = make_server_with_fc_small_data_wt_session(0);
+
+        // ローカル開始 bidi (stream_id=1): データ 5 バイト受信して RESET
+        conn.register_local_wt_stream(0, 1)
+            .expect("test must succeed");
+        conn.feed_stream(1, &[0xAA; 5], false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
+        // final_size = 15 (ボディ 15。ヘッダーなし)
+        conn.stream_reset(1, 0xab, 15).expect("test must succeed");
+
+        // 減算なし: 残差 10 が計上される → 残り 85 バイト
+        // (ヘッダー長 3 を引いていた場合は 12 計上 → 残り 83)
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.check_received_data(85));
+        assert!(!session.check_received_data(86));
+    }
+
+    #[test]
+    fn test_wt_stream_reset_auto_consumes_window() {
+        // RESET の自動消費で WT_MAX_DATA カプセル (再広告値の増加) が発行される
+        // (RFC 9000 Section 19.4: RESET_STREAM 受信者は受信済みデータを破棄できる)
+        let mut conn = make_server_with_fc_small_data_wt_session(0);
+
+        // ピア開始 bidi (stream_id=4): データ 50 バイト受信
+        let mut data = vec![0x40, 0x41, 0x00];
+        data.extend_from_slice(&[0xAA; 50]);
+        conn.feed_stream(4, &data, false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
+
+        // RESET (final_size = 60): 残差 7 が計上され、自動消費される
+        // total_received = 57、total_consumed = 7
+        // remaining = 43 <= threshold 50 → new_max = 7 + 100 = 107
+        conn.stream_reset(4, 0xab, 60).expect("test must succeed");
+
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(
+            session
+                .pending_capsules
+                .iter()
+                .any(|c| matches!(c, crate::webtransport::Capsule::MaxData { maximum: 107 }))
+        );
+    }
+
+    #[test]
+    fn test_wt_stream_reset_uni_stream_accounts_data() {
+        // ピア開始 uni ストリームの RESET でもデータ FC に残差が計上される
+        let mut conn = make_server_with_fc_small_data_wt_session(0);
+
+        // ピア開始 uni (stream_id=2): ストリームタイプ + データ 50 バイト
+        let mut data = vec![0x40, 0x54, 0x00];
+        data.extend_from_slice(&[0xAA; 50]);
+        conn.feed_stream(2, &data, false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
+
+        // RESET (final_size = 63 = ヘッダー 3 + ボディ 60)
+        // 残差 = 63 - 3 - 50 = 10 が計上される
+        conn.stream_reset(2, 0xab, 63).expect("test must succeed");
+
+        // セッションは生きており、自動消費でウィンドウが回復する
+        // (残り 50 バイト = advertised_max 110 - total_received 60)
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.check_received_data(50));
+        assert!(!session.check_received_data(51));
+    }
+
+    #[test]
+    fn test_wt_stream_reset_after_fin_local_initiated_no_double_accounting() {
+        // ローカル開始 bidi の FIN 後に RESET が届いてもデータ FC に二重計上されない
+        // (RFC 9000 Section 3.2: FIN 受信後に RESET_STREAM を受信しうる。
+        //  計上済み量を FIN 時に掃除していたら final_size 全体が二重計上される)
+        let mut conn = make_server_with_fc_small_data_wt_session(0);
+
+        conn.register_local_wt_stream(0, 1)
+            .expect("test must succeed");
+        conn.feed_stream(1, &[0xAA; 5], false)
+            .expect("test must succeed");
+        conn.feed_stream(1, &[], true).expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
+
+        // FIN 後の RESET (final_size = 5 = 受信済みデータ量)
+        conn.stream_reset(1, 0xab, 5).expect("test must succeed");
+
+        // 残差 = 5 - 0 - 5 = 0 → 追加計上なし (total_received = 5)
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.check_received_data(95));
+        assert!(!session.check_received_data(96));
+    }
+
+    #[test]
+    fn test_wt_stream_reset_after_fin_peer_initiated_is_generic() {
+        // ピア開始ストリームの FIN 後の RESET は WT 経路に入らず
+        // 汎用 StreamReset として処理され、データ FC に追加計上されない
+        let mut conn = make_server_with_fc_small_data_wt_session(0);
+
+        // ピア開始 bidi (stream_id=4): ヘッダー + データ 50 バイト + FIN
+        let mut data = vec![0x40, 0x41, 0x00];
+        data.extend_from_slice(&[0xAA; 50]);
+        conn.feed_stream(4, &data, true).expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
+
+        // FIN 後の RESET (final_size = 63)
+        conn.stream_reset(4, 0xab, 63).expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(matches!(
+            event,
+            Event::StreamReset {
+                stream_id: 4,
+                error_code: 0xab,
+            }
+        ));
+
+        // データ FC に追加計上されない (total_received = 50 のまま)
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.check_received_data(50));
+        assert!(!session.check_received_data(51));
+    }
+
+    #[test]
+    fn test_wt_stream_reset_after_session_close_is_ignored() {
+        // 終了済みセッション (tombstone) のデータストリームへの RESET は
+        // WT 経路ではなく汎用 StreamReset として処理される
+        let mut conn = make_server_with_established_wt_session(0);
+
+        // ピア開始 bidi (stream_id=4) を開いてセッションを終了する
+        conn.feed_stream(4, &[0x40, 0x41, 0x00], false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
+        // CONNECT stream (0) の RESET でセッション終了
+        conn.stream_reset(0, 0x99, 0).expect("test must succeed");
+        let _ = conn.drain_events().expect("test must succeed");
+
+        // 終了済みセッションのデータストリームへの RESET → 汎用 StreamReset
+        conn.stream_reset(4, 0xab, 10).expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(matches!(
+            event,
+            Event::StreamReset {
+                stream_id: 4,
+                error_code: 0xab,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_wt_stream_reset_draining_session_accounts() {
+        // Draining セッションの既存データストリームの RESET でも FC 計上が
+        // 継続される (Draining は既存ストリームの送受信とカプセル受信が
+        // 継続できるため。新規ストリームは開けない)
+        let mut conn = make_server_with_fc_small_data_wt_session(0);
+
+        // Draining 遷移前にピア開始 bidi (stream_id=4) を開いてデータ 50 バイト受信
+        let mut data = vec![0x40, 0x41, 0x00];
+        data.extend_from_slice(&[0xAA; 50]);
+        conn.feed_stream(4, &data, false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
+
+        // Draining に遷移させる
+        feed_drain_session_capsule(&mut conn, 0);
+        let _ = conn.drain_events().expect("test must succeed");
+
+        // RESET (final_size = 63): 残差 10 が計上される
+        conn.stream_reset(4, 0xab, 63).expect("test must succeed");
+
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.check_received_data(50));
+        assert!(!session.check_received_data(51));
+    }
+
+    #[test]
+    fn test_wt_stream_reset_final_size_smaller_than_received() {
+        // final_size が受信済み量より小さい場合 (QUIC 層の不正) は残差 0 として
+        // 追加計上しない (RFC 9000 Section 4.5 の FINAL_SIZE_ERROR 事案)
+        let mut conn = make_server_with_fc_small_data_wt_session(0);
+
+        // ピア開始 bidi (stream_id=4): データ 50 バイト受信
+        let mut data = vec![0x40, 0x41, 0x00];
+        data.extend_from_slice(&[0xAA; 50]);
+        conn.feed_stream(4, &data, false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
+
+        // RESET (final_size = 40 < 受信済み 53): 残差 0 → 追加計上なし
+        conn.stream_reset(4, 0xab, 40).expect("test must succeed");
+
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.check_received_data(50));
+        assert!(!session.check_received_data(51));
+    }
+
+    #[test]
+    fn test_wt_stream_reset_exceeds_data_fc() {
+        // データ FC 超過の RESET で WT_FLOW_CONTROL_ERROR セッション終了になる
+        // (draft-ietf-webtrans-http3-16 Section 5.6.4)
+        let mut conn = make_server_with_fc_small_data_wt_session(0);
+        let mut data = vec![0x40, 0x41, 0x00];
+        data.extend_from_slice(&[0xAA; 90]);
+        conn.feed_stream(4, &data, false)
+            .expect("test must succeed");
+        while conn.poll_event().expect("test must succeed").is_some() {}
+
+        // RESET (final_size = 110): 残差 17 を計上すると total_received が
+        // 107 になり 100 を超過するため WT_FLOW_CONTROL_ERROR になる
+        conn.stream_reset(4, 0xab, 110).expect("test must succeed");
+
+        // セッションが WT_FLOW_CONTROL_ERROR で終了する
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        let Event::WebTransport(WebTransportEvent::SessionClosed { error_code, .. }) = event else {
+            panic!("WebTransportEvent::SessionClosed が発火していない");
+        };
+        assert_eq!(
+            error_code,
+            crate::webtransport::error::ErrorCode::FlowControlError as u64
+        );
     }
 
     #[test]
