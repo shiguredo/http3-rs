@@ -3,12 +3,16 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use shiguredo_http3::stream::RequestStream;
-use shiguredo_http3::{Connection, Settings};
+use shiguredo_http3::{Connection, Role, Settings};
 
 #[derive(Debug, Arbitrary)]
 enum FuzzInput {
-    /// リクエストストリームに任意データを投入し process_raw を呼ぶ
+    /// リクエストストリーム (クライアントロール) に任意データを投入し process_raw を呼ぶ
     RequestStreamRecv { chunks: Vec<(Vec<u8>, bool)> },
+    /// リクエストストリーム (サーバーロール) に任意データを投入し process_raw を呼ぶ
+    ///
+    /// サーバーロールでは先頭位置の WT_STREAM (0x41) が無視される分岐を網羅する。
+    RequestStreamRecvServer { chunks: Vec<(Vec<u8>, bool)> },
     /// 制御ストリーム受信側に任意データを投入する (Connection 経由)
     ControlStreamRecv { data: Vec<u8> },
     /// リクエストストリームの送信状態遷移
@@ -30,7 +34,27 @@ enum SendOp {
 fuzz_target!(|input: FuzzInput| {
     match input {
         FuzzInput::RequestStreamRecv { chunks } => {
-            let mut stream = RequestStream::new(0);
+            let mut stream = RequestStream::new(0, Role::Client);
+            for (data, fin) in chunks {
+                // データサイズを制限して処理速度を確保
+                let data = if data.len() > 4096 {
+                    &data[..4096]
+                } else {
+                    &data
+                };
+                stream.receive(data, fin);
+                // process_raw を繰り返し呼んで全データを消費
+                loop {
+                    match stream.process_raw() {
+                        Ok(Some(_)) => continue,
+                        Ok(None) => break,
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+        FuzzInput::RequestStreamRecvServer { chunks } => {
+            let mut stream = RequestStream::new(0, Role::Server);
             for (data, fin) in chunks {
                 // データサイズを制限して処理速度を確保
                 let data = if data.len() > 4096 {
@@ -64,7 +88,7 @@ fuzz_target!(|input: FuzzInput| {
             while let Ok(Some(_)) = conn.poll_event() {}
         }
         FuzzInput::RequestStreamSend { operations } => {
-            let mut stream = RequestStream::new(0);
+            let mut stream = RequestStream::new(0, Role::Client);
             for op in operations {
                 match op {
                     SendOp::SendHeaders {

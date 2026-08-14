@@ -1233,7 +1233,7 @@ impl Connection {
         // ストリームを取得または作成
         self.streams
             .entry(stream_id)
-            .or_insert_with(|| RequestStream::new(stream_id));
+            .or_insert_with(|| RequestStream::new(stream_id, self.role));
 
         // まずデータを受信 (ストリームの内部バッファに追加)
         if let Some(stream) = self.streams.get_mut(&stream_id) {
@@ -1676,7 +1676,7 @@ impl Connection {
             .ok_or(Error::ConnectionError(ErrorCode::InternalError))?;
         qpack_buf.truncate(qpack_len);
 
-        let mut stream = RequestStream::new(stream_id);
+        let mut stream = RequestStream::new(stream_id, self.role);
         // WebTransport CONNECT の場合は WT CONNECT フラグを設定する
         // (DATA を recv_body に累積しない。Capsule データは handle_wt_data_frame が処理する)
         let is_wt_connect = is_webtransport_connect(headers);

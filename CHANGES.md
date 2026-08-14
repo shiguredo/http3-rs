@@ -127,6 +127,8 @@
   - @voluntas
 - [CHANGE] クライアントが `SETTINGS_WT_ENABLED > 1` を受信した際に `H3_SETTINGS_ERROR` 接続エラーを返す検証を追加する (draft-ietf-webtrans-http3-16 Section 3.1)
   - @voluntas
+- [CHANGE] `RequestStream::new` のシグネチャを `new(stream_id: u64, role: Role)` に変更し、WT_STREAM (0x41) の先頭位置判定に接続ロールを使用する (draft-ietf-webtrans-http3-16 Section 4.3)
+  - @voluntas
 - [ADD] `Client::connect_with_ca` / `ClientWebTransportSession::connect_with_ca` / `TlsContext::add_ca_cert_pem` を追加し、検証に使用するカスタム CA 証明書 (PEM) をトラストストアに追加できるようにする
   - @voluntas
 - [ADD] `VarInt::from_static` / `qpack::Header::from_static` / `frame::GoawayPayload::from_static` の doc に `compile_fail` ブロックを追加し、`const fn` 検査のリグレッションを CI (`cargo test --doc`) で防止する
@@ -232,6 +234,8 @@
 - [FIX] 完走・リセット・セッション終了後のストリームと WT セッションが接続終了まで蓄積し続けるメモリリークを修正する。終了済みセッションへの DATA / FIN / RESET / 新規ストリーム / データグラムの拒否・破棄を追加する (RFC 9297 Section 3.2 / draft-ietf-webtrans-http3-16 Section 6)
   - @voluntas
 - [FIX] WebTransport CONNECT ストリームの DATA が受信バッファに累積され続ける問題を修正し、content-length / content-type ヘッダー付きの WT CONNECT を H3_MESSAGE_ERROR で拒否する (RFC 9297 Section 3.2)
+  - @voluntas
+- [FIX] リクエストストリーム・制御ストリームで誤った位置に受信した WT_STREAM (0x41) を H3_FRAME_ERROR 接続エラーとして検出する (draft-ietf-webtrans-http3-16 Section 4.3)
   - @voluntas
 - [FIX] tokio-s2n-quic の送信経路が FIN 交付をループで取得せず、H3 層に FIN 未交付状態が残留する問題を修正する (RFC 9114 Section 4.1)
   - @voluntas
