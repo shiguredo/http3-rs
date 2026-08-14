@@ -6,6 +6,7 @@ use crate::error::{Error, ErrorCode};
 use crate::frame::{self, Frame, GoawayPayload, SettingsPayload};
 use crate::settings::Settings;
 use crate::varint::VarInt;
+use crate::webtransport::stream::BIDIRECTIONAL_SIGNAL_VALUE;
 
 use super::{RecvBuffer, SendBuffer};
 
@@ -260,6 +261,10 @@ impl ControlStreamRecv {
                             self.peer_settings = Some(Settings::from_payload(payload));
                             self.recv_state = ControlRecvState::Ready;
                         } else {
+                            // SETTINGS 以外の最初のフレームは H3_MISSING_SETTINGS。
+                            // WT_STREAM (0x41) も含む (draft-ietf-webtrans-http3-16
+                            // Section 4.3 の H3_FRAME_ERROR より RFC 9114 Section 6.2.1
+                            // の SETTINGS 先頭必須が優先する)
                             return Err(Error::ConnectionError(ErrorCode::MissingSettings));
                         }
                     } else {
@@ -272,6 +277,13 @@ impl ControlStreamRecv {
                             // DATA/HEADERS は制御ストリームでは無効 (RFC 9114 Section 7.2)
                             Frame::Data(_) | Frame::Headers(_) => {
                                 return Err(Error::ConnectionError(ErrorCode::FrameUnexpected));
+                            }
+                            // WT_STREAM (0x41) は制御ストリームでは接続エラー
+                            // (draft-ietf-webtrans-http3-16 Section 4.3)
+                            Frame::Unknown(unknown)
+                                if unknown.frame_type().get() == BIDIRECTIONAL_SIGNAL_VALUE =>
+                            {
+                                return Err(Error::ConnectionError(ErrorCode::FrameError));
                             }
                             _ => {}
                         }
@@ -422,6 +434,58 @@ mod tests {
                 Err(Error::ConnectionError(ErrorCode::SettingsError))
             ),
             "expected ConnectionError(SettingsError), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_control_stream_recv_wt_stream_is_frame_error() {
+        let mut stream = ControlStreamRecv::new();
+
+        // ストリームタイプ + SETTINGS フレーム
+        let data = [0x00, 0x04, 0x00];
+        stream.receive(&data);
+        stream
+            .process()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(stream.is_ready());
+
+        // SETTINGS 受信後 (Ready 状態) の WT_STREAM (0x41) は接続エラー
+        // (draft-ietf-webtrans-http3-16 Section 4.3)
+        let data = [0x40, 0x41, 0x00];
+        stream.receive(&data);
+        let result = stream.process();
+        assert!(
+            matches!(result, Err(Error::ConnectionError(ErrorCode::FrameError))),
+            "expected ConnectionError(FrameError), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_control_stream_recv_wt_stream_before_settings_is_missing_settings() {
+        let mut stream = ControlStreamRecv::new();
+
+        // ストリームタイプ (0x00) を消費して WaitingSettings 状態にする
+        let stream_type = [0x00];
+        stream.receive(&stream_type);
+        let result = stream.process().expect("test must succeed");
+        assert!(
+            result.is_none(),
+            "expected stream type consumed, got {result:?}"
+        );
+
+        // SETTINGS 受信前 (WaitingSettings 状態) の WT_STREAM (0x41) は
+        // H3_MISSING_SETTINGS になる (RFC 9114 Section 6.2.1 の SETTINGS 先頭必須が優先。
+        // draft-ietf-webtrans-http3-16 Section 4.3 の H3_FRAME_ERROR より優先する)
+        let data = [0x40, 0x41, 0x00];
+        stream.receive(&data);
+        let result = stream.process();
+        assert!(
+            matches!(
+                result,
+                Err(Error::ConnectionError(ErrorCode::MissingSettings))
+            ),
+            "expected ConnectionError(MissingSettings), got {result:?}"
         );
     }
 }
