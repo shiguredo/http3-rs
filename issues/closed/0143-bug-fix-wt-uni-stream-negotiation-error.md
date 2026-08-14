@@ -1,7 +1,7 @@
 # WT 未ネゴシエーション時の 0x54 uni stream 受信が接続エラーになる
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-14
 - Branch: feature/fix-wt-uni-stream-negotiation-error
 - Polished: 2026-08-08
 
@@ -42,6 +42,23 @@ RFC 9114 Section 6.2 の MUST 違反 (未知ストリームタイプを接続エ
 
 ### 関連ファイル
 
-- `src/connection/mod.rs` (`Connection::handle_new_unidirectional_stream` の 0x54 分岐 / `test_wt_uni_stream_disabled_returns_error`)。0x54 分岐のコメントが draft-15 表記のまま残っているため、draft-16 に合わせて更新する。`Connection::is_wt_fully_negotiated` の定義は `src/connection/wt_session.rs` (呼び出し箇所は mod.rs / wt_stream.rs)
+- `src/connection/mod.rs` (`Connection::handle_new_unidirectional_stream` の 0x54 分岐 / `Connection::handle_unidirectional_stream` の FIN 処理 / テスト群)。0x54 分岐のコメントを draft-16 に合わせて更新した
 - 一次資料: `refs/h3/rfc9114.txt` Section 6.2 (unknown stream type の扱い)。draft-16 Section 4.6 はバッファリング非採用の判断の参考として参照
 - 経緯参照: `issues/closed/0044-bug-wt-negotiation-check-inconsistency.md` (ストリームエラーにする決定)、`issues/closed/0008-bug-webtransport-uni-stream-0x54-ignored.md` (0x54 専用分岐導入時に接続エラーを導入。nghttp3 追随の経緯。本 issue は RFC 準拠を優先し nghttp3 と異なる挙動を採る)
+
+### 修正内容
+
+- `Connection::handle_new_unidirectional_stream` の 0x54 分岐で、`is_wt_fully_negotiated()` が false の場合に返すエラーを `Error::ConnectionError(ErrorCode::StreamCreationError)` から `Error::StreamError(ErrorCode::StreamCreationError)` に変更した (RFC 9114 Section 6.2 の「unknown stream type は接続エラーにしてはならない」MUST NOT への適合。abort 方式を採用)
+- `Connection::handle_unidirectional_stream` の FIN 処理に `pending_uni_streams.remove(&stream_id)` を追加し、ストリームタイプ varint 未完のまま FIN が来た場合にバッファを破棄するようにした (RFC 9114 Section 6.2 の「ヘッダー受信前に閉じられた単方向ストリームは許容」)
+- `handle_new_unidirectional_stream` の BufferTooShort 分岐でも fin 指定時にバッファを破棄するようにした (同一チャンクで varint 未完 + FIN が届いた場合のリーク防止)
+- 0x54 分岐のコメントを draft-15 表記から draft-16 に更新し、バッファリング非採用の根拠 (RFC 9114 Section 6.2 の MUST が定める 2 択のうち abort 方式を採用) を明記した
+
+### 追加・修正したテスト
+
+- `test_wt_uni_stream_not_negotiated_returns_stream_error`: `test_wt_uni_stream_disabled_returns_error` を改名し、期待値を `Error::StreamError(ErrorCode::StreamCreationError)` に修正
+- `test_wt_uni_stream_not_negotiated_followup_data_returns_stream_error`: ストリームエラー後の後続データが 0x54 の varint エンコーディングで始まる場合、同じストリームエラーが返ることを検証
+- `test_wt_uni_stream_not_negotiated_fin_only_is_ok`: データなしの FIN のみは Ok(()) を返すことを検証
+- `test_wt_uni_stream_not_negotiated_partial_type_then_fin_is_ok`: varint 未完バッファの後に FIN が来た場合、バッファを破棄して Ok(()) を返すことを検証
+- `test_wt_uni_stream_not_negotiated_partial_type_with_fin_is_ok`: 同一チャンクで varint 未完 + FIN が来た場合もバッファを破棄することを検証
+- `test_wt_uni_stream_not_negotiated_split_type_returns_stream_error`: varint 分割到着でも未ネゴシエーションの 0x54 はストリームエラーになることを検証
+- `test_wt_uni_stream_not_negotiated_error_keeps_connection_alive`: ストリームエラー後も接続は生存し、制御ストリームの `feed_stream` が成功することを検証
