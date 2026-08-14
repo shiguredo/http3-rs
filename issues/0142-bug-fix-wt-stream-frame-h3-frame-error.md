@@ -1,7 +1,7 @@
 # WT_STREAM (0x41) をリクエストストリームの先頭以外で受信しても H3_FRAME_ERROR にならない
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-14
 - Branch: feature/fix-wt-stream-frame-h3-frame-error
 - Polished: 2026-08-08
 
@@ -42,3 +42,25 @@ draft-ietf-webtrans-http3-16 Section 4.3 の MUST 違反 (WT_STREAM を誤った
 - `src/stream/request.rs` (`RequestStream::process_raw` の `Frame::Unknown` 分岐 / 先頭フレーム処理済みフラグ / ロール別の先頭位置扱い)
 - `src/stream/control.rs` (`ControlStreamRecv::process` の Ready 状態の catch-all 置き換え)
 - 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 4.3、`refs/h3/rfc9114.txt` Section 9 (未知フレームの無視)、Section 6.2.1 (制御ストリームの SETTINGS 先頭必須)
+
+### 修正内容
+
+- `RequestStream::new` のシグネチャを `new(stream_id, role)` に変更し、接続ロールを保持するようにした (`Role` は `src/connection/mod.rs` の公開 enum)
+- `RequestStream` に先頭フレーム処理済みフラグ `first_frame_processed` を追加し、最初のフレーム消費時に立てるようにした。`Frame::Unknown` のスキップを含む最初のフレーム消費時に立てることで、先頭位置と 2 フレーム目以降を区別する
+- `RequestStream::process_raw` の `Frame::Unknown` 分岐で `frame_type == 0x41` を検査し、`Error::ConnectionError(ErrorCode::FrameError)` を返すようにした。サーバー側の先頭位置のみ「very first bytes of a request stream」に該当するため無視を維持し、クライアント側は先頭位置でもエラーにする
+- `ControlStreamRecv::process` の Ready 状態の catch-all を置き換え、0x41 を `Error::ConnectionError(ErrorCode::FrameError)` にするようにした。WaitingSettings 状態の 0x41 は既存の `MissingSettings` エラーを維持する (RFC 9114 Section 6.2.1 の SETTINGS 先頭必須が優先)
+- `src/connection/mod.rs` の `RequestStream::new` 呼び出し 2 箇所に `self.role` を渡すようにした
+- `fuzz/fuzz_targets/fuzz_stream.rs` にサーバーロールの variant を追加し、先頭 0x41 無視パスを fuzz 対象にした
+
+### 追加したテスト
+
+- `src/stream/request.rs` の `#[cfg(test)]` モジュール:
+  - サーバー側先頭位置 0x41 の無視維持 (後続 HEADERS の正常処理を含む)
+  - サーバー側 2 フレーム目以降 0x41 の `FrameError` 拒否
+  - クライアント側先頭位置 0x41 の `FrameError` 拒否
+  - クライアント側 2 フレーム目以降 0x41 の `FrameError` 拒否
+  - ペイロード長非ゼロの 0x41 無視
+  - チャンク分割で到着した先頭 0x41 の無視
+- `src/stream/control.rs` の `#[cfg(test)]` モジュール:
+  - SETTINGS 受信後 (Ready 状態) の 0x41 の `FrameError` 拒否
+  - SETTINGS 受信前 (WaitingSettings 状態) の 0x41 の `MissingSettings` 維持
