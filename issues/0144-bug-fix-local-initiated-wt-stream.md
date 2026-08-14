@@ -1,7 +1,7 @@
 # ローカル開始の WT ストリーム受信データがリクエストストリームとして誤処理される
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-14
 - Branch: feature/fix-local-initiated-wt-stream
 - Polished: 2026-08-08
 
@@ -43,8 +43,25 @@
 
 ### 関連ファイル
 
-- `src/connection/mod.rs` (`Connection::feed_stream` / `Connection::handle_bidirectional_stream` / `wt_uni_streams` / `wt_bidi_streams` / 登録 API)
-- `src/connection/client.rs` / `server.rs` (登録 API の公開ラッパー)
-- `src/connection/wt_session.rs` (`WtSession::associated_streams` への追加 / セッション終了時の RESET 対象)
-- `src/connection/wt_stream.rs` (ローカル開始ストリームの FIN 処理の分岐)
-- 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 4.2 / 4.3 / 5.3、`refs/quic/rfc9000.txt` Section 2.1
+- `src/connection/wt_stream.rs` (`Connection::register_local_wt_stream` / `Connection::is_local_initiated_bidi` / `Connection::handle_wt_bidi_stream` の FIN 処理)
+- `src/connection/client.rs` / `server.rs` (`register_local_wt_stream` の公開ラッパー)
+- `src/connection/mod.rs` (テスト 19 件 + テストヘルパー 2 件)
+- 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 4.3 / 4.4 / 4.6 / 5.3、`refs/quic/rfc9000.txt` Section 2.1
+
+### 修正内容
+
+- `Connection::register_local_wt_stream(session_id, stream_id)` を追加し、アプリが自ら開いた双方向ストリーム (クライアント側は下位 2 ビット 0x00、サーバー側は 0x01) をセッションに関連付けるようにした。`ClientConnection` / `ServerConnection` にも公開ラッパーを追加した
+- 登録 API の検証: 単方向ストリーム ID (0x02 / 0x03) と非ローカル開始 ID は `IdError`、セッション不存在・非 Established は `GeneralProtocolError`、二重登録・HTTP/3 ストリーム作成済みは `StreamCreationError` で拒否する
+- 登録 API は `wt_bidi_streams` への insert と `WtSession::associated_streams` への追加の両方を行い、セッション終了時の RESET 対象 (reliable size 計算込み) に含めるようにした
+- `handle_wt_bidi_stream` の FIN 処理を変更し、ローカル開始ストリームの FIN では `on_remote_stream_closed` (WT_MAX_STREAMS クレジット返却) を呼ばないようにした。加えて、自側がヘッダーを送信済みのローカル開始ストリームは FIN 後も `wt_bidi_streams` から除去せず、RESET_STREAM_AT の reliable size (ヘッダー長) 計算に使えるようにした (draft-16 Section 4.4)。登録解除はセッション終了時 (`terminate_wt_session_with`) に委ねる
+- 登録済みストリームの受信データは既存の `wt_bidi_streams` 分岐 (`feed_stream`) で処理される。ヘッダー無しのアプリペイロードとして `BidiStreamData` / `BidiStreamEnd` イベントが発火し、`BidiStreamOpen` は発火しない
+
+### 追加・修正したテスト
+
+- 登録 → feed → イベント検証 (クライアント側 stream_id=4 / サーバー側 stream_id=1): `BidiStreamData` が発火し `BidiStreamOpen` が発火しないこと
+- 未登録ストリームの誤処理 (リクエストストリームとして処理されること)
+- FIN 時の `BidiStreamEnd` 発火、データ + FIN 同一チャンク
+- FIN 時のフロー制御不変: サーバー側・クライアント側それぞれで WT_MAX_STREAMS カプセルが生成されないこと (対照としてピア開始ストリームでは生成されることも検証)
+- FIN 後の登録維持: `wt_stream_header_len` がヘッダー長を返し、セッション終了時の RESET 対象で reliable size がヘッダー長になること (サーバー側・クライアント側)
+- 登録 API の検証エラー: uni ストリーム ID / 非ローカル開始 ID / 二重登録 / セッション不存在 / Pending セッション / HTTP/3 ストリーム作成済み
+- 公開 API ラッパー (`ClientConnection` / `ServerConnection`) からの登録
