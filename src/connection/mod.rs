@@ -3059,6 +3059,420 @@ mod tests {
     }
 
     // =========================================================================
+    // ローカル開始の WebTransport 双方向ストリーム
+    // アプリが自ら開いたストリームを受信データが届く前に登録する
+    // (draft-ietf-webtrans-http3-16 Section 4.3)
+    // =========================================================================
+
+    #[test]
+    fn test_local_wt_stream_register_and_receive_client() {
+        // クライアント: ローカル開始 bidi (stream_id=4) を登録して受信
+        let mut conn = wt_negotiated_client_with_session(0);
+
+        // stream_id=4 は 2 番目の client-initiated bidi stream (RFC 9000 Section 2.1)
+        conn.register_local_wt_stream(0, 4)
+            .expect("test must succeed");
+
+        // ヘッダー無しのアプリペイロード (ヘッダーは開始側が先頭で 1 回だけ送る)
+        conn.feed_stream(4, &[0xAA, 0xBB], false)
+            .expect("test must succeed");
+
+        // BidiStreamOpen は発火せず BidiStreamData のみ
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::BidiStreamData {
+                stream_id: 4,
+                ref data,
+            }) if data == &[0xAA, 0xBB]
+        ));
+    }
+
+    #[test]
+    fn test_local_wt_stream_register_and_receive_server() {
+        // サーバー: ローカル開始 bidi (stream_id=1) を登録して受信
+        let mut conn = make_server_with_established_wt_session(0);
+
+        conn.register_local_wt_stream(0, 1)
+            .expect("test must succeed");
+        conn.feed_stream(1, &[0xCC, 0xDD], false)
+            .expect("test must succeed");
+
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::BidiStreamData {
+                stream_id: 1,
+                ref data,
+            }) if data == &[0xCC, 0xDD]
+        ));
+    }
+
+    #[test]
+    fn test_local_wt_stream_not_registered_is_request_stream() {
+        // 未登録のローカル開始 bidi はリクエストストリームとして誤処理される
+        // (登録 API はこの誤処理を防ぐために呼び出す。受信前に登録が必要)
+        let mut conn = wt_negotiated_client_with_session(0);
+
+        // stream_id=4 は未登録なのでリクエストストリームとして処理される
+        // WT ペイロードの先頭バイト 0xAA は 2 バイト varint フレームタイプの
+        // 先頭と解釈され、フレームヘッダー (タイプ + 長さ) 不足で処理が停止する
+        // (WT イベントは発火しない)
+        conn.feed_stream(4, &[0xAA, 0xBB], false)
+            .expect("test must succeed");
+        assert!(conn.poll_event().expect("test must succeed").is_none());
+        // リクエストストリームとして作成済みになる
+        assert!(conn.streams.contains_key(&4));
+    }
+
+    #[test]
+    fn test_local_wt_stream_fin_emits_end_event() {
+        // ローカル開始ストリームの FIN で BidiStreamEnd イベントが発火する
+        let mut conn = make_server_with_established_wt_session(0);
+
+        conn.register_local_wt_stream(0, 1)
+            .expect("test must succeed");
+        conn.feed_stream(1, &[], true).expect("test must succeed");
+
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::BidiStreamEnd { stream_id: 1 })
+        ));
+    }
+
+    #[test]
+    fn test_local_wt_stream_data_and_fin_same_chunk() {
+        // データと FIN が同一チャンクで届いた場合、BidiStreamData と
+        // BidiStreamEnd の順にイベントが発火する
+        let mut conn = make_server_with_established_wt_session(0);
+
+        conn.register_local_wt_stream(0, 1)
+            .expect("test must succeed");
+        conn.feed_stream(1, &[0xAA], true)
+            .expect("test must succeed");
+
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::BidiStreamData {
+                stream_id: 1,
+                ref data,
+            }) if data == &[0xAA]
+        ));
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::BidiStreamEnd { stream_id: 1 })
+        ));
+        assert!(conn.poll_event().expect("test must succeed").is_none());
+    }
+
+    #[test]
+    fn test_local_wt_stream_fin_keeps_registration_for_reset() {
+        // ローカル開始ストリームは自側がヘッダーを送信済みのため、FIN 後も
+        // RESET_STREAM_AT の reliable size (ヘッダー長) 計算に登録が維持される
+        // (draft-ietf-webtrans-http3-16 Section 4.4)
+        let mut conn = make_server_with_established_wt_session(0);
+
+        conn.register_local_wt_stream(0, 1)
+            .expect("test must succeed");
+        conn.feed_stream(1, &[], true).expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::BidiStreamEnd { stream_id: 1 })
+        ));
+
+        // FIN 後もヘッダー長が計算できる
+        // (signal value 0x41 = varint 2 バイト + session_id 0 = varint 1 バイト)
+        assert_eq!(conn.wt_stream_header_len(1), 3);
+
+        // セッション終了時の RESET 対象に含まれ、reliable size がヘッダー長になる
+        conn.stream_reset(0, 0x99, 0).expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        let Event::WebTransport(WebTransportEvent::SessionClosed { reset_streams, .. }) = event
+        else {
+            panic!("WebTransportEvent::SessionClosed が発火していない");
+        };
+        assert!(
+            reset_streams
+                .iter()
+                .any(|r| r.stream_id == 1 && r.reliable_size == 3),
+            "ローカル開始ストリームが reliable_size=3 で RESET 対象に含まれること: {reset_streams:?}"
+        );
+    }
+
+    #[test]
+    fn test_local_wt_stream_fin_keeps_registration_for_reset_client() {
+        // クライアント側でもローカル開始ストリームの FIN 後は登録が維持され、
+        // セッション終了時の RESET 対象で reliable size がヘッダー長になる
+        // (draft-ietf-webtrans-http3-16 Section 4.4)
+        let mut conn = wt_negotiated_client_with_session(0);
+
+        conn.register_local_wt_stream(0, 4)
+            .expect("test must succeed");
+        conn.feed_stream(4, &[], true).expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::BidiStreamEnd { stream_id: 4 })
+        ));
+
+        // セッション終了時の RESET 対象に含まれ、reliable size がヘッダー長になる
+        conn.stream_reset(0, 0x99, 0).expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        let Event::WebTransport(WebTransportEvent::SessionClosed { reset_streams, .. }) = event
+        else {
+            panic!("WebTransportEvent::SessionClosed が発火していない");
+        };
+        assert!(
+            reset_streams
+                .iter()
+                .any(|r| r.stream_id == 4 && r.reliable_size == 3),
+            "ローカル開始ストリームが reliable_size=3 で RESET 対象に含まれること: {reset_streams:?}"
+        );
+    }
+
+    #[test]
+    fn test_local_wt_stream_fin_no_credit_return() {
+        // ローカル開始ストリームの FIN では WT_MAX_STREAMS クレジットが返却されない
+        // (WT_MAX_STREAMS はピアが開くストリーム数の制限。
+        //  draft-ietf-webtrans-http3-16 Section 5.3)
+        let mut conn = make_server_with_fc_established_wt_session(0);
+
+        // 受信ストリーム数をしきい値超過にしておく
+        // (concurrent_limit = 100 のとき、残り 50 以下でクレジット返却が発生する)
+        {
+            let session = conn.wt_sessions.get_mut(&0).expect("test must succeed");
+            let fc = session
+                .recv_stream_fc_bidi
+                .as_mut()
+                .expect("test must succeed");
+            for _ in 0..51 {
+                fc.on_stream_received();
+            }
+        }
+
+        // ローカル開始 bidi (stream_id=1) を登録して FIN
+        conn.register_local_wt_stream(0, 1)
+            .expect("test must succeed");
+        conn.feed_stream(1, &[], true).expect("test must succeed");
+
+        // BidiStreamEnd イベントは発火する
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::BidiStreamEnd { stream_id: 1 })
+        ));
+
+        // クレジット返却 (WT_MAX_STREAMS カプセル) が発生しない
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.pending_capsules.is_empty());
+    }
+
+    #[test]
+    fn test_local_wt_stream_fin_no_credit_return_client() {
+        // クライアント側でもローカル開始ストリームの FIN で
+        // WT_MAX_STREAMS クレジットが返却されない (draft-ietf-webtrans-http3-16 Section 5.3)
+        let mut conn = wt_negotiated_client_with_session(0);
+        let wt = wt_multi_draft_settings_with_flow_control();
+        {
+            let session = conn.wt_sessions.get_mut(&0).expect("test must succeed");
+            session.flow_control_enabled = true;
+            session.initialize_flow_control(
+                wt.wt_settings.as_ref().expect("test must succeed"),
+                false,
+            );
+            let fc = session
+                .recv_stream_fc_bidi
+                .as_mut()
+                .expect("test must succeed");
+            for _ in 0..51 {
+                fc.on_stream_received();
+            }
+        }
+
+        // ローカル開始 bidi (stream_id=4) を登録して FIN
+        conn.register_local_wt_stream(0, 4)
+            .expect("test must succeed");
+        conn.feed_stream(4, &[], true).expect("test must succeed");
+
+        // BidiStreamEnd イベントは発火する
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("test must succeed");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::BidiStreamEnd { stream_id: 4 })
+        ));
+
+        // クレジット返却 (WT_MAX_STREAMS カプセル) が発生しない
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.pending_capsules.is_empty());
+    }
+
+    #[test]
+    fn test_peer_initiated_wt_stream_fin_returns_credit() {
+        // 対照: ピア開始ストリームの FIN では WT_MAX_STREAMS クレジットが返却される
+        // (ローカル開始ストリームのみクレジット返却対象外のため)
+        let mut conn = make_server_with_fc_established_wt_session(0);
+
+        {
+            let session = conn.wt_sessions.get_mut(&0).expect("test must succeed");
+            let fc = session
+                .recv_stream_fc_bidi
+                .as_mut()
+                .expect("test must succeed");
+            for _ in 0..51 {
+                fc.on_stream_received();
+            }
+        }
+
+        // ピア開始 bidi (stream_id=0): ヘッダー付きで開いて FIN
+        conn.feed_stream(0, &[0x40, 0x41, 0x00], false)
+            .expect("test must succeed");
+        let _ = conn.drain_events().expect("test must succeed");
+        conn.feed_stream(0, &[], true).expect("test must succeed");
+
+        // WT_MAX_STREAMS カプセルが生成される
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(session.pending_capsules.iter().any(|c| matches!(
+            c,
+            crate::webtransport::Capsule::MaxStreams {
+                bidirectional: true,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn test_register_local_wt_stream_rejects_uni_stream_id() {
+        // 単方向ストリーム ID は拒否 (RFC 9000 Section 2.1:
+        //  単方向ストリームは開始者のみが送信するため受信データが存在しない)
+        let mut conn = make_server_with_established_wt_session(0);
+
+        // 0x02: client-initiated unidirectional
+        let err = conn.register_local_wt_stream(0, 2).unwrap_err();
+        assert!(matches!(err, Error::ConnectionError(ErrorCode::IdError)));
+
+        // 0x03: server-initiated unidirectional
+        let err = conn.register_local_wt_stream(0, 3).unwrap_err();
+        assert!(matches!(err, Error::ConnectionError(ErrorCode::IdError)));
+    }
+
+    #[test]
+    fn test_register_local_wt_stream_rejects_peer_initiated_id() {
+        // ピア開始のストリーム ID は拒否
+        let mut server = make_server_with_established_wt_session(0);
+
+        // サーバー側: クライアント開始 bidi (0x00) はピア開始
+        let err = server.register_local_wt_stream(0, 0).unwrap_err();
+        assert!(matches!(err, Error::ConnectionError(ErrorCode::IdError)));
+
+        let mut client = wt_negotiated_client_with_session(0);
+
+        // クライアント側: サーバー開始 bidi (0x01) はピア開始
+        let err = client.register_local_wt_stream(0, 1).unwrap_err();
+        assert!(matches!(err, Error::ConnectionError(ErrorCode::IdError)));
+    }
+
+    #[test]
+    fn test_register_local_wt_stream_rejects_duplicate() {
+        // 同一ストリーム ID の二重登録は拒否
+        let mut conn = make_server_with_established_wt_session(0);
+
+        conn.register_local_wt_stream(0, 1)
+            .expect("test must succeed");
+        let err = conn.register_local_wt_stream(0, 1).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ConnectionError(ErrorCode::StreamCreationError)
+        ));
+    }
+
+    #[test]
+    fn test_register_local_wt_stream_rejects_missing_session() {
+        // 存在しないセッションへの登録は拒否
+        let mut conn = make_server_with_established_wt_session(0);
+
+        let err = conn.register_local_wt_stream(4, 1).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ConnectionError(ErrorCode::GeneralProtocolError)
+        ));
+    }
+
+    #[test]
+    fn test_register_local_wt_stream_rejects_pending_session() {
+        // Pending セッションへの登録は拒否 (確立時にバッファリング経路で
+        // 受信ストリームとして誤カウントされるため)
+        let mut conn = make_negotiated_wt_server();
+        let session = WtSession::new();
+        // Pending 状態のまま登録
+        conn.wt_sessions.insert(0, session);
+
+        let err = conn.register_local_wt_stream(0, 1).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ConnectionError(ErrorCode::GeneralProtocolError)
+        ));
+    }
+
+    #[test]
+    fn test_register_local_wt_stream_rejects_request_stream() {
+        // 既に HTTP/3 ストリームとして処理済みのストリームは拒否
+        let mut conn = Connection::server(wt_enabled_settings());
+        conn.set_control_stream_id(3).expect("test must succeed");
+        // リクエストストリームとして作成済みにする
+        let mut session = WtSession::new();
+        session.state = WtSessionState::Established;
+        conn.wt_sessions.insert(0, session);
+
+        // サーバー側のローカル開始 bidi (stream_id=1) をリクエストストリームとして処理する
+        // 空の HEADERS フレーム (type=0x01, length=0x00) は QPACK デコード失敗になる
+        let err = conn.feed_stream(1, &[0x01, 0x00], false).unwrap_err();
+        assert!(matches!(err, Error::Qpack(_)));
+        // リクエストストリームが作成済みなので登録は拒否される
+        let err = conn.register_local_wt_stream(0, 1).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ConnectionError(ErrorCode::StreamCreationError)
+        ));
+    }
+
+    // =========================================================================
     // WebTransport 能力ネゴシエーション
     // (draft-ietf-webtrans-http3-15 Section 3.1, 4.6)
     // =========================================================================
@@ -3374,6 +3788,22 @@ mod tests {
         let mut session = WtSession::new();
         session.state = WtSessionState::Established;
         server.wt_sessions.insert(session_id, session);
+        server
+    }
+
+    /// Established 状態かつフロー制御が有効な WT セッションを持つサーバーを作成するヘルパ
+    ///
+    /// フロー制御の初期値は `wt_multi_draft_settings_with_flow_control`
+    /// (bidi 同時接続数 100) に従う。
+    fn make_server_with_fc_established_wt_session(session_id: u64) -> Connection {
+        let mut server = make_server_with_established_wt_session(session_id);
+        let wt = wt_multi_draft_settings_with_flow_control();
+        let session = server
+            .wt_sessions
+            .get_mut(&session_id)
+            .expect("test must succeed");
+        session.flow_control_enabled = true;
+        session.initialize_flow_control(wt.wt_settings.as_ref().expect("test must succeed"), false);
         server
     }
 

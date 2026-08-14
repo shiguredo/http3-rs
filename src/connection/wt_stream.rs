@@ -153,6 +153,94 @@ impl Connection {
         Ok(buf)
     }
 
+    /// ローカル開始の WebTransport 双方向ストリームを登録する
+    ///
+    /// アプリが自ら開いた双方向ストリーム (クライアント側は 0x00、サーバー側は
+    /// 0x01 の下位 2 ビットを持つストリーム ID。RFC 9000 Section 2.1) を
+    /// セッションに関連付ける。登録後は `feed_stream` に渡した受信データが
+    /// HTTP/3 リクエストではなく WebTransport ストリームとして処理され、
+    /// `BidiStreamData` / `BidiStreamEnd` イベントが発火する。
+    ///
+    /// 受信データにはストリームヘッダー (signal value + session ID) が含まれない。
+    /// ヘッダーは開始側がストリーム先頭で 1 回だけ送信する
+    /// (draft-ietf-webtrans-http3-16 Section 4.3)。
+    ///
+    /// セッション終了時の RESET 対象に含めるため、セッションにも関連付けを行う。
+    ///
+    /// FIN 受信後も登録はセッション終了時まで維持され、`wt_stream_header_len` は
+    /// ヘッダー長を返し続ける。自側が送信したヘッダーを含む RESET_STREAM_AT の
+    /// reliable size 計算に必要なため (draft-ietf-webtrans-http3-16 Section 4.4)。
+    /// また FIN で WT_MAX_STREAMS クレジットは返却されない
+    /// (WT_MAX_STREAMS はピアが開くストリーム数の制限。Section 5.3)。
+    ///
+    /// 登録 API はストリームを開いた直後に呼び出すこと。登録前に受信データが
+    /// 到着すると HTTP/3 リクエストとして誤処理される可能性がある。
+    ///
+    /// エラーになる条件:
+    /// - ストリーム ID が単方向 (0x02 / 0x03) またはローカル開始でない
+    /// - セッション ID が `wt_sessions` に存在しない、または Established でない
+    ///   (Pending セッションへの登録は拒否する。仮に登録すると受信データが
+    ///   Section 4.6 のバッファリング経路に乗り、セッション確立時に受信
+    ///   ストリームとして誤カウントされるため。draft-ietf-webtrans-http3-16
+    ///   Section 4.6)
+    /// - 同一ストリーム ID の二重登録
+    /// - 既に HTTP/3 ストリームとして作成済み (`streams` に存在)
+    ///
+    /// 本 API はドラフト仕様 (draft-ietf-webtrans-http3-16) に基づくため、
+    /// 将来変更される可能性がある。
+    pub fn register_local_wt_stream(
+        &mut self,
+        session_id: u64,
+        stream_id: u64,
+    ) -> Result<(), Error> {
+        let kind = crate::stream::StreamKind::from_stream_id(stream_id);
+
+        // 単方向ストリームは開始者のみが送信する (RFC 9000 Section 2.1) ため、
+        // ローカル開始ストリームの受信データは存在しない。登録対象外。
+        // 双方向ストリームでもローカル開始でない (ピア開始) 場合は、
+        // ヘッダーが付くピア開始ストリームとして `feed_stream` が処理する。
+        if kind.is_unidirectional() || !self.is_local_initiated_bidi(kind) {
+            return Err(Error::ConnectionError(ErrorCode::IdError));
+        }
+
+        // 二重登録を拒否する
+        if self.wt_bidi_streams.contains_key(&stream_id) {
+            return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
+        }
+
+        // 登録前に受信データが到着して HTTP/3 ストリームとして作成済みの場合、
+        // 誤解析の結果を巻き戻せないため拒否する
+        if self.streams.contains_key(&stream_id) {
+            return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
+        }
+
+        // セッションが存在し Established 状態である必要がある
+        let session = self
+            .wt_sessions
+            .get_mut(&session_id)
+            .ok_or(Error::ConnectionError(ErrorCode::GeneralProtocolError))?;
+        if session.state != WtSessionState::Established {
+            return Err(Error::ConnectionError(ErrorCode::GeneralProtocolError));
+        }
+
+        // セッション終了時の RESET 対象 (reliable size 計算を含む) に含める
+        session.associate_stream(stream_id);
+        self.wt_bidi_streams.insert(stream_id, session_id);
+        Ok(())
+    }
+
+    /// ストリーム種別がローカル開始の双方向ストリームかどうかを判定する
+    ///
+    /// ストリーム ID の下位ビット (RFC 9000 Section 2.1) から求めた種別と
+    /// ロールから判定する。クライアント側はクライアント開始 bidi (0x00)、
+    /// サーバー側はサーバー開始 bidi (0x01) がローカル開始になる。
+    fn is_local_initiated_bidi(&self, kind: crate::stream::StreamKind) -> bool {
+        match self.role {
+            Role::Client => kind == crate::stream::StreamKind::ClientBidi,
+            Role::Server => kind == crate::stream::StreamKind::ServerBidi,
+        }
+    }
+
     /// WebTransport 単方向ストリームのセッション ID を解決
     ///
     /// ストリームタイプ (0x54) が確定した後、セッション ID (varint) をパースする。
@@ -351,10 +439,23 @@ impl Connection {
                     }));
             }
             if fin {
-                self.wt_bidi_streams.remove(&stream_id);
-                // ストリーム閉鎖: WT_MAX_STREAMS 更新判定 (Section 5.6)
-                if let Some(session) = self.wt_sessions.get_mut(&session_id) {
-                    session.on_remote_stream_closed(true);
+                // ピア開始ストリームは FIN で登録解除し、WT_MAX_STREAMS クレジットを
+                // 返却する (WT_MAX_STREAMS はピアが開くストリーム数の制限。
+                //  draft-ietf-webtrans-http3-16 Section 5.3)。
+                // ローカル開始ストリームは自側がヘッダーを送信済みのため、FIN 後も
+                // RESET_STREAM_AT の reliable size (ヘッダー長) 計算に登録が
+                // 必要 (draft-ietf-webtrans-http3-16 Section 4.4)。ローカル開始
+                // ストリームの登録解除はセッション終了時 (terminate_wt_session_with)
+                // に委ねる。
+                // BidiStreamEnd イベントの発火はローカル開始でも行う
+                // (ピアの送信方向終了の通知はアプリのストリームクローズ判断に必要)
+                if !self
+                    .is_local_initiated_bidi(crate::stream::StreamKind::from_stream_id(stream_id))
+                {
+                    self.wt_bidi_streams.remove(&stream_id);
+                    if let Some(session) = self.wt_sessions.get_mut(&session_id) {
+                        session.on_remote_stream_closed(true);
+                    }
                 }
                 self.events
                     .push_back(Event::WebTransport(WebTransportEvent::BidiStreamEnd {

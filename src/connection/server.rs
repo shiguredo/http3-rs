@@ -162,6 +162,23 @@ impl ServerConnection {
         self.inner.send_datagram(session_id, payload)
     }
 
+    /// ローカル開始の WebTransport 双方向ストリームを登録する
+    ///
+    /// サーバーが自ら開いた双方向ストリーム (ストリーム ID の下位 2 ビットが
+    /// 0x01。RFC 9000 Section 2.1) をセッションに関連付ける。登録後は
+    /// `feed_stream` に渡した受信データが WebTransport ストリームとして処理され、
+    /// `BidiStreamData` / `BidiStreamEnd` イベントが発火する
+    /// (draft-ietf-webtrans-http3-16 Section 4.3)。
+    ///
+    /// ストリームを開いた直後に呼び出すこと。
+    pub fn register_local_wt_stream(
+        &mut self,
+        session_id: u64,
+        stream_id: u64,
+    ) -> Result<(), Error> {
+        self.inner.register_local_wt_stream(session_id, stream_id)
+    }
+
     /// QUIC transport parameter に基づく WebTransport 前提条件を注入する
     ///
     /// WebTransport CONNECT 受信処理前に呼び出す必要がある。
@@ -181,6 +198,7 @@ impl ServerConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection::wt_types::{WtSession, WtSessionState};
 
     #[test]
     fn test_server_connection() {
@@ -199,5 +217,20 @@ mod tests {
 
         // テスト: サーバーがリクエストを受信できることを確認
         assert!(server.peer_settings().is_none()); // SETTINGS 未受信
+    }
+
+    #[test]
+    fn test_server_connection_register_local_wt_stream() {
+        // サーバーの公開 API からローカル開始 WT ストリームを登録できる
+        let mut server = ServerConnection::with_default_settings();
+        server.set_control_stream_id(3).expect("test must succeed");
+        let mut session = WtSession::new();
+        session.state = WtSessionState::Established;
+        server.inner.wt_sessions.insert(0, session);
+
+        // stream_id=1 は 1 番目の server-initiated bidi stream
+        server
+            .register_local_wt_stream(0, 1)
+            .expect("test must succeed");
     }
 }
