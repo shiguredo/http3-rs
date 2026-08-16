@@ -443,7 +443,7 @@ TLS には [Rustls](https://github.com/rustls/rustls) を、暗号ライブラ�
 
 ### ngtcp2-sys
 
-[ngtcp2](https://github.com/ngtcp2/ngtcp2) C ライブラリへの低レベル FFI バインディングです。WebTransport 対応のため [webtransport ブランチ](https://github.com/ngtcp2/ngtcp2/tree/webtransport)を使用しています。リリースされたらタグに切り替える予定です。
+[ngtcp2](https://github.com/ngtcp2/ngtcp2) C ライブラリへの低レベル FFI バインディングです。WebTransport の `reset_stream_at` transport parameter (RFC 9221 / draft-ietf-quic-reliable-stream-reset) 対応のため [reliable-stream-reset ブランチ](https://github.com/ngtcp2/ngtcp2/tree/reliable-stream-reset)を使用しています。リリースされたらタグに切り替える予定です。
 
 ### nghttp3-sys
 

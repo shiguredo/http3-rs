@@ -10,7 +10,7 @@ publish = false
 # 以降は外部ライブラリビルド用のメタデータ
 # (この内容は build.rs の中からのみ参照される)
 [package.metadata.external-dependencies]
-ngtcp2 = { git = "https://github.com/ngtcp2/ngtcp2", branch = "webtransport" }
+ngtcp2 = { git = "https://github.com/ngtcp2/ngtcp2", branch = "reliable-stream-reset" }
 
 [lib]
 doctest = false
