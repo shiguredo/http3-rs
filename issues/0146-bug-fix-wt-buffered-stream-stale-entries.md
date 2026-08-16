@@ -1,7 +1,7 @@
 # バッファリング中 WT ストリームの stale エントリが残存し誤配送される
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-wt-buffered-stream-stale-entries
 - Polished: 2026-08-15
 
@@ -32,6 +32,11 @@ Pending セッションのバッファリング中に RESET_STREAM されたス�
 - `cargo test --all` と `cargo fmt --all -- --check` と `cargo clippy --all-targets --all-features -- -D warnings` が通る
 
 ## 解決方法
+
+- `WtSession` に `remove_buffered_stream()` と `restore_buffered_stream()` を追加する
+- `handle_wt_stream_reset` でバッファリング中ストリームのエントリを全セッションから検索して除去する
+- `deliver_buffered_streams` で FC 違反中断時に違反ストリームと後続の未配送ストリームを `restore_buffered_stream` でバッファに戻す
+- `terminate_wt_session_with` で `buffered_stream_ids` のエントリを `buffered_stream_entries` から除去する
 
 ### 関連ファイル
 
