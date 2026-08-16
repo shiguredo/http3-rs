@@ -168,6 +168,22 @@ impl Connection {
         stream_id: u64,
         data: &[u8],
     ) -> Result<bool, Error> {
+        // SETTINGS 未着の WT CONNECT ストリームへの DATA は保留する
+        // (draft-ietf-webtrans-http3-16 Section 3.1 / 4.6 / 7.1)
+        if self.deferred_wt_connects.contains_key(&stream_id) {
+            // DoS 対策: 保留中の DATA に上限を設ける
+            const MAX_DEFERRED_DATA_BYTES: usize = 64 * 1024;
+            let stream = self
+                .streams
+                .get(&stream_id)
+                .expect("deferred CONNECT stream must exist");
+            let current_len = stream.received_body().len();
+            if current_len + data.len() > MAX_DEFERRED_DATA_BYTES {
+                return Err(Error::StreamError(ErrorCode::MessageError));
+            }
+            return Ok(true);
+        }
+
         let Some(session) = self.wt_sessions.get(&stream_id) else {
             // 終了済みセッション (tombstone) の CONNECT ストリームへの追加 DATA は
             // H3_MESSAGE_ERROR で拒否する
@@ -221,6 +237,10 @@ impl Connection {
     /// FIN 到着時に未完成 Capsule が残っていれば malformed。
     /// WT セッションの FIN はセッション終了を意味する。
     pub(crate) fn handle_wt_stream_end(&mut self, stream_id: u64) -> Result<bool, Error> {
+        // SETTINGS 未着の WT CONNECT ストリームの FIN は保留エントリを破棄する
+        if self.deferred_wt_connects.remove(&stream_id).is_some() {
+            return Ok(true);
+        }
         if let Some(session) = self.wt_sessions.get(&stream_id) {
             if session.state == WtSessionState::Pending {
                 // Pending 状態でカプセルバッファが残っている場合は、

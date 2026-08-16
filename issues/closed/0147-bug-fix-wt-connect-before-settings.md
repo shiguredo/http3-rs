@@ -1,7 +1,7 @@
 # サーバーがクライアント SETTINGS 受信前の WT CONNECT リクエストを即拒否する
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-wt-connect-before-settings
 - Polished: 2026-08-15
 
@@ -33,6 +33,13 @@ draft-ietf-webtrans-http3-16 が想定する「SETTINGS より先に CONNECT が
 - `cargo test --all` と `cargo fmt --all -- --check` と `cargo clippy --all-targets --all-features -- -D warnings` が通る
 
 ## 解決方法
+
+- `Connection` に `deferred_wt_connects: HashMap<u64, Vec<Header>>` を追加し、SETTINGS 未着時の WT CONNECT を保留する
+- `validate_wt_connect_request_server` で `peer_settings` が None の場合は `Ok(())` を返し、`emit_header_events` 側で保留判断を行う
+- `emit_header_events` で `peer_settings` が None かつ WT CONNECT の場合、保留上限 (16) を超えなければ保留バッファに格納する
+- `handle_wt_data_frame` で保留中 CONNECT ストリームへの DATA を DoS 上限 (64 KiB) 付きで許可する
+- `handle_wt_stream_end` / `handle_wt_stream_reset` で保留中 CONNECT の FIN/RESET 時に保留エントリを破棄する
+- `process_control_stream` の SETTINGS 受信時に `process_deferred_wt_connects` を呼び出し、保留 CONNECT を再検証・登録・イベント発行する
 
 ### 関連ファイル
 

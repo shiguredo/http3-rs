@@ -567,6 +567,11 @@ impl Connection {
             return true;
         }
 
+        // SETTINGS 未着の WT CONNECT ストリームの RESET は保留エントリを破棄する
+        if self.deferred_wt_connects.remove(&stream_id).is_some() {
+            return true;
+        }
+
         // バッファリング中ストリームの RESET: バッファからエントリを除去する
         // (draft-ietf-webtrans-http3-16 Section 4.4 / 4.6)
         for session in self.wt_sessions.values_mut() {
@@ -788,10 +793,11 @@ impl Connection {
         if !self.local_settings.is_webtransport_enabled() {
             return Err(Error::StreamError(ErrorCode::MessageError));
         }
-        let peer = self
-            .peer_settings
-            .as_ref()
-            .ok_or(Error::StreamError(ErrorCode::MessageError))?;
+        // peer_settings 未着時は検証をスキップする (emit_header_events 側で保留する)
+        // (draft-ietf-webtrans-http3-16 Section 3.1 / 4.6 / 7.1)
+        let Some(peer) = self.peer_settings.as_ref() else {
+            return Ok(());
+        };
         let local_draft = self.local_settings.webtransport_draft_pattern();
         if matches!(
             local_draft,
@@ -1115,5 +1121,43 @@ impl Connection {
                 }
             }
         }
+    }
+
+    /// SETTINGS 受信前に保留した WT CONNECT を処理する
+    /// (draft-ietf-webtrans-http3-16 Section 3.1 / 4.6 / 7.1)
+    pub(crate) fn process_deferred_wt_connects(&mut self) -> Result<(), Error> {
+        let deferred: Vec<_> = self.deferred_wt_connects.drain().collect();
+        for (stream_id, headers) in deferred {
+            match self.validate_wt_connect_request_server(stream_id, &headers) {
+                Ok(()) => {
+                    self.register_wt_connect_session(stream_id, &headers);
+                    // 保留中に届いた DATA を処理する
+                    if let Some(stream) = self.streams.get(&stream_id) {
+                        let body = stream.received_body().to_vec();
+                        if !body.is_empty() {
+                            // データをセッションの capsule_buf に移動する
+                            if let Some(session) = self.wt_sessions.get_mut(&stream_id) {
+                                session.capsule_buf.extend_from_slice(&body);
+                            }
+                        }
+                    }
+                    // ヘッダーイベントを発行する
+                    self.events.push_back(Event::HeadersBegin { stream_id });
+                    for header in &headers {
+                        self.events.push_back(Event::Header {
+                            stream_id,
+                            name: header.name().to_vec(),
+                            value: header.value().to_vec(),
+                        });
+                    }
+                    self.events.push_back(Event::HeadersEnd { stream_id });
+                }
+                Err(e) => {
+                    // 検証失敗: ストリームエラーを返す
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
     }
 }

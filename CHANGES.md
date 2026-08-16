@@ -249,6 +249,8 @@
   - @voluntas
 - [FIX] RESET_STREAM されたバッファリング中 WT ストリームの stale エントリが残存しセッション確立後に誤配送される問題を修正する。deliver_buffered_streams の FC 違反中断時に未配送ストリームが喪失する問題も修正する (draft-ietf-webtrans-http3-16 Section 4.4 / 4.6 / 6)
   - @voluntas
+- [FIX] サーバーがクライアント SETTINGS 受信前に WT CONNECT リクエストを受信した場合に即時拒否せず保留し、SETTINGS 受信後に検証するように修正する (draft-ietf-webtrans-http3-16 Section 3.1 / 4.6 / 7.1)
+  - @voluntas
 
 ### misc
 
