@@ -10,7 +10,9 @@ use crate::qpack::Header;
 use crate::webtransport::DraftVersion;
 use crate::webtransport::error::ErrorCode as WtErrorCode;
 
-use super::wt_types::{AssocOutcome, WT_MAX_PENDING_SESSIONS, WtSession, WtSessionState};
+use super::wt_types::{
+    AssocOutcome, BufferedStreamEntry, WT_MAX_PENDING_SESSIONS, WtSession, WtSessionState,
+};
 use super::{Connection, Role};
 
 /// RFC 9297 Section 3.2 の Capsule Protocol 併用禁止ヘッダー (Content-Length / Content-Type)
@@ -93,12 +95,26 @@ impl Connection {
                 continue;
             };
             let is_bidi = entry.is_bidi;
-            let entry_data = entry.data;
-            let entry_fin = entry.fin;
+            // ストリーム数 FC はデータ移動前にチェックする (違反時に entry を復元するため)
             if !session.check_received_stream(is_bidi) {
+                // フロー制御違反: 違反したストリーム自身を含む未配送ストリームを
+                // バッファに戻す (終了時の RESET 対象として残す)
+                session.restore_buffered_stream(buffered_stream_id, entry);
+                for &remaining_id in buffered
+                    .iter()
+                    .skip_while(|&&id| id != buffered_stream_id)
+                    .skip(1)
+                {
+                    if let Some(remaining_entry) = session.take_buffered_stream_entry(remaining_id)
+                    {
+                        session.restore_buffered_stream(remaining_id, remaining_entry);
+                    }
+                }
                 fc_violation = true;
                 break;
             }
+            let entry_data = entry.data;
+            let entry_fin = entry.fin;
             session.add_received_stream(is_bidi);
             session.associate_stream(buffered_stream_id);
             // Open
@@ -117,6 +133,27 @@ impl Connection {
             if !entry_data.is_empty() {
                 let data_len = entry_data.len() as u64;
                 if !session.check_received_data(data_len) {
+                    // フロー制御違反: このストリームの Data イベントは発火済みのため、
+                    // 後続の未配送ストリームをバッファに戻す
+                    for &remaining_id in buffered
+                        .iter()
+                        .skip_while(|&&id| id != buffered_stream_id)
+                        .skip(1)
+                    {
+                        if let Some(remaining_entry) =
+                            session.take_buffered_stream_entry(remaining_id)
+                        {
+                            session.restore_buffered_stream(remaining_id, remaining_entry);
+                        }
+                    }
+                    // 違反したストリーム自身もバッファに戻す
+                    // (entry_data は既に移動済みのため新規エントリを構築する)
+                    {
+                        let mut restore_entry = BufferedStreamEntry::new(is_bidi);
+                        restore_entry.data = entry_data;
+                        restore_entry.fin = entry_fin;
+                        session.restore_buffered_stream(buffered_stream_id, restore_entry);
+                    }
                     fc_violation = true;
                     break;
                 }
@@ -326,6 +363,11 @@ impl Connection {
             // バッファリングされたストリームも対象に含める
             let buffered_stream_ids = session.take_buffered_streams();
 
+            // バッファリングされたストリームのエントリを除去する
+            for sid in &buffered_stream_ids {
+                session.buffered_stream_entries.remove(sid);
+            }
+
             // wt_uni_streams / wt_bidi_streams から除去する前に reliable size を計算する。
             // (draft-ietf-webtrans-http3-15 Section 6 / Section 4.4 / Section 5.4)
             let mut reset_streams: Vec<WtStreamReset> =
@@ -524,6 +566,17 @@ impl Connection {
         if self.closed_wt_sessions.contains(&stream_id) {
             return true;
         }
+
+        // バッファリング中ストリームの RESET: バッファからエントリを除去する
+        // (draft-ietf-webtrans-http3-16 Section 4.4 / 4.6)
+        for session in self.wt_sessions.values_mut() {
+            if session.remove_buffered_stream(stream_id) {
+                // バッファから除去した場合は StreamReset イベントを発火しない
+                // (RESET_STREAM は受信データの破棄を意味し、上位層への通知は不要)
+                return true;
+            }
+        }
+
         // 除去前に session_id とストリーム種別を解決する
         // (データ FC 計上とヘッダー長の計算に必要なため)
         let Some(session_id) = self

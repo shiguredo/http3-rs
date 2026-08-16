@@ -247,6 +247,8 @@
   - @voluntas
 - [FIX] tokio-s2n-quic の送信経路が FIN 交付をループで取得せず、H3 層に FIN 未交付状態が残留する問題を修正する (RFC 9114 Section 4.1)
   - @voluntas
+- [FIX] RESET_STREAM されたバッファリング中 WT ストリームの stale エントリが残存しセッション確立後に誤配送される問題を修正する。deliver_buffered_streams の FC 違反中断時に未配送ストリームが喪失する問題も修正する (draft-ietf-webtrans-http3-16 Section 4.4 / 4.6 / 6)
+  - @voluntas
 
 ### misc
 
