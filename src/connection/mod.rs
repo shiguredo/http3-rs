@@ -254,6 +254,12 @@ pub struct Connection {
     deferred_section_acks: Vec<u64>,
     /// デコーダーストリーム初期化前に蓄積された Stream Cancellation の stream_id
     deferred_stream_cancellations: Vec<u64>,
+    /// SETTINGS 受信前に届いた WebTransport CONNECT リクエストの保留バッファ
+    ///
+    /// クライアント SETTINGS が未着の時点で WT CONNECT が届いた場合、
+    /// 即時拒否せずに保留し、SETTINGS 受信後に検証する。
+    /// (draft-ietf-webtrans-http3-16 Section 3.1 / 4.6 / 7.1)
+    deferred_wt_connects: HashMap<u64, Vec<Header>>,
 }
 
 impl Connection {
@@ -372,6 +378,7 @@ impl Connection {
             deferred_encoder_set_capacity: None,
             deferred_section_acks: Vec::new(),
             deferred_stream_cancellations: Vec::new(),
+            deferred_wt_connects: HashMap::new(),
         }
     }
 
@@ -1189,6 +1196,10 @@ impl Connection {
                         settings,
                         wt_settings,
                     });
+
+                    // SETTINGS 受信前に保留した WT CONNECT を処理する
+                    // (draft-ietf-webtrans-http3-16 Section 3.1 / 4.6 / 7.1)
+                    self.process_deferred_wt_connects()?;
                 }
                 crate::frame::Frame::Goaway(payload) => {
                     let goaway_id = payload.id();
@@ -1446,6 +1457,33 @@ impl Connection {
             // (draft-ietf-webtrans-http3-15 Section 3.1, 7.1)
             // 0077 Phase 5: WT 分岐を wt_session.rs のヘルパーに委譲
             self.validate_wt_connect_request_server(stream_id, &headers)?;
+
+            // サーバー側: peer_settings 未着の WT CONNECT は保留する
+            // (draft-ietf-webtrans-http3-16 Section 3.1 / 4.6 / 7.1)
+            if self.role == Role::Server
+                && self.peer_settings.is_none()
+                && is_webtransport_connect(&headers)
+            {
+                // 保留上限を超えたら拒否する
+                const MAX_DEFERRED_WT_CONNECTS: usize = 16;
+                if self.deferred_wt_connects.len() >= MAX_DEFERRED_WT_CONNECTS {
+                    return Err(Error::StreamError(ErrorCode::MessageError));
+                }
+                self.deferred_wt_connects.insert(stream_id, headers.clone());
+                // ヘッダー受信完了の Section Acknowledgment を送信する
+                let required_insert_count = self.qpack_dynamic_decoder.last_required_insert_count();
+                if required_insert_count > 0 {
+                    if self.decoder_stream_id.is_some() {
+                        self.decoder_stream.encode_section_acknowledgment(stream_id);
+                    } else {
+                        self.deferred_section_acks.push(stream_id);
+                    }
+                }
+                if let Some(stream) = self.streams.get_mut(&stream_id) {
+                    stream.set_recv_headers(headers);
+                }
+                return Ok(());
+            }
 
             // サーバー側: WebTransport CONNECT を受信した場合、セッションを Pending で登録
             // (draft-ietf-webtrans-http3-15 Section 3)
