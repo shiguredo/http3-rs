@@ -573,7 +573,7 @@ impl Server {
                 },
                 None => return Ok(()),
             };
-            if count == 0 {
+            if count == 0 && !fin {
                 break;
             }
 
@@ -617,7 +617,7 @@ impl Server {
 
                     // nghttp3 に書き込んだ量を通知
                     if let Some(dw) = data_written
-                        && dw > 0
+                        && (dw > 0 || fin)
                     {
                         let conn = match self.connections.get_mut(conn_key) {
                             Some(conn) => conn,

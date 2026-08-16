@@ -1,7 +1,7 @@
 # tokio-ngtcp2 の 0 長データ + FIN が破棄され終端が送信されない
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-ngtcp2-zero-length-fin
 - Polished: 2026-08-15
 

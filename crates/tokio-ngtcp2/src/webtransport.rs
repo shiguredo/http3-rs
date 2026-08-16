@@ -754,7 +754,7 @@ impl ClientWebTransportSession {
         }; 16];
 
         while let Ok((sid, fin, count)) = self.h3_conn.write_stream(&mut vecs) {
-            if count == 0 {
+            if count == 0 && !fin {
                 break;
             }
 
@@ -767,7 +767,7 @@ impl ClientWebTransportSession {
                 h3_data.extend_from_slice(data);
             }
 
-            if h3_data.is_empty() {
+            if h3_data.is_empty() && !fin {
                 continue;
             }
 
@@ -781,7 +781,7 @@ impl ClientWebTransportSession {
                         packets.push(self.send_buf[..pkt_written].to_vec());
                     }
                     if let Some(dw) = data_written
-                        && dw > 0
+                        && (dw > 0 || fin)
                     {
                         self.h3_conn.add_write_offset(sid, dw)?;
                     } else if pkt_written == 0 {
@@ -822,7 +822,7 @@ impl ClientWebTransportSession {
         }; 16];
 
         while let Ok((stream_id, fin, count)) = self.h3_conn.write_stream(&mut vecs) {
-            if count == 0 {
+            if count == 0 && !fin {
                 break;
             }
 
@@ -836,7 +836,7 @@ impl ClientWebTransportSession {
                 h3_data.extend_from_slice(data);
             }
 
-            if h3_data.is_empty() {
+            if h3_data.is_empty() && !fin {
                 continue;
             }
 
@@ -855,7 +855,7 @@ impl ClientWebTransportSession {
 
                     // nghttp3 に書き込んだ量を通知
                     if let Some(dw) = data_written
-                        && dw > 0
+                        && (dw > 0 || fin)
                     {
                         self.h3_conn.add_write_offset(stream_id, dw)?;
                     }
@@ -1763,7 +1763,7 @@ fn write_h3_streams_for_wt_connection(
     loop {
         // H3 層のエラーは呼び出し側で接続単位に処理する
         let (stream_id, fin, count) = conn.h3_conn.write_stream(&mut vecs)?;
-        if count == 0 {
+        if count == 0 && !fin {
             break;
         }
 
@@ -1797,7 +1797,7 @@ fn write_h3_streams_for_wt_connection(
 
                 // nghttp3 に書き込んだ量を通知
                 if let Some(dw) = data_written
-                    && dw > 0
+                    && (dw > 0 || fin)
                 {
                     conn.h3_conn.add_write_offset(stream_id, dw)?;
                 }
