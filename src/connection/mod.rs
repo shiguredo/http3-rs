@@ -439,6 +439,9 @@ impl Connection {
         if self.control_send.stream_id().is_some() {
             return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
         }
+        if self.encoder_stream_id == Some(stream_id) || self.decoder_stream_id == Some(stream_id) {
+            return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
+        }
         self.control_send.set_stream_id(stream_id);
         if self.control_send.has_pending() {
             self.writable_streams.push_back(stream_id);
@@ -456,6 +459,11 @@ impl Connection {
     pub fn set_encoder_stream_id(&mut self, stream_id: u64) -> Result<(), Error> {
         self.validate_self_initiated_uni_stream_id(stream_id)?;
         if self.encoder_stream_id.is_some() {
+            return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
+        }
+        if self.control_send.stream_id() == Some(stream_id)
+            || self.decoder_stream_id == Some(stream_id)
+        {
             return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
         }
         self.encoder_stream_id = Some(stream_id);
@@ -482,6 +490,11 @@ impl Connection {
     pub fn set_decoder_stream_id(&mut self, stream_id: u64) -> Result<(), Error> {
         self.validate_self_initiated_uni_stream_id(stream_id)?;
         if self.decoder_stream_id.is_some() {
+            return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
+        }
+        if self.control_send.stream_id() == Some(stream_id)
+            || self.encoder_stream_id == Some(stream_id)
+        {
             return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
         }
         self.decoder_stream_id = Some(stream_id);
