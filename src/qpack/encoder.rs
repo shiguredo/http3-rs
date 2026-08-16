@@ -112,8 +112,15 @@ impl DynamicEncoder {
     }
 
     /// 動的テーブル容量を設定
-    pub fn set_table_capacity(&mut self, capacity: u64) {
+    ///
+    /// `capacity` が `max_table_capacity` を超える場合は `CapacityExceeded` を返す。
+    /// `capacity = 0` は常に許可する (RFC 9204 Section 3.2.3)。
+    pub fn set_table_capacity(&mut self, capacity: u64) -> Result<(), QpackError> {
+        if capacity > self.max_table_capacity {
+            return Err(QpackError::CapacityExceeded);
+        }
         self.table.set_capacity(capacity);
+        Ok(())
     }
 
     /// 動的テーブルへの参照を取得
@@ -240,6 +247,13 @@ impl DynamicEncoder {
     ) -> Option<usize> {
         // 動的テーブルが空の場合は静的テーブルのみを使用
         if self.table.is_empty() {
+            self.last_required_insert_count = 0;
+            return self.encode_static_only(buf, headers);
+        }
+
+        // 動的テーブル容量が 0 (ピア SETTINGS 未受信等) の場合は静的テーブルのみを使用
+        // (RFC 9204 Section 3.2.3: max_table_capacity == 0 では動的テーブル参照禁止)
+        if self.max_table_capacity == 0 {
             self.last_required_insert_count = 0;
             return self.encode_static_only(buf, headers);
         }
@@ -733,7 +747,9 @@ mod tests {
     fn test_dynamic_encoder_with_dynamic_table() {
         let mut encoder = DynamicEncoder::new().use_huffman(false);
         encoder.set_max_table_capacity(4096);
-        encoder.set_table_capacity(1024);
+        encoder
+            .set_table_capacity(1024)
+            .expect("test: capacity within max");
         encoder.set_peer_max_blocked_streams(100);
 
         // 動的テーブルにエントリを挿入
@@ -758,7 +774,9 @@ mod tests {
     fn test_dynamic_encoder_blocked_streams_limit() {
         let mut encoder = DynamicEncoder::new().use_huffman(false);
         encoder.set_max_table_capacity(4096);
-        encoder.set_table_capacity(1024);
+        encoder
+            .set_table_capacity(1024)
+            .expect("test: capacity within max");
         encoder.set_peer_max_blocked_streams(2);
 
         // 動的テーブルにエントリを挿入
@@ -786,7 +804,9 @@ mod tests {
     fn test_dynamic_encoder_prefer_dynamic() {
         let mut encoder = DynamicEncoder::new().use_huffman(false);
         encoder.set_max_table_capacity(4096);
-        encoder.set_table_capacity(1024);
+        encoder
+            .set_table_capacity(1024)
+            .expect("test: capacity within max");
         encoder.set_peer_max_blocked_streams(100);
 
         // :method = GET は静的テーブルにある (インデックス 17)
@@ -807,7 +827,10 @@ mod tests {
     #[test]
     fn test_dynamic_encoder_insert_with_static_ref() {
         let mut encoder = DynamicEncoder::new();
-        encoder.set_table_capacity(1024);
+        encoder.set_max_table_capacity(4096);
+        encoder
+            .set_table_capacity(1024)
+            .expect("test: capacity within max");
 
         // :authority (静的テーブルインデックス 0) を参照して挿入
         let idx = encoder.insert_with_static_name_ref(0, b"example.com".to_vec());

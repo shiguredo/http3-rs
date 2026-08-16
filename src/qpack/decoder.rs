@@ -753,7 +753,9 @@ mod tests {
         let mut decoder = DynamicDecoder::new();
 
         encoder.set_max_table_capacity(4096);
-        encoder.set_table_capacity(1024);
+        encoder
+            .set_table_capacity(1024)
+            .expect("test: capacity within max");
         decoder.set_max_table_capacity(4096);
         decoder.set_table_capacity(1024);
 

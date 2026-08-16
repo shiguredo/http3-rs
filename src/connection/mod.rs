@@ -1144,7 +1144,9 @@ impl Connection {
                         // ピアが許可する容量と自分のデフォルト容量の小さい方を使用
                         let use_capacity =
                             std::cmp::min(capacity, self.limits.qpack_max_table_capacity);
-                        self.qpack_encoder.set_table_capacity(use_capacity);
+                        self.qpack_encoder
+                            .set_table_capacity(use_capacity)
+                            .expect("use_capacity is clamped to max_table_capacity");
 
                         // Set Dynamic Table Capacity 命令を送信
                         // エンコーダーストリーム未初期化の場合は遅延させる

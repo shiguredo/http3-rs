@@ -849,7 +849,8 @@ proptest! {
     ) {
         let mut encoder = DynamicEncoder::new().use_huffman(use_huffman);
         encoder.set_max_table_capacity(DYNAMIC_TABLE_CAPACITY);
-        encoder.set_table_capacity(DYNAMIC_TABLE_CAPACITY);
+        encoder.set_table_capacity(DYNAMIC_TABLE_CAPACITY)
+            .expect("PBT: capacity matches max_table_capacity");
 
         let mut decoder = DynamicDecoder::new();
         decoder.set_max_table_capacity(DYNAMIC_TABLE_CAPACITY);
@@ -889,7 +890,8 @@ proptest! {
         // エンコーダー側: 動的テーブルにエントリを挿入してエンコード
         let mut encoder = DynamicEncoder::new().use_huffman(false);
         encoder.set_max_table_capacity(DYNAMIC_TABLE_CAPACITY);
-        encoder.set_table_capacity(DYNAMIC_TABLE_CAPACITY);
+        encoder.set_table_capacity(DYNAMIC_TABLE_CAPACITY)
+            .expect("PBT: capacity matches max_table_capacity");
         encoder.insert(entry_name.clone(), entry_value.clone());
 
         let headers = vec![wire_header(&entry_name, &entry_value)];
