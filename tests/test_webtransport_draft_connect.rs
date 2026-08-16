@@ -972,38 +972,161 @@ mod pending_data_frame {
     }
 
     #[test]
-    fn draft07_pending_data_rejected() {
+    fn draft07_pending_data_buffered() {
         let mut server = setup_server(false);
         let client_ctrl = build_draft07_client_ctrl();
         feed_client_settings(&mut server, &client_ctrl);
 
         let headers = wt_connect_headers(DraftVersion::Draft07);
         let frame = build_headers_then_data(&headers, &[0x00]);
-        let err = server.feed_stream(0, &frame, false).unwrap_err();
-        assert!(matches!(err, Error::StreamError(ErrorCode::MessageError)));
+        // 楽観的カプセル送信: Pending 中の DATA はバッファリングされる
+        let result = server.feed_stream(0, &frame, false);
+        assert!(
+            result.is_ok(),
+            "draft-07 の Pending 中 DATA がバッファリングされずエラーになった: {result:?}"
+        );
     }
 
     #[test]
-    fn draft14_pending_data_rejected() {
+    fn draft14_pending_data_buffered() {
         let mut server = setup_server(true);
         let client_ctrl = build_draft14_client_ctrl_with_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
         let headers = wt_connect_headers(DraftVersion::Draft14);
         let frame = build_headers_then_data(&headers, &[0x00]);
-        let err = server.feed_stream(0, &frame, false).unwrap_err();
-        assert!(matches!(err, Error::StreamError(ErrorCode::MessageError)));
+        // 楽観的カプセル送信: Pending 中の DATA はバッファリングされる
+        let result = server.feed_stream(0, &frame, false);
+        assert!(
+            result.is_ok(),
+            "draft-14 の Pending 中 DATA がバッファリングされずエラーになった: {result:?}"
+        );
     }
 
     #[test]
-    fn draft15_pending_data_rejected() {
+    fn draft15_pending_data_buffered() {
         let mut server = setup_server(true);
         let client_ctrl = build_draft15_client_ctrl_with_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
         let headers = wt_connect_headers(DraftVersion::Draft15);
         let frame = build_headers_then_data(&headers, &[0x00]);
-        let err = server.feed_stream(0, &frame, false).unwrap_err();
+        // 楽観的カプセル送信: Pending 中の DATA はバッファリングされる
+        let result = server.feed_stream(0, &frame, false);
+        assert!(
+            result.is_ok(),
+            "draft-15 の Pending 中 DATA がバッファリングされずエラーになった: {result:?}"
+        );
+    }
+
+    /// WebTransport カプセルを DATA フレームとしてエンコードするヘルパー
+    fn capsule_data_frame(capsule: &webtransport::Capsule) -> Vec<u8> {
+        let mut buf = Vec::new();
+        capsule.encode_as_data_frame(&mut buf);
+        buf
+    }
+
+    #[test]
+    fn draft15_pending_capsule_buffered_then_processed_on_accept() {
+        // 楽観的カプセル送信: Pending 中にバッファリングされたカプセルが
+        // 2xx レスポンス送信後に処理される
+        let mut server = setup_server(true);
+        let client_ctrl = build_draft15_client_ctrl_with_ecp();
+        feed_client_settings(&mut server, &client_ctrl);
+
+        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let frame = build_headers_frame(&headers);
+        server
+            .feed_stream(0, &frame, false)
+            .expect("テスト用の CONNECT ヘッダー送信に成功すること");
+
+        // Pending 中に WT_CLOSE_SESSION カプセルを送信 (楽観的送信)
+        let close_session = webtransport::Capsule::CloseSession {
+            error_code: 0,
+            message: String::new(),
+        };
+        let data_frame = capsule_data_frame(&close_session);
+        server
+            .feed_stream(0, &data_frame, false)
+            .expect("楽観的カプセル送信がバッファリングされること");
+
+        // 2xx レスポンスを送信
+        let response = vec![
+            Header::new(b":status", b"200").expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b"wt-protocol", b"test").expect("テスト用のヘッダー作成に成功すること"),
+        ];
+        server
+            .send_response(0, &response, false)
+            .expect("テスト用のレスポンス送信に成功すること");
+
+        // セッション確立後、バッファリングされたカプセルが処理されて
+        // SessionEstablished イベントが発火する
+        let events = server
+            .drain_events()
+            .expect("テスト用のイベント取得に成功すること");
+        let has_established = events.iter().any(|e| {
+            matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::SessionEstablished { .. })
+            )
+        });
+        assert!(has_established, "SessionEstablished イベントが発火すること");
+    }
+
+    #[test]
+    fn draft15_pending_data_discarded_on_reject() {
+        // 非 2xx レスポンス送信時に Pending セッションのバッファが破棄される
+        let mut server = setup_server(true);
+        let client_ctrl = build_draft15_client_ctrl_with_ecp();
+        feed_client_settings(&mut server, &client_ctrl);
+
+        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let frame = build_headers_then_data(&headers, &[0x00]);
+        server
+            .feed_stream(0, &frame, false)
+            .expect("楽観的カプセル送信がバッファリングされること");
+
+        // 非 2xx レスポンスを送信
+        let response =
+            vec![Header::new(b":status", b"404").expect("テスト用のヘッダー作成に成功すること")];
+        server
+            .send_response(0, &response, true)
+            .expect("テスト用のレスポンス送信に成功すること");
+
+        // セッションが終了し、後続の DATA は H3_MESSAGE_ERROR になる
+        let data_frame = capsule_data_frame(&webtransport::Capsule::CloseSession {
+            error_code: 0,
+            message: String::new(),
+        });
+        let err = server.feed_stream(0, &data_frame, false).unwrap_err();
+        assert!(matches!(err, Error::StreamError(ErrorCode::MessageError)));
+    }
+
+    #[test]
+    fn draft15_pending_fin_terminates_session() {
+        // Pending 状態で CONNECT ストリームの FIN を受信した場合、
+        // バッファを破棄してセッションを終了する
+        let mut server = setup_server(true);
+        let client_ctrl = build_draft15_client_ctrl_with_ecp();
+        feed_client_settings(&mut server, &client_ctrl);
+
+        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let frame = build_headers_then_data(&headers, &[0x00]);
+        server
+            .feed_stream(0, &frame, false)
+            .expect("楽観的カプセル送信がバッファリングされること");
+
+        // FIN でセッション終了
+        server
+            .feed_stream(0, &[], true)
+            .expect("Pending 状態の FIN がエラーにならないこと");
+
+        // 後続の DATA は tombstone 経由で H3_MESSAGE_ERROR
+        let data_frame = capsule_data_frame(&webtransport::Capsule::CloseSession {
+            error_code: 0,
+            message: String::new(),
+        });
+        let err = server.feed_stream(0, &data_frame, false).unwrap_err();
         assert!(matches!(err, Error::StreamError(ErrorCode::MessageError)));
     }
 }

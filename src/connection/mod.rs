@@ -1850,6 +1850,18 @@ impl Connection {
 
         stream.send_encoded_headers(&qpack_buf, fin, is_interim)?;
 
+        // サーバー側: 非 2xx の最終レスポンス送信時に Pending セッションを終了する
+        // (draft-ietf-webtrans-http3-16 Section 3.2: 楽観的カプセルバッファは
+        //  セッション拒否時に破棄する)
+        if !is_interim
+            && !is_success_status(headers)
+            && let Some(session) = self.wt_sessions.get(&stream_id)
+            && session.state == WtSessionState::Pending
+        {
+            self.wt_sessions.remove(&stream_id);
+            self.closed_wt_sessions.insert(stream_id);
+        }
+
         // フィールドセクションの送信を記録 (RFC 9204 Section 2.1.1, 4.4.1)
         // 送信成功後に行う: send_encoded_headers が失敗した場合に未送出セクションが
         // エンコーダーに登録されたままになるのを防ぐ
