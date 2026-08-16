@@ -328,23 +328,26 @@ impl Session {
     /// 単方向ストリームを作成可能かどうか
     pub fn can_create_unidirectional_stream(&self) -> bool {
         self.state.can_create_stream()
-            && self.flow_state.streams_uni_opened < self.remote_limits.max_streams_uni
+            && (self.flow_state.streams_uni_opened < self.remote_limits.max_streams_uni
+                || !self.flow_control_enabled)
     }
 
     /// 双方向ストリームを作成可能かどうか
     pub fn can_create_bidirectional_stream(&self) -> bool {
         self.state.can_create_stream()
-            && self.flow_state.streams_bidi_opened < self.remote_limits.max_streams_bidi
+            && (self.flow_state.streams_bidi_opened < self.remote_limits.max_streams_bidi
+                || !self.flow_control_enabled)
     }
 
     /// データを送信可能かどうか (フロー制御考慮)
     pub fn can_send_data(&self, bytes: u64) -> bool {
         self.state.can_send()
-            && self
+            && (self
                 .remote_limits
                 .max_data
                 .saturating_sub(self.flow_state.data_sent)
                 >= bytes
+                || !self.flow_control_enabled)
     }
 
     /// ストリームの開設を試行 (送信側)
@@ -373,6 +376,12 @@ impl Session {
             )
         };
 
+        // フロー制御無効時は上限なし (draft-ietf-webtrans-http3-16 Section 5.1)
+        if !self.flow_control_enabled {
+            *opened = opened.saturating_add(1);
+            return true;
+        }
+
         if *opened < limit {
             *opened = opened.saturating_add(1);
             return true;
@@ -399,6 +408,12 @@ impl Session {
     pub fn try_send_data(&mut self, bytes: u64) -> bool {
         if !self.state.can_send() {
             return false;
+        }
+
+        // フロー制御無効時は上限なし (draft-ietf-webtrans-http3-16 Section 5.1)
+        if !self.flow_control_enabled {
+            self.flow_state.data_sent = self.flow_state.data_sent.saturating_add(bytes);
+            return true;
         }
 
         if self
