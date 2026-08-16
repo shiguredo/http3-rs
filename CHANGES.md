@@ -251,6 +251,8 @@
   - @voluntas
 - [FIX] サーバーがクライアント SETTINGS 受信前に WT CONNECT リクエストを受信した場合に即時拒否せず保留し、SETTINGS 受信後に検証するように修正する (draft-ietf-webtrans-http3-16 Section 3.1 / 4.6 / 7.1)
   - @voluntas
+- [FIX] ローカル側の CONNECT ストリーム FIN で WT セッションが終了しない問題を修正する (draft-ietf-webtrans-http3-16 Section 6)
+  - @voluntas
 
 ### misc
 
