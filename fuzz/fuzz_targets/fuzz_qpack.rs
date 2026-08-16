@@ -93,7 +93,7 @@ fuzz_target!(|input: FuzzInput| {
         } => {
             let mut encoder = DynamicEncoder::new().use_huffman(use_huffman);
             encoder.set_max_table_capacity(TABLE_CAPACITY);
-            encoder.set_table_capacity(TABLE_CAPACITY);
+            encoder.set_table_capacity(TABLE_CAPACITY).ok();
             encoder.set_peer_max_blocked_streams(100);
             // 動的テーブル path を通すためエントリを 1 件投入
             let _ = encoder.insert(b"a".to_vec(), b"b".to_vec());

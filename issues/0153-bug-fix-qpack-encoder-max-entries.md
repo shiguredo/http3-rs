@@ -1,7 +1,7 @@
 # QPACK エンコーダーが max_table_capacity = 0 のまま非空テーブルで encode すると panic / 不正フィールドセクションを生成する
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-qpack-encoder-max-entries
 - Polished: 2026-08-15
 
