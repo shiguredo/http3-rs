@@ -1,7 +1,7 @@
 # 楽観的カプセル送信のサーバー側バッファリングを実装する
 
 - Created: 2026-07-31
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/add-optimistic-capsule-buffering
 - Polished: 2026-08-15
 
@@ -38,6 +38,14 @@ draft-16 追加要件:
 - `cargo test --all` と `cargo fmt --all -- --check` と `cargo clippy --all-targets --all-features -- -D warnings` が通る
 
 ## 解決方法
+
+- `handle_wt_data_frame` の Pending 分岐で draft-07/14/15 の DATA を `capsule_buf` にバッファリングする。DoS 対策として 64 KiB の上限を設ける
+- クライアント側は現行の `H3_MESSAGE_ERROR` を維持する
+- `handle_wt_stream_end` で Pending 状態の FIN 時にバッファを破棄してセッションを終了する
+- `establish_wt_session_server` でセッション確立後に `capsule_buf` を処理する
+- `send_response` で非 2xx レスポンス送信時に Pending セッションを終了してバッファを破棄する
+- 既存の `draft07/14/15_pending_data_rejected` テストをバッファリングを期待する形に更新する
+- 新規テスト 3 件: 受理時のバッファ処理、拒否時のバッファ破棄、Pending 中 FIN のセッション終了
 
 ### 関連ファイル
 
