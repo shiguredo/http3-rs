@@ -387,6 +387,18 @@ impl WtSession {
         self.buffered_stream_entries.remove(&stream_id)
     }
 
+    /// バッファリングされたストリームのエントリを除去する (RESET_STREAM / セッション終了時)
+    pub(crate) fn remove_buffered_stream(&mut self, stream_id: u64) -> bool {
+        self.buffered_streams.retain(|&id| id != stream_id);
+        self.buffered_stream_entries.remove(&stream_id).is_some()
+    }
+
+    /// バッファリングされたストリームのエントリを復元する (deliver_buffered_streams の中断時)
+    pub(crate) fn restore_buffered_stream(&mut self, stream_id: u64, entry: BufferedStreamEntry) {
+        self.buffered_streams.push(stream_id);
+        self.buffered_stream_entries.insert(stream_id, entry);
+    }
+
     /// 受信データグラムをバッファリング (Section 4.6)
     ///
     /// バッファ上限を超えた場合は `false` を返す。
