@@ -1039,6 +1039,27 @@ impl Connection {
                     0,
                     String::new(),
                 );
+                return;
+            }
+
+            // 楽観的カプセル送信でバッファリングされたデータを処理する
+            // (draft-ietf-webtrans-http3-16 Section 3.2)
+            if let Some(session) = self.wt_sessions.get(&stream_id)
+                && !session.capsule_buf.is_empty()
+            {
+                let buf = std::mem::take(
+                    &mut self
+                        .wt_sessions
+                        .get_mut(&stream_id)
+                        .expect("session must exist")
+                        .capsule_buf,
+                );
+                if let Some(session) = self.wt_sessions.get_mut(&stream_id) {
+                    session.capsule_buf = buf;
+                }
+                if self.process_wt_capsule_data(stream_id, &[]).is_err() {
+                    self.terminate_wt_session(stream_id);
+                }
             }
         }
     }

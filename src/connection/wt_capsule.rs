@@ -160,7 +160,8 @@ impl Connection {
     /// WT セッションの DATA フレームを処理する。非 WT ストリームは `false` を返す。
     ///
     /// draft 別の扱い:
-    /// - draft-07/14/15: CONNECT に request body は許容されないため H3_MESSAGE_ERROR
+    /// - draft-07/14/15: Pending 中は楽観的カプセル送信としてバッファリングする
+    ///   (draft-ietf-webtrans-http3-16 Section 3.2)
     /// - draft-02: Chrome 互換のため Pending 中の DATA は黙って破棄
     pub(crate) fn handle_wt_data_frame(
         &mut self,
@@ -186,6 +187,22 @@ impl Connection {
             WtSessionState::Pending => {
                 let peer_draft = self.peer_wt_draft_version();
                 if !matches!(peer_draft, Some(crate::webtransport::DraftVersion::Draft02)) {
+                    // draft-07/14/15: 楽観的カプセル送信としてバッファリングする
+                    // (draft-ietf-webtrans-http3-16 Section 3.2)
+                    // サーバー側のみ: クライアントは楽観的送信を送信方向にのみ行う
+                    if self.role == crate::connection::Role::Server {
+                        // DoS 対策: バッファ上限を超えたら H3_MESSAGE_ERROR でリセットする
+                        const PENDING_CAPSULE_BUF_LIMIT: usize = 64 * 1024;
+                        let session = self
+                            .wt_sessions
+                            .get_mut(&stream_id)
+                            .expect("session must exist");
+                        if session.capsule_buf.len() + data.len() > PENDING_CAPSULE_BUF_LIMIT {
+                            return Err(Error::StreamError(ErrorCode::MessageError));
+                        }
+                        session.capsule_buf.extend_from_slice(data);
+                        return Ok(true);
+                    }
                     return Err(Error::StreamError(ErrorCode::MessageError));
                 }
                 // draft-02: Pending 中の DATA は破棄する
@@ -205,6 +222,15 @@ impl Connection {
     /// WT セッションの FIN はセッション終了を意味する。
     pub(crate) fn handle_wt_stream_end(&mut self, stream_id: u64) -> Result<bool, Error> {
         if let Some(session) = self.wt_sessions.get(&stream_id) {
+            if session.state == WtSessionState::Pending {
+                // Pending 状態でカプセルバッファが残っている場合は、
+                // バッファを破棄してセッションを終了する
+                // (draft-ietf-webtrans-http3-16 Section 3.2 / Section 6:
+                //  CONNECT ストリームのクローズはセッション終了を意味する)
+                self.wt_sessions.remove(&stream_id);
+                self.closed_wt_sessions.insert(stream_id);
+                return Ok(true);
+            }
             if !session.capsule_buf.is_empty() {
                 return Err(Error::StreamError(ErrorCode::MessageError));
             }

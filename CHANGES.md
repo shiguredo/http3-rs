@@ -262,6 +262,8 @@
   - @voluntas
 - [ADD] 0-RTT 再開時に前回接続の WebTransport フロー制御値 (wt_initial_max_streams_uni / wt_initial_max_streams_bidi / wt_initial_max_data) を注入し、値の減少を H3_SETTINGS_ERROR で検出する API を `ClientConnection` に追加する (draft-ietf-webtrans-http3-16 Section 3.2)
   - @voluntas
+- [ADD] サーバー側で WebTransport CONNECT の Pending 中に受信したカプセルデータをバッファリングし、2xx 受理時に処理する楽観的カプセル送信をサポートする (draft-ietf-webtrans-http3-16 Section 3.2)
+  - @voluntas
 - [UPDATE] QPACK 整数エンコード/デコードの重複実装を src/qpack/integer.rs に一本化する
   - @voluntas
 - [UPDATE] disassociate_stream の不要な `#[allow(dead_code)]` を削除する
