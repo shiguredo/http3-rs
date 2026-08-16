@@ -1,7 +1,7 @@
 # init_h3_streams にストリーム ID の重複検証がない
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-init-h3-streams-duplicate-id
 - Polished: 2026-08-15
 
