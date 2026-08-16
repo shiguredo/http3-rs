@@ -232,6 +232,13 @@ pub struct Connection {
     /// transport parameter レベルの前提条件が満たされていることを注入する。
     /// (draft-ietf-webtrans-http3-15 Section 3.1)
     wt_transport_verified: bool,
+    /// 0-RTT 再開時の前回接続のピア WebTransport SETTINGS
+    ///
+    /// クライアントが 0-RTT 再開時に、前回接続でキャッシュしたピアの
+    /// WebTransport SETTINGS を注入する。SETTINGS フレーム受信時に
+    /// フロー制御値の減少を検出して H3_SETTINGS_ERROR で接続を閉じる。
+    /// (draft-ietf-webtrans-http3-16 Section 3.2)
+    previous_wt_settings: Option<crate::webtransport::Settings>,
     /// RESET_STREAM_AT 拡張がサポートされているか
     ///
     /// draft-15 では RESET_STREAM_AT が必須だが、draft-02/07 では不要。
@@ -361,6 +368,7 @@ impl Connection {
             closed_wt_sessions: HashSet::new(),
             wt_transport_verified: false,
             wt_reset_stream_at_supported: false,
+            previous_wt_settings: None,
             deferred_encoder_set_capacity: None,
             deferred_section_acks: Vec::new(),
             deferred_stream_cancellations: Vec::new(),
@@ -1150,6 +1158,30 @@ impl Connection {
                         && wt.wt_enabled.get() > 1
                     {
                         return Err(Error::ConnectionError(ErrorCode::SettingsError));
+                    }
+
+                    // クライアントは 0-RTT 再開時にフロー制御値の減少を検出して
+                    // H3_SETTINGS_ERROR で接続を閉じなければならない
+                    // (draft-ietf-webtrans-http3-16 Section 3.2)
+                    // 将来のドラフトで変更される可能性がある
+                    if self.role == Role::Client
+                        && let Some(ref prev) = self.previous_wt_settings
+                    {
+                        let new_uni = wt_settings
+                            .as_ref()
+                            .map_or(0, |wt| wt.wt_initial_max_streams_uni.get());
+                        let new_bidi = wt_settings
+                            .as_ref()
+                            .map_or(0, |wt| wt.wt_initial_max_streams_bidi.get());
+                        let new_data = wt_settings
+                            .as_ref()
+                            .map_or(0, |wt| wt.wt_initial_max_data.get());
+                        if new_uni < prev.wt_initial_max_streams_uni.get()
+                            || new_bidi < prev.wt_initial_max_streams_bidi.get()
+                            || new_data < prev.wt_initial_max_data.get()
+                        {
+                            return Err(Error::ConnectionError(ErrorCode::SettingsError));
+                        }
                     }
 
                     self.peer_settings = Some(settings);
@@ -5908,5 +5940,174 @@ mod tests {
             !client.streams.contains_key(&stream_id),
             "STOP_SENDING + ピア FIN で Closed になったストリームが除去されること"
         );
+    }
+
+    // =========================================================================
+    // 0136: 0-RTT 再開時のフロー制御値減少検出
+    // (draft-ietf-webtrans-http3-16 Section 3.2)
+    // =========================================================================
+
+    /// 前回 SETTINGS を注入するヘルパー
+    fn previous_wt(uni: u64, bidi: u64, data: u64) -> crate::webtransport::Settings {
+        crate::webtransport::Settings::new()
+            .wt_initial_max_streams_uni(vi(uni))
+            .wt_initial_max_streams_bidi(vi(bidi))
+            .wt_initial_max_data(vi(data))
+    }
+
+    /// SETTINGS フレームを構築して feed_stream に渡すヘルパー
+    fn process_wt_settings(
+        conn: &mut Connection,
+        wt: &crate::webtransport::Settings,
+    ) -> Result<(), Error> {
+        let mut settings = crate::settings::Settings::new().enable_webtransport_server(*wt);
+        settings.wt_settings = Some(
+            crate::webtransport::Settings::new()
+                .wt_enabled(vi(1))
+                .wt_initial_max_streams_uni(wt.wt_initial_max_streams_uni)
+                .wt_initial_max_streams_bidi(wt.wt_initial_max_streams_bidi)
+                .wt_initial_max_data(wt.wt_initial_max_data),
+        );
+        let payload = crate::frame::SettingsPayload::from_settings(&settings);
+        let mut buf = vec![0u8; 256];
+        let len = crate::frame::encode_frame(&mut buf, &crate::frame::Frame::Settings(payload))
+            .expect("テスト用の SETTINGS フレームエンコードに成功すること");
+        buf.truncate(len);
+
+        let mut stream_data = vec![0x00]; // ストリームタイプ (制御ストリーム)
+        stream_data.extend_from_slice(&buf);
+        conn.feed_stream(3, &stream_data, false)
+    }
+
+    #[test]
+    fn test_previous_wt_settings_decrease_uni_returns_settings_error() {
+        let mut conn = Connection::client(Settings::default());
+        conn.set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        conn.set_previous_wt_settings(previous_wt(100, 50, 1_048_576));
+
+        let wt = crate::webtransport::Settings::new()
+            .wt_initial_max_streams_uni(vi(50)) // 100 → 50 に減少
+            .wt_initial_max_streams_bidi(vi(50))
+            .wt_initial_max_data(vi(1_048_576));
+        let err = process_wt_settings(&mut conn, &wt).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ConnectionError(ErrorCode::SettingsError)
+        ));
+    }
+
+    #[test]
+    fn test_previous_wt_settings_decrease_bidi_returns_settings_error() {
+        let mut conn = Connection::client(Settings::default());
+        conn.set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        conn.set_previous_wt_settings(previous_wt(100, 50, 1_048_576));
+
+        let wt = crate::webtransport::Settings::new()
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(25)) // 50 → 25 に減少
+            .wt_initial_max_data(vi(1_048_576));
+        let err = process_wt_settings(&mut conn, &wt).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ConnectionError(ErrorCode::SettingsError)
+        ));
+    }
+
+    #[test]
+    fn test_previous_wt_settings_decrease_data_returns_settings_error() {
+        let mut conn = Connection::client(Settings::default());
+        conn.set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        conn.set_previous_wt_settings(previous_wt(100, 50, 1_048_576));
+
+        let wt = crate::webtransport::Settings::new()
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(50))
+            .wt_initial_max_data(vi(512_000)); // 1,048,576 → 512,000 に減少
+        let err = process_wt_settings(&mut conn, &wt).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ConnectionError(ErrorCode::SettingsError)
+        ));
+    }
+
+    #[test]
+    fn test_previous_wt_settings_same_values_ok() {
+        let mut conn = Connection::client(Settings::default());
+        conn.set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        conn.set_previous_wt_settings(previous_wt(100, 50, 1_048_576));
+
+        let wt = crate::webtransport::Settings::new()
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(50))
+            .wt_initial_max_data(vi(1_048_576));
+        process_wt_settings(&mut conn, &wt).expect("同値は違反ではないため成功すること");
+    }
+
+    #[test]
+    fn test_previous_wt_settings_increase_ok() {
+        let mut conn = Connection::client(Settings::default());
+        conn.set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        conn.set_previous_wt_settings(previous_wt(100, 50, 1_048_576));
+
+        let wt = crate::webtransport::Settings::new()
+            .wt_initial_max_streams_uni(vi(200)) // 100 → 200 に増加
+            .wt_initial_max_streams_bidi(vi(100)) // 50 → 100 に増加
+            .wt_initial_max_data(vi(2_097_152)); // 1,048,576 → 2,097,152 に増加
+        process_wt_settings(&mut conn, &wt).expect("増加は違反ではないため成功すること");
+    }
+
+    #[test]
+    fn test_previous_wt_settings_omitted_fields_treated_as_zero() {
+        // 今回の SETTINGS でフィールドが省略された場合はデフォルト値 0 として扱う
+        // draft-ietf-webtrans-http3-16 Section 5.5
+        let mut conn = Connection::client(Settings::default());
+        conn.set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        conn.set_previous_wt_settings(previous_wt(100, 50, 1_048_576));
+
+        // 今回の SETTINGS で wt_initial_max_streams_uni を省略する
+        let wt = crate::webtransport::Settings::new()
+            .wt_initial_max_streams_bidi(vi(50))
+            .wt_initial_max_data(vi(1_048_576));
+        // wt_initial_max_streams_uni は省略 → 0 として扱われ、100 → 0 で減少検出
+        let err = process_wt_settings(&mut conn, &wt).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ConnectionError(ErrorCode::SettingsError)
+        ));
+    }
+
+    #[test]
+    fn test_previous_wt_settings_no_previous_ok() {
+        // 前回 SETTINGS が注入されていない場合は比較しない
+        let mut conn = Connection::client(Settings::default());
+        conn.set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+
+        let wt = crate::webtransport::Settings::new()
+            .wt_initial_max_streams_uni(vi(10))
+            .wt_initial_max_streams_bidi(vi(10))
+            .wt_initial_max_data(vi(1024));
+        process_wt_settings(&mut conn, &wt)
+            .expect("前回 SETTINGS 未注入時は比較しないため成功すること");
+    }
+
+    #[test]
+    fn test_previous_wt_settings_server_skips_validation() {
+        // サーバーは 0-RTT 検証を行わない (draft-ietf-webtrans-http3-16 Section 3.2)
+        let mut conn = Connection::server(Settings::default());
+        conn.set_previous_wt_settings(previous_wt(100, 50, 1_048_576));
+
+        let wt = crate::webtransport::Settings::new()
+            .wt_initial_max_streams_uni(vi(50)) // 減少
+            .wt_initial_max_streams_bidi(vi(50))
+            .wt_initial_max_data(vi(1_048_576));
+        process_wt_settings(&mut conn, &wt)
+            .expect("サーバーは 0-RTT 検証を行わないため成功すること");
     }
 }
