@@ -348,8 +348,9 @@ fn test_flow_control_disabled_no_capsules() {
         "no capsules should be generated when flow control is disabled"
     );
 
-    // クライアント側: ブロックしても STREAMS_BLOCKED は生成されない
-    assert!(!client.try_open_stream(false)); // 制限 0 なのでブロック
+    // クライアント側: フロー制御無効時は制限 0 でも開設できる
+    assert!(client.try_open_stream(false)); // フロー制御無効時は制限なし
+    assert_eq!(client.flow_state().streams_uni_opened, 1);
     assert!(
         client.take_pending_capsules().is_empty(),
         "no STREAMS_BLOCKED when flow control is disabled"

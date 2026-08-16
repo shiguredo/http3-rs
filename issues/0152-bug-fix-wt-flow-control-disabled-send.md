@@ -1,7 +1,7 @@
 # フロー制御無効時に WebTransport 送信 API が常に false を返す
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-wt-flow-control-disabled-send
 - Polished: 2026-08-15
 
