@@ -1301,6 +1301,16 @@ impl Connection {
             return Err(Error::StreamError(ErrorCode::MessageError));
         }
 
+        // GOAWAY 送信後の新規ストリームを拒否する (RFC 9114 Section 5.2 SHOULD)
+        // サーバー側のみ: クライアントの last_sent_goaway_id は push ID のため対象外
+        if self.role == Role::Server
+            && !self.streams.contains_key(&stream_id)
+            && let Some(goaway_id) = self.last_sent_goaway_id
+            && stream_id >= goaway_id.get()
+        {
+            return Err(Error::StreamError(ErrorCode::RequestRejected));
+        }
+
         // ストリームを取得または作成
         self.streams
             .entry(stream_id)
