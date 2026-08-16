@@ -253,6 +253,8 @@
   - @voluntas
 - [FIX] ローカル側の CONNECT ストリーム FIN で WT セッションが終了しない問題を修正する (draft-ietf-webtrans-http3-16 Section 6)
   - @voluntas
+- [FIX] GOAWAY 送信後に新規リクエスト・WT CONNECT が拒否されず処理され続ける問題を修正する (RFC 9114 Section 5.2)
+  - @voluntas
 
 ### misc
 

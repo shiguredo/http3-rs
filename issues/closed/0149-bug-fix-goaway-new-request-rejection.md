@@ -1,7 +1,7 @@
 # GOAWAY 送信後に新規リクエスト・WT CONNECT が拒否されず処理され続ける
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-goaway-new-request-rejection
 - Polished: 2026-08-15
 
