@@ -1,7 +1,7 @@
 # 0-RTT 再開時のフロー制御値減少を検出して H3_SETTINGS_ERROR で接続を閉じる
 
 - Created: 2026-07-31
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/add-0rtt-flow-control-validation
 - Polished: 2026-08-15
 
@@ -38,9 +38,18 @@ draft-16 追加要件:
 
 ## 解決方法
 
-### 関連ファイル
+- `Connection` に `previous_wt_settings: Option<webtransport::Settings>` フィールドを追加し、`new()` で `None` に初期化する
+- `Connection::set_previous_wt_settings()` / `ClientConnection::set_previous_wt_settings()` を追加し、0-RTT 受諾判明時に前回 SETTINGS を注入できるようにする
+- `process_control_stream()` の SETTINGS フレーム処理で、クライアントかつ `previous_wt_settings` が注入済みの場合に、`wt_initial_max_streams_uni` / `wt_initial_max_streams_bidi` / `wt_initial_max_data` の 3 フィールドを前回値と比較する
+- 今回の SETTINGS でフィールドが省略された場合はデフォルト値 0 として扱う
+- いずれかのフィールドが厳密に減少していれば `H3_SETTINGS_ERROR` で接続を閉じる
+- 同値・増加・前回値未注入時は検証をスキップする
+- `mod.rs` に 8 件のテストを追加: 各フィールドの減少検出、同値・増加の正常系、省略フィールドのゼロ扱い、前回値未注入時のスキップ、サーバー側の検証スキップ
+
+## 関連ファイル
 
 - `src/connection/mod.rs` (SETTINGS 処理経路)
 - `src/connection/client.rs` (ClientConnection)
+- `src/connection/wt_session.rs` (Connection メソッド)
 - `src/webtransport/settings.rs` (Settings 型)
 - 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 3.2

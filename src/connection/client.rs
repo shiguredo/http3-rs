@@ -175,6 +175,16 @@ impl ClientConnection {
         self.inner.register_local_wt_stream(session_id, stream_id)
     }
 
+    /// 0-RTT 再開時の前回接続のピア WebTransport SETTINGS を注入する
+    ///
+    /// クライアントが 0-RTT 再開時に、前回接続でキャッシュしたピアの
+    /// WebTransport SETTINGS を注入する。SETTINGS フレーム受信時に
+    /// フロー制御値の減少を検出して H3_SETTINGS_ERROR で接続を閉じる。
+    /// (draft-ietf-webtrans-http3-16 Section 3.2)
+    pub fn set_previous_wt_settings(&mut self, settings: crate::webtransport::Settings) {
+        self.inner.set_previous_wt_settings(settings);
+    }
+
     /// QUIC transport parameter に基づく WebTransport 前提条件を注入する
     ///
     /// WebTransport CONNECT 送信前に呼び出す必要がある。
