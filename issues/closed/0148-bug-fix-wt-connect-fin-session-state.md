@@ -1,7 +1,7 @@
 # ローカル側の CONNECT ストリーム FIN で WT セッションが終了しない
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-wt-connect-fin-session-state
 - Polished: 2026-08-15
 

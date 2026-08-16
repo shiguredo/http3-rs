@@ -1620,6 +1620,27 @@ impl Connection {
     /// FIN は送信方向クローズ (RFC 9114 Section 4.1) の実現手段として
     /// 交付と同時に送信済みとして確定し、以降は取得できない (FIN は 1 回だけ交付される)。
     pub fn get_stream_data(&mut self, stream_id: u64) -> Option<(&[u8], bool)> {
+        // WT CONNECT ストリームの FIN 交付前チェック
+        // (制御ストリームの borrow より先に行う)
+        let fin_pending = self.streams.get_mut(&stream_id).is_some_and(|s| {
+            if s.has_fin_pending() {
+                s.mark_fin_sent();
+                true
+            } else {
+                false
+            }
+        });
+        if fin_pending {
+            // WT CONNECT ストリームのローカル側 FIN 交付時はセッションを終了する
+            // (draft-ietf-webtrans-http3-16 Section 6:
+            //  CONNECT ストリームのクローズはどちら側でもセッション終了を意味する)
+            if self.wt_sessions.contains_key(&stream_id) {
+                self.terminate_wt_session(stream_id);
+            }
+            // fin=true はデータ全消費後にのみ交付されるためデータは必ず空
+            return Some((&[], true));
+        }
+
         // 制御ストリーム
         if self.control_send.stream_id() == Some(stream_id) {
             let data = self.control_send.get_data();
@@ -1646,15 +1667,6 @@ impl Connection {
 
         // リクエストストリーム
         if let Some(stream) = self.streams.get_mut(&stream_id) {
-            // FIN 交付判定をデータ借用より先に行う
-            // (データ借用が生きている間に mark_fin_sent で可変化できないため)
-            if stream.has_fin_pending() {
-                // FIN 交付と同時に送信済みをマークし、2 回目以降は交付しない
-                // (FIN は交付時点で確定し、QUIC への書き込み失敗時の再交付はない)
-                stream.mark_fin_sent();
-                // fin=true はデータ全消費後にのみ交付されるためデータは必ず空
-                return Some((&[], true));
-            }
             let (data, _) = stream.get_send_data();
             if !data.is_empty() {
                 return Some((data, false));
