@@ -665,7 +665,7 @@ impl Client {
         }; 16];
 
         while let Ok((stream_id, fin, count)) = self.h3_conn.write_stream(&mut vecs) {
-            if count == 0 {
+            if count == 0 && !fin {
                 break;
             }
 
@@ -699,7 +699,7 @@ impl Client {
 
                     // nghttp3 に書き込んだ量を通知
                     if let Some(dw) = data_written
-                        && dw > 0
+                        && (dw > 0 || fin)
                     {
                         self.h3_conn.add_write_offset(stream_id, dw)?;
                     }

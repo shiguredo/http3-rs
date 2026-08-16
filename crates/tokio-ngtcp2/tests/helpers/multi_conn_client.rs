@@ -520,7 +520,7 @@ fn write_h3_streams(conn: &mut TestConn, send_buf: &mut [u8], ts: u64) -> Result
     }; 16];
 
     while let Ok((stream_id, fin, count)) = conn.h3_conn.write_stream(&mut vecs) {
-        if count == 0 {
+        if count == 0 && !fin {
             break;
         }
 
@@ -534,7 +534,7 @@ fn write_h3_streams(conn: &mut TestConn, send_buf: &mut [u8], ts: u64) -> Result
             h3_data.extend_from_slice(data);
         }
 
-        if h3_data.is_empty() {
+        if h3_data.is_empty() && !fin {
             continue;
         }
 
@@ -547,7 +547,7 @@ fn write_h3_streams(conn: &mut TestConn, send_buf: &mut [u8], ts: u64) -> Result
                     packets.push(send_buf[..pkt_written].to_vec());
                 }
                 if let Some(dw) = data_written
-                    && dw > 0
+                    && (dw > 0 || fin)
                 {
                     conn.h3_conn.add_write_offset(stream_id, dw)?;
                 }
