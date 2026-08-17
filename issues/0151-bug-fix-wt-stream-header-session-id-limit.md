@@ -1,7 +1,7 @@
 # StreamHeader デコード経路で session_id の 2^62 上限検査が欠落している
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-17
 - Branch: feature/fix-wt-stream-header-session-id-limit
 - Polished: {YYYY-MM-DD}
 
@@ -31,8 +31,18 @@ draft-ietf-webtrans-http3-16 Section 4 の MUST (存在しないストリーム 
 
 ## 解決方法
 
+### 対応不要 (バグが存在しない) と判断して closed にする
+
+`varint::decode` (src/varint.rs) は 8 バイト形式でも `u64::from_be_bytes(bytes) & 0x3fff_ffff_ffff_ffff` で最上位 2 ビットをマスクするため、デコード結果は必ず 2^62-1 以下になる。RFC 9000 Section 16 Table 4 も 8 バイト形式の値範囲を 0〜4611686018427387903 (= 2^62-1) と定めており、2^62 は wire 上で表現不可能。したがって:
+
+- `StreamHeader::decode_unidirectional_checked` / `decode_bidirectional_checked` / `classify_uni_stream_checked` に session_id = 2^62 が現れることは構造的にない (現状の `is_multiple_of(4)` 検査で draft-16 Section 4 の MUST を充足済み)
+- `resolve_wt_uni_stream_session_id` / `resolve_wt_bidi_stream_header` も同様
+- データグラム経路は `Datagram::decode` の Quarter Stream ID 上限検査 (`qsi > 2^60-1` → H3_DATAGRAM_ERROR。RFC 9297 Section 2.1) で既にカバー済み
+
+本 issue の前提 (「varint::decode は 2^62 をそのまま返す」) は反証されたため、修正対象のバグは存在しない。実装すると到達不能な検査 (デッドコード) と実現不能なテストが入るだけになる。
+
 ### 関連ファイル
 
 - `src/webtransport/stream.rs` (`StreamHeader::decode_unidirectional_checked` / `decode_bidirectional_checked` / `classify_uni_stream_checked`)
 - `src/connection/wt_stream.rs` (`resolve_wt_uni_stream_session_id` / `resolve_wt_bidi_stream_header`)
-- 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 4、`refs/quic/rfc9000.txt` Section 2.1
+- 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 4、`refs/quic/rfc9000.txt` Section 2.1 / Section 16 Table 4
