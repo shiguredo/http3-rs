@@ -6,5 +6,6 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-proptest = "1.11"
+# PBT (Property-Based Testing) は noprop を使用する
+noprop = "0.2"
 shiguredo_http3.workspace = true

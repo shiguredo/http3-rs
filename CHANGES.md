@@ -312,6 +312,8 @@
   - @voluntas
 - [UPDATE] `s2n-tls` を 0.3.42 に更新する
   - @voluntas
+- [UPDATE] PBT を proptest から noprop に置き換え、pbt クレートの全プロパティテストを命令形のプロパティクロージャに書き換える
+  - @voluntas
 - [FIX] `fuzz/fuzz_targets/fuzz_settings.rs` が `Settings::from_payload` の `Result` 戻り値に追従しておらず fuzz crate がコンパイルできなかった問題を修正する
   - @voluntas
 - [FIX] CI の共通 workspace job から `interop/h3` / `interop/wt` を除外し、相互運用テストは macOS 専用 step でのみ実行する

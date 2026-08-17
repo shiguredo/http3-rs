@@ -1,222 +1,245 @@
 //! Session の状態遷移・フロー制御・バッファリング・GOAWAY・終了処理プロパティ
 //! (draft-ietf-webtrans-http3-15 Section 3, 4.5, 4.6, 4.7, 5.6, 6)
 
-use proptest::prelude::*;
 use shiguredo_http3::webtransport::{
     Capsule, FlowControlLimits, MAX_STREAMS_LIMIT, Session, SessionState, Stream,
 };
 
-prop_compose! {
-    /// 有効なエラーコード (32-bit)
-    fn valid_error_code()(code in any::<u32>()) -> u32 {
-        code
-    }
+/// 有効なエラーコード (32-bit)
+fn valid_error_code(ctx: &mut noprop::TestCaseContext) -> u32 {
+    noprop::sample_u32(ctx)
 }
 
-prop_compose! {
-    /// 有効なエラーメッセージ (最大 1024 バイト)
-    fn valid_error_message()(
-        len in 0usize..=1024,
-    )(
-        msg in prop::collection::vec(0x20u8..0x7f, len)
-    ) -> String {
-        String::from_utf8(msg).expect("ASCII range bytes are always valid UTF-8")
+/// 有効なエラーメッセージ (最大 1024 バイト)
+fn valid_error_message(ctx: &mut noprop::TestCaseContext) -> String {
+    let len = noprop::sample_usize_in(ctx, 0..=1024);
+    let mut msg = Vec::new();
+    for _ in 0..len {
+        msg.push(0x20 + noprop::sample_usize_in(ctx, 0..=0x5f) as u8);
     }
+    String::from_utf8(msg).expect("ASCII range bytes are always valid UTF-8")
 }
 
 // =============================================================================
 // 状態遷移 (draft-ietf-webtrans-http3-15 Section 3, 6)
 // =============================================================================
 
-proptest! {
-    /// Property: 有効な状態遷移パス (Pending → Connecting → Established → Draining → Closed)
-    #[test]
-    fn prop_session_valid_transitions(_dummy in Just(())) {
-        let mut session = Session::new(0);
-        prop_assert_eq!(session.state(), SessionState::Pending);
+/// Property: 有効な状態遷移パス (Pending → Connecting → Established → Draining → Closed)
+#[test]
+fn prop_session_valid_transitions() {
+    let mut session = Session::new(0);
+    assert_eq!(session.state(), SessionState::Pending);
 
-        session.set_connecting();
-        prop_assert_eq!(session.state(), SessionState::Connecting);
+    session.set_connecting();
+    assert_eq!(session.state(), SessionState::Connecting);
 
-        session.set_established();
-        prop_assert_eq!(session.state(), SessionState::Established);
+    session.set_established();
+    assert_eq!(session.state(), SessionState::Established);
 
-        session.set_draining();
-        prop_assert_eq!(session.state(), SessionState::Draining);
+    session.set_draining();
+    assert_eq!(session.state(), SessionState::Draining);
 
-        session.close(None);
-        prop_assert_eq!(session.state(), SessionState::Closed);
-    }
+    session.close(None);
+    assert_eq!(session.state(), SessionState::Closed);
+}
 
-    /// Property: Pending → Established の直接遷移も有効
-    #[test]
-    fn prop_session_direct_establish(_dummy in Just(())) {
-        let mut session = Session::new(0);
-        prop_assert_eq!(session.state(), SessionState::Pending);
+/// Property: Pending → Established の直接遷移も有効
+#[test]
+fn prop_session_direct_establish() {
+    let mut session = Session::new(0);
+    assert_eq!(session.state(), SessionState::Pending);
 
-        session.set_established();
-        prop_assert_eq!(session.state(), SessionState::Established);
+    session.set_established();
+    assert_eq!(session.state(), SessionState::Established);
 
-        session.close(None);
-        prop_assert_eq!(session.state(), SessionState::Closed);
-    }
+    session.close(None);
+    assert_eq!(session.state(), SessionState::Closed);
+}
 
-    /// Property: 各状態でのストリーム作成可否
-    #[test]
-    fn prop_session_state_can_create_stream(_dummy in Just(())) {
-        prop_assert!(!SessionState::Pending.can_create_stream());
-        prop_assert!(!SessionState::Connecting.can_create_stream());
-        prop_assert!(SessionState::Established.can_create_stream());
-        prop_assert!(SessionState::Draining.can_create_stream());
-        prop_assert!(!SessionState::Closed.can_create_stream());
-    }
+/// Property: 各状態でのストリーム作成可否
+#[test]
+fn prop_session_state_can_create_stream() {
+    assert!(!SessionState::Pending.can_create_stream());
+    assert!(!SessionState::Connecting.can_create_stream());
+    assert!(SessionState::Established.can_create_stream());
+    assert!(SessionState::Draining.can_create_stream());
+    assert!(!SessionState::Closed.can_create_stream());
+}
 
-    /// Property: 各状態での送信可否
-    #[test]
-    fn prop_session_state_can_send(_dummy in Just(())) {
-        prop_assert!(!SessionState::Pending.can_send());
-        prop_assert!(!SessionState::Connecting.can_send());
-        prop_assert!(SessionState::Established.can_send());
-        prop_assert!(SessionState::Draining.can_send());
-        prop_assert!(!SessionState::Closed.can_send());
-    }
+/// Property: 各状態での送信可否
+#[test]
+fn prop_session_state_can_send() {
+    assert!(!SessionState::Pending.can_send());
+    assert!(!SessionState::Connecting.can_send());
+    assert!(SessionState::Established.can_send());
+    assert!(SessionState::Draining.can_send());
+    assert!(!SessionState::Closed.can_send());
 }
 
 // =============================================================================
 // フロー制御の単調増加制約 (draft-ietf-webtrans-http3-16 Section 5.6.2, 5.6.4)
 // =============================================================================
 
-proptest! {
-    /// Property: MaxData が減少した場合にエラー
-    #[test]
-    fn prop_session_max_data_non_monotonic_error(
-        initial in 100u64..10000,
-        decrease in 1u64..100,
-    ) {
+/// Property: MaxData が減少した場合にエラー
+#[test]
+fn prop_session_max_data_non_monotonic_error() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let initial = noprop::sample_u64_in(ctx, 100..10000);
+        let decrease = noprop::sample_u64_in(ctx, 1..100);
         let mut session = Session::new(0);
 
         let result = session.process_capsule(&Capsule::MaxData { maximum: initial });
-        prop_assert!(result.is_ok());
-        prop_assert_eq!(session.remote_limits().max_data, initial);
+        assert!(result.is_ok());
+        assert_eq!(session.remote_limits().max_data, initial);
 
         let smaller = initial.saturating_sub(decrease);
         let result = session.process_capsule(&Capsule::MaxData { maximum: smaller });
-        prop_assert!(result.is_err());
+        assert!(result.is_err());
 
-        prop_assert_eq!(session.remote_limits().max_data, initial);
-    }
+        assert_eq!(session.remote_limits().max_data, initial);
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: MaxData が厳密に増加すれば成功
-    ///
-    /// draft-16 Section 5.6.4: "does not increase" は WT_FLOW_CONTROL_ERROR。
-    /// セッション初期値は 0 のため、最初の値も 1 以上が必要。
-    #[test]
-    fn prop_session_max_data_monotonic_ok(
-        initial in 1u64..10000,
-        increase in 1u64..10000,
-    ) {
+/// Property: MaxData が厳密に増加すれば成功
+///
+/// draft-16 Section 5.6.4: "does not increase" は WT_FLOW_CONTROL_ERROR。
+/// セッション初期値は 0 のため、最初の値も 1 以上が必要。
+#[test]
+fn prop_session_max_data_monotonic_ok() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let initial = noprop::sample_u64_in(ctx, 1..10000);
+        let increase = noprop::sample_u64_in(ctx, 1..10000);
         let mut session = Session::new(0);
 
         let result = session.process_capsule(&Capsule::MaxData { maximum: initial });
-        prop_assert!(result.is_ok());
+        assert!(result.is_ok());
 
         let larger = initial.saturating_add(increase);
         let result = session.process_capsule(&Capsule::MaxData { maximum: larger });
-        prop_assert!(result.is_ok());
-        prop_assert_eq!(session.remote_limits().max_data, larger);
-    }
+        assert!(result.is_ok());
+        assert_eq!(session.remote_limits().max_data, larger);
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: MaxStreams (双方向) が減少した場合にエラー
-    #[test]
-    fn prop_session_max_streams_bidi_non_monotonic_error(
-        initial in 100u64..10000,
-        decrease in 1u64..100,
-    ) {
+/// Property: MaxStreams (双方向) が減少した場合にエラー
+#[test]
+fn prop_session_max_streams_bidi_non_monotonic_error() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let initial = noprop::sample_u64_in(ctx, 100..10000);
+        let decrease = noprop::sample_u64_in(ctx, 1..100);
         let mut session = Session::new(0);
 
         let result = session.process_capsule(&Capsule::MaxStreams {
             bidirectional: true,
             maximum: initial,
         });
-        prop_assert!(result.is_ok());
+        assert!(result.is_ok());
 
         let smaller = initial.saturating_sub(decrease);
         let result = session.process_capsule(&Capsule::MaxStreams {
             bidirectional: true,
             maximum: smaller,
         });
-        prop_assert!(result.is_err());
-    }
+        assert!(result.is_err());
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: MaxStreams (単方向) が減少した場合にエラー
-    #[test]
-    fn prop_session_max_streams_uni_non_monotonic_error(
-        initial in 100u64..10000,
-        decrease in 1u64..100,
-    ) {
+/// Property: MaxStreams (単方向) が減少した場合にエラー
+#[test]
+fn prop_session_max_streams_uni_non_monotonic_error() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let initial = noprop::sample_u64_in(ctx, 100..10000);
+        let decrease = noprop::sample_u64_in(ctx, 1..100);
         let mut session = Session::new(0);
 
         let result = session.process_capsule(&Capsule::MaxStreams {
             bidirectional: false,
             maximum: initial,
         });
-        prop_assert!(result.is_ok());
+        assert!(result.is_ok());
 
         let smaller = initial.saturating_sub(decrease);
         let result = session.process_capsule(&Capsule::MaxStreams {
             bidirectional: false,
             maximum: smaller,
         });
-        prop_assert!(result.is_err());
-    }
+        assert!(result.is_err());
+        Ok(())
+    })?;
+    Ok(())
 }
 
 // =============================================================================
 // フロー制御リミット境界テスト
 // =============================================================================
 
-proptest! {
-    /// Property: ストリーム作成可否の境界テスト (単方向)
-    #[test]
-    fn prop_session_can_create_stream_boundary_uni(
-        limit in 1u64..100,
-    ) {
+/// Property: ストリーム作成可否の境界テスト (単方向)
+#[test]
+fn prop_session_can_create_stream_boundary_uni() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let limit = noprop::sample_u64_in(ctx, 1..100);
         let mut session = Session::new(0);
         session.set_established();
         session.remote_limits_mut().max_streams_uni = limit;
 
         session.flow_state_mut().streams_uni_opened = limit - 1;
-        prop_assert!(session.can_create_unidirectional_stream());
+        assert!(session.can_create_unidirectional_stream());
 
         session.flow_state_mut().streams_uni_opened = limit;
-        prop_assert!(!session.can_create_unidirectional_stream());
+        assert!(!session.can_create_unidirectional_stream());
 
         session.flow_state_mut().streams_uni_opened = limit + 1;
-        prop_assert!(!session.can_create_unidirectional_stream());
-    }
+        assert!(!session.can_create_unidirectional_stream());
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: ストリーム作成可否の境界テスト (双方向)
-    #[test]
-    fn prop_session_can_create_stream_boundary_bidi(
-        limit in 1u64..100,
-    ) {
+/// Property: ストリーム作成可否の境界テスト (双方向)
+#[test]
+fn prop_session_can_create_stream_boundary_bidi() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let limit = noprop::sample_u64_in(ctx, 1..100);
         let mut session = Session::new(0);
         session.set_established();
         session.remote_limits_mut().max_streams_bidi = limit;
 
         session.flow_state_mut().streams_bidi_opened = limit - 1;
-        prop_assert!(session.can_create_bidirectional_stream());
+        assert!(session.can_create_bidirectional_stream());
 
         session.flow_state_mut().streams_bidi_opened = limit;
-        prop_assert!(!session.can_create_bidirectional_stream());
-    }
+        assert!(!session.can_create_bidirectional_stream());
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: データ送信可否の境界テスト
-    #[test]
-    fn prop_session_can_send_data_boundary(
-        limit in 100u64..10000,
-        sent in 0u64..100,
-    ) {
+/// Property: データ送信可否の境界テスト
+#[test]
+fn prop_session_can_send_data_boundary() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let limit = noprop::sample_u64_in(ctx, 100..10000);
+        let sent = noprop::sample_u64_in(ctx, 0..100);
         let mut session = Session::new(0);
         session.set_established();
         session.remote_limits_mut().max_data = limit;
@@ -224,108 +247,131 @@ proptest! {
 
         let remaining = limit - sent;
 
-        prop_assert!(session.can_send_data(remaining));
-        prop_assert!(!session.can_send_data(remaining + 1));
-    }
+        assert!(session.can_send_data(remaining));
+        assert!(!session.can_send_data(remaining + 1));
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: Established/Draining 以外ではストリーム作成不可
-    #[test]
-    fn prop_session_cannot_create_stream_in_wrong_state(
-        limit in 1u64..100,
-    ) {
+/// Property: Established/Draining 以外ではストリーム作成不可
+#[test]
+fn prop_session_cannot_create_stream_in_wrong_state() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let limit = noprop::sample_u64_in(ctx, 1..100);
         let mut session = Session::new(0);
         session.remote_limits_mut().max_streams_uni = limit;
         session.remote_limits_mut().max_streams_bidi = limit;
 
         // Pending 状態
-        prop_assert!(!session.can_create_unidirectional_stream());
-        prop_assert!(!session.can_create_bidirectional_stream());
+        assert!(!session.can_create_unidirectional_stream());
+        assert!(!session.can_create_bidirectional_stream());
 
         // Connecting 状態
         session.set_connecting();
-        prop_assert!(!session.can_create_unidirectional_stream());
-        prop_assert!(!session.can_create_bidirectional_stream());
+        assert!(!session.can_create_unidirectional_stream());
+        assert!(!session.can_create_bidirectional_stream());
 
         // Closed 状態
         session.close(None);
-        prop_assert!(!session.can_create_unidirectional_stream());
-        prop_assert!(!session.can_create_bidirectional_stream());
-    }
+        assert!(!session.can_create_unidirectional_stream());
+        assert!(!session.can_create_bidirectional_stream());
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: Established/Draining 以外ではデータ送信不可
-    #[test]
-    fn prop_session_cannot_send_in_wrong_state(
-        limit in 100u64..10000,
-    ) {
+/// Property: Established/Draining 以外ではデータ送信不可
+#[test]
+fn prop_session_cannot_send_in_wrong_state() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let limit = noprop::sample_u64_in(ctx, 100..10000);
         let mut session = Session::new(0);
         session.remote_limits_mut().max_data = limit;
 
         // Pending 状態
-        prop_assert!(!session.can_send_data(1));
+        assert!(!session.can_send_data(1));
 
         // Connecting 状態
         session.set_connecting();
-        prop_assert!(!session.can_send_data(1));
+        assert!(!session.can_send_data(1));
 
         // Closed 状態
         session.close(None);
-        prop_assert!(!session.can_send_data(1));
-    }
+        assert!(!session.can_send_data(1));
+        Ok(())
+    })?;
+    Ok(())
 }
 
 // =============================================================================
 // バッファリング (draft-ietf-webtrans-http3-15 Section 4.6)
 // =============================================================================
 
-proptest! {
-    /// Property: MAX_BUFFERED_STREAMS (100) までバッファリング成功
-    #[test]
-    fn prop_session_buffer_streams_up_to_limit(
-        count in 1usize..=100,
-    ) {
+/// Property: MAX_BUFFERED_STREAMS (100) までバッファリング成功
+#[test]
+fn prop_session_buffer_streams_up_to_limit() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let count = noprop::sample_usize_in(ctx, 1..=100);
         let mut session = Session::new(0);
 
         for i in 0..count {
-            prop_assert!(session.buffer_incoming_stream(i as u64 * 4, false));
+            assert!(session.buffer_incoming_stream(i as u64 * 4, false));
         }
 
         let buffered = session.take_buffered_streams();
-        prop_assert_eq!(buffered.len(), count);
+        assert_eq!(buffered.len(), count);
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Property: 101 個目のバッファリングは失敗
+#[test]
+fn prop_session_buffer_streams_over_limit() {
+    let mut session = Session::new(0);
+
+    for i in 0..100 {
+        assert!(session.buffer_incoming_stream(i as u64 * 4, false));
     }
 
-    /// Property: 101 個目のバッファリングは失敗
-    #[test]
-    fn prop_session_buffer_streams_over_limit(_dummy in proptest::strategy::Just(())) {
-        let mut session = Session::new(0);
+    assert!(!session.buffer_incoming_stream(99999, false));
+}
 
-        for i in 0..100 {
-            prop_assert!(session.buffer_incoming_stream(i as u64 * 4, false));
-        }
-
-        prop_assert!(!session.buffer_incoming_stream(99999, false));
-    }
-
-    /// Property: MAX_BUFFERED_DATAGRAMS (100) までバッファリング成功
-    #[test]
-    fn prop_session_buffer_datagrams_up_to_limit(
-        count in 1usize..=100,
-    ) {
+/// Property: MAX_BUFFERED_DATAGRAMS (100) までバッファリング成功
+#[test]
+fn prop_session_buffer_datagrams_up_to_limit() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let count = noprop::sample_usize_in(ctx, 1..=100);
         let mut session = Session::new(0);
 
         for i in 0..count {
-            prop_assert!(session.buffer_datagram(vec![i as u8]));
+            assert!(session.buffer_datagram(vec![i as u8]));
         }
 
         let buffered = session.take_buffered_datagrams();
-        prop_assert_eq!(buffered.len(), count);
-    }
+        assert_eq!(buffered.len(), count);
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: take 後のバッファは空になる
-    #[test]
-    fn prop_session_take_buffered_empties_buffer(
-        stream_count in 1usize..=10,
-        datagram_count in 1usize..=10,
-    ) {
+/// Property: take 後のバッファは空になる
+#[test]
+fn prop_session_take_buffered_empties_buffer() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let stream_count = noprop::sample_usize_in(ctx, 1..=10);
+        let datagram_count = noprop::sample_usize_in(ctx, 1..=10);
         let mut session = Session::new(0);
 
         for i in 0..stream_count {
@@ -338,36 +384,39 @@ proptest! {
         let _streams = session.take_buffered_streams();
         let _datagrams = session.take_buffered_datagrams();
 
-        prop_assert!(session.take_buffered_streams().is_empty());
-        prop_assert!(session.take_buffered_datagrams().is_empty());
-    }
+        assert!(session.take_buffered_streams().is_empty());
+        assert!(session.take_buffered_datagrams().is_empty());
+        Ok(())
+    })?;
+    Ok(())
 }
 
 // =============================================================================
 // GOAWAY (draft-ietf-webtrans-http3-15 Section 4.7)
 // =============================================================================
 
-proptest! {
-    /// Property: handle_goaway 後は goaway_received が true でドレイン状態
-    #[test]
-    fn prop_session_goaway_sets_draining(_dummy in proptest::strategy::Just(())) {
-        let mut session = Session::new(0);
-        session.set_established();
+/// Property: handle_goaway 後は goaway_received が true でドレイン状態
+#[test]
+fn prop_session_goaway_sets_draining() {
+    let mut session = Session::new(0);
+    session.set_established();
 
-        prop_assert!(!session.is_goaway_received());
-        prop_assert_eq!(session.state(), SessionState::Established);
+    assert!(!session.is_goaway_received());
+    assert_eq!(session.state(), SessionState::Established);
 
-        session.handle_goaway();
+    session.handle_goaway();
 
-        prop_assert!(session.is_goaway_received());
-        prop_assert_eq!(session.state(), SessionState::Draining);
-    }
+    assert!(session.is_goaway_received());
+    assert_eq!(session.state(), SessionState::Draining);
+}
 
-    /// Property: handle_goaway 後も既存ストリームは保持され can_send() == true
-    #[test]
-    fn prop_session_handle_goaway_preserves_streams(
-        stream_count in 1usize..10,
-    ) {
+/// Property: handle_goaway 後も既存ストリームは保持され can_send() == true
+#[test]
+fn prop_session_handle_goaway_preserves_streams() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let stream_count = noprop::sample_usize_in(ctx, 1..10);
         let mut session = Session::new(0);
         session.set_established();
         session.remote_limits_mut().max_data = 100000;
@@ -378,25 +427,28 @@ proptest! {
 
         session.handle_goaway();
 
-        prop_assert_eq!(session.stream_count(), stream_count);
+        assert_eq!(session.stream_count(), stream_count);
         for i in 0..stream_count {
-            prop_assert!(session.get_stream(i as u64 * 4).is_some());
+            assert!(session.get_stream(i as u64 * 4).is_some());
         }
-        prop_assert!(session.state().can_send());
-    }
+        assert!(session.state().can_send());
+        Ok(())
+    })?;
+    Ok(())
 }
 
 // =============================================================================
 // セッション終了処理 (draft-ietf-webtrans-http3-15 Section 6)
 // =============================================================================
 
-proptest! {
-    /// Property: 任意の初期状態 (Established/Draining) で on_connect_stream_closed() →
-    /// is_close_session_received() == true かつ is_closed() == true
-    #[test]
-    fn prop_session_on_connect_stream_closed_sets_flags(
-        start_draining in any::<bool>(),
-    ) {
+/// Property: 任意の初期状態 (Established/Draining) で on_connect_stream_closed() →
+/// is_close_session_received() == true かつ is_closed() == true
+#[test]
+fn prop_session_on_connect_stream_closed_sets_flags() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let start_draining = noprop::sample_bool(ctx);
         let mut session = Session::new(0);
         session.set_established();
 
@@ -406,40 +458,57 @@ proptest! {
 
         session.on_connect_stream_closed();
 
-        prop_assert!(session.is_close_session_received());
-        prop_assert!(session.is_closed());
-    }
+        assert!(session.is_close_session_received());
+        assert!(session.is_closed());
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: CloseSession Capsule 受信後に on_connect_stream_closed() →
-    /// 最初のエラー情報が保持される
-    #[test]
-    fn prop_session_on_connect_stream_closed_preserves_first_error(
-        error_code in valid_error_code(),
-        message in valid_error_message(),
-    ) {
+/// Property: CloseSession Capsule 受信後に on_connect_stream_closed() →
+/// 最初のエラー情報が保持される
+#[test]
+fn prop_session_on_connect_stream_closed_preserves_first_error() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let error_code = valid_error_code(ctx);
+        let message = valid_error_message(ctx);
         let mut session = Session::new(0);
         session.set_established();
 
-        session.process_capsule(&Capsule::CloseSession {
-            error_code,
-            message: message.clone(),
-        }).expect("CloseSession capsule should be accepted");
+        session
+            .process_capsule(&Capsule::CloseSession {
+                error_code,
+                message: message.clone(),
+            })
+            .expect("CloseSession capsule should be accepted");
 
         let first_error = session.close_error().cloned();
 
         session.on_connect_stream_closed();
 
-        prop_assert_eq!(session.close_error(), first_error.as_ref());
-        prop_assert!(session.is_close_session_received());
-    }
+        assert_eq!(session.close_error(), first_error.as_ref());
+        assert!(session.is_close_session_received());
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: 任意のストリーム追加/削除後、stream_ids_to_reset() が
-    /// 残存ストリーム ID と一致
-    #[test]
-    fn prop_session_stream_ids_to_reset_matches_streams(
-        add_count in 1usize..20,
-        remove_indices in prop::collection::vec(0usize..20, 0..10),
-    ) {
+/// Property: 任意のストリーム追加/削除後、stream_ids_to_reset() が
+/// 残存ストリーム ID と一致
+#[test]
+fn prop_session_stream_ids_to_reset_matches_streams() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let add_count = noprop::sample_usize_in(ctx, 1..20);
+        let remove_count = noprop::sample_usize_in(ctx, 0..10);
+        let mut remove_indices = Vec::new();
+        for _ in 0..remove_count {
+            remove_indices.push(noprop::sample_usize_in(ctx, 0..20));
+        }
+
         let mut session = Session::new(0);
         session.set_established();
 
@@ -461,25 +530,41 @@ proptest! {
         expected.sort();
 
         let reset_count = reset_ids.len();
-        prop_assert_eq!(reset_ids, expected);
-        prop_assert_eq!(reset_count, session.stream_count());
-    }
+        assert_eq!(reset_ids, expected);
+        assert_eq!(reset_count, session.stream_count());
+        Ok(())
+    })?;
+    Ok(())
 }
 
 // =============================================================================
 // カプセルインターリーブ処理 (draft-ietf-webtrans-http3-15 Section 5.6, 6)
 // =============================================================================
 
-proptest! {
-    /// Property: MaxData/MaxStreams/DataBlocked/StreamsBlocked をランダム順で処理しても
-    /// 最終リミットが整合的
-    /// (draft-16: 単調増加制約のため値は 1 以上から生成)
-    #[test]
-    fn prop_session_interleaved_capsule_processing(
-        max_data_values in prop::collection::vec(1u64..10000, 1..5),
-        max_streams_bidi_values in prop::collection::vec(1u64..1000, 1..5),
-        max_streams_uni_values in prop::collection::vec(1u64..1000, 1..5),
-    ) {
+/// Property: MaxData/MaxStreams/DataBlocked/StreamsBlocked をランダム順で処理しても
+/// 最終リミットが整合的
+/// (draft-16: 単調増加制約のため値は 1 以上から生成)
+#[test]
+fn prop_session_interleaved_capsule_processing() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let data_count = noprop::sample_usize_in(ctx, 1..5);
+        let mut max_data_values = Vec::new();
+        for _ in 0..data_count {
+            max_data_values.push(noprop::sample_u64_in(ctx, 1..10000));
+        }
+        let bidi_count = noprop::sample_usize_in(ctx, 1..5);
+        let mut max_streams_bidi_values = Vec::new();
+        for _ in 0..bidi_count {
+            max_streams_bidi_values.push(noprop::sample_u64_in(ctx, 1..1000));
+        }
+        let uni_count = noprop::sample_usize_in(ctx, 1..5);
+        let mut max_streams_uni_values = Vec::new();
+        for _ in 0..uni_count {
+            max_streams_uni_values.push(noprop::sample_u64_in(ctx, 1..1000));
+        }
+
         let mut session = Session::new(0);
 
         let mut sorted_data = max_data_values.clone();
@@ -494,21 +579,21 @@ proptest! {
 
         for &v in &sorted_data {
             let result = session.process_capsule(&Capsule::MaxData { maximum: v });
-            prop_assert!(result.is_ok());
+            assert!(result.is_ok());
         }
         for &v in &sorted_bidi {
             let result = session.process_capsule(&Capsule::MaxStreams {
                 bidirectional: true,
                 maximum: v,
             });
-            prop_assert!(result.is_ok());
+            assert!(result.is_ok());
         }
         for &v in &sorted_uni {
             let result = session.process_capsule(&Capsule::MaxStreams {
                 bidirectional: false,
                 maximum: v,
             });
-            prop_assert!(result.is_ok());
+            assert!(result.is_ok());
         }
 
         let _ = session.process_capsule(&Capsule::DataBlocked { maximum: 999 });
@@ -518,48 +603,69 @@ proptest! {
         });
 
         if let Some(&max) = sorted_data.last() {
-            prop_assert_eq!(session.remote_limits().max_data, max);
+            assert_eq!(session.remote_limits().max_data, max);
         }
         if let Some(&max) = sorted_bidi.last() {
-            prop_assert_eq!(session.remote_limits().max_streams_bidi, max);
+            assert_eq!(session.remote_limits().max_streams_bidi, max);
         }
         if let Some(&max) = sorted_uni.last() {
-            prop_assert_eq!(session.remote_limits().max_streams_uni, max);
+            assert_eq!(session.remote_limits().max_streams_uni, max);
         }
-    }
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: 単調増加列の後に減少値を送ると FlowControlError
-    #[test]
-    fn prop_session_flow_control_violation_after_increase(
-        first in 100u64..10000,
-        increase in 1u64..10000,
-        decrease in 1u64..100,
-    ) {
+/// Property: 単調増加列の後に減少値を送ると FlowControlError
+#[test]
+fn prop_session_flow_control_violation_after_increase() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let first = noprop::sample_u64_in(ctx, 100..10000);
+        let increase = noprop::sample_u64_in(ctx, 1..10000);
+        let decrease = noprop::sample_u64_in(ctx, 1..100);
         let mut session = Session::new(0);
         let second = first.saturating_add(increase);
 
-        session.process_capsule(&Capsule::MaxData { maximum: first }).expect("monotonic increase");
-        session.process_capsule(&Capsule::MaxData { maximum: second }).expect("monotonic increase");
+        session
+            .process_capsule(&Capsule::MaxData { maximum: first })
+            .expect("monotonic increase");
+        session
+            .process_capsule(&Capsule::MaxData { maximum: second })
+            .expect("monotonic increase");
 
         let smaller = second.saturating_sub(decrease);
         if smaller < second {
             let result = session.process_capsule(&Capsule::MaxData { maximum: smaller });
-            prop_assert!(result.is_err());
+            assert!(result.is_err());
         }
-    }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 // =============================================================================
 // ストリーム追加/削除の整合性
 // =============================================================================
 
-proptest! {
-    /// Property: 追加/削除を交互に実行後、stream_count() と get_stream() が整合的
-    #[test]
-    fn prop_session_add_remove_stream_consistency(
-        add_ids in prop::collection::vec(0u64..100, 1..20),
-        remove_ids in prop::collection::vec(0u64..100, 0..10),
-    ) {
+/// Property: 追加/削除を交互に実行後、stream_count() と get_stream() が整合的
+#[test]
+fn prop_session_add_remove_stream_consistency() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let add_count = noprop::sample_usize_in(ctx, 1..20);
+        let mut add_ids = Vec::new();
+        for _ in 0..add_count {
+            add_ids.push(noprop::sample_u64_in(ctx, 0..100));
+        }
+        let remove_count = noprop::sample_usize_in(ctx, 0..10);
+        let mut remove_ids = Vec::new();
+        for _ in 0..remove_count {
+            remove_ids.push(noprop::sample_u64_in(ctx, 0..100));
+        }
+
         let mut session = Session::new(0);
 
         let mut added_set = std::collections::HashSet::new();
@@ -576,37 +682,46 @@ proptest! {
             added_set.remove(&sid);
         }
 
-        prop_assert_eq!(session.stream_count(), added_set.len());
+        assert_eq!(session.stream_count(), added_set.len());
 
         for &sid in &added_set {
-            prop_assert!(session.get_stream(sid).is_some(),
-                "Stream {} should exist", sid);
+            assert!(
+                session.get_stream(sid).is_some(),
+                "Stream {} should exist",
+                sid
+            );
         }
 
         for &raw_id in &remove_ids {
             let sid = raw_id * 4;
             if !added_set.contains(&sid) {
-                prop_assert!(session.get_stream(sid).is_none(),
-                    "Stream {} should not exist", sid);
+                assert!(
+                    session.get_stream(sid).is_none(),
+                    "Stream {} should not exist",
+                    sid
+                );
             }
         }
-    }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 // =============================================================================
 // 動的ウィンドウ更新
 // =============================================================================
 
-proptest! {
-    /// advertised_max は単調増加する (ストリーム)
-    ///
-    /// 任意の open/close シーケンスに対して、生成される WT_MAX_STREAMS の
-    /// maximum は常に前回以上の値である。
-    #[test]
-    fn prop_advertised_max_monotonically_increases(
-        concurrent_limit in 1u64..200,
-        num_streams in 1usize..500,
-    ) {
+/// Property: advertised_max は単調増加する (ストリーム)
+///
+/// 任意の open/close シーケンスに対して、生成される WT_MAX_STREAMS の
+/// maximum は常に前回以上の値である。
+#[test]
+fn prop_advertised_max_monotonically_increases() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let concurrent_limit = noprop::sample_u64_in(ctx, 1..200);
+        let num_streams = noprop::sample_usize_in(ctx, 1..500);
         let mut session = Session::new(0);
         session.set_established();
         session.initialize_local_limits(FlowControlLimits {
@@ -624,23 +739,34 @@ proptest! {
             session.on_remote_stream_closed(false);
 
             for capsule in session.take_pending_capsules() {
-                if let Capsule::MaxStreams { bidirectional: false, maximum } = capsule {
-                    prop_assert!(
+                if let Capsule::MaxStreams {
+                    bidirectional: false,
+                    maximum,
+                } = capsule
+                {
+                    assert!(
                         maximum >= last_max,
-                        "advertised_max decreased: {} -> {}", last_max, maximum
+                        "advertised_max decreased: {} -> {}",
+                        last_max,
+                        maximum
                     );
                     last_max = maximum;
                 }
             }
         }
-    }
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// advertised_max は MAX_STREAMS_LIMIT を超えない (ストリーム)
-    #[test]
-    fn prop_advertised_max_within_limit(
-        concurrent_limit in 1u64..=MAX_STREAMS_LIMIT,
-        num_cycles in 1usize..100,
-    ) {
+/// Property: advertised_max は MAX_STREAMS_LIMIT を超えない (ストリーム)
+#[test]
+fn prop_advertised_max_within_limit() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let concurrent_limit = noprop::sample_u64_in(ctx, 1..=MAX_STREAMS_LIMIT);
+        let num_cycles = noprop::sample_usize_in(ctx, 1..100);
         let mut session = Session::new(0);
         session.set_established();
         session.initialize_local_limits(FlowControlLimits {
@@ -654,53 +780,73 @@ proptest! {
 
             for capsule in session.take_pending_capsules() {
                 if let Capsule::MaxStreams { maximum, .. } = capsule {
-                    prop_assert!(
+                    assert!(
                         maximum <= MAX_STREAMS_LIMIT,
-                        "advertised_max exceeds limit: {}", maximum
+                        "advertised_max exceeds limit: {}",
+                        maximum
                     );
                 }
             }
         }
-    }
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// WT_STREAMS_BLOCKED は同じ maximum に対して 1 回だけ送信される
-    #[test]
-    fn prop_streams_blocked_dedup(
-        limit in 0u64..50,
-        attempts in 2usize..20,
-    ) {
+/// Property: WT_STREAMS_BLOCKED は同じ maximum に対して 1 回だけ送信される
+#[test]
+fn prop_streams_blocked_dedup() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let limit = noprop::sample_u64_in(ctx, 0..50);
+        let attempts = noprop::sample_usize_in(ctx, 2..20);
         let mut session = Session::new(0);
         session.set_established();
         session.remote_limits_mut().max_streams_uni = limit;
 
         for _ in 0..limit {
-            prop_assert!(session.try_open_stream(false));
+            assert!(session.try_open_stream(false));
         }
 
         for _ in 0..attempts {
-            prop_assert!(!session.try_open_stream(false));
+            assert!(!session.try_open_stream(false));
         }
 
         let capsules = session.take_pending_capsules();
         let blocked_count = capsules
             .iter()
-            .filter(|c| matches!(c, Capsule::StreamsBlocked { bidirectional: false, .. }))
+            .filter(|c| {
+                matches!(
+                    c,
+                    Capsule::StreamsBlocked {
+                        bidirectional: false,
+                        ..
+                    }
+                )
+            })
             .count();
-        prop_assert_eq!(
+        assert_eq!(
             blocked_count, 1,
-            "STREAMS_BLOCKED should be sent exactly once per maximum, got {}", blocked_count
+            "STREAMS_BLOCKED should be sent exactly once per maximum, got {}",
+            blocked_count
         );
-    }
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// セッション A → セッション B の動的ウィンドウ更新往復プロパティ
-    ///
-    /// セッション A で on_remote_stream_closed により生成された WT_MAX_STREAMS カプセルを
-    /// セッション B の process_capsule に渡すと remote_limits が正しく更新される。
-    #[test]
-    fn prop_dynamic_max_streams_roundtrip(
-        concurrent_limit in 1u64..200,
-        num_streams in 1usize..200,
-    ) {
+/// Property: セッション A → セッション B の動的ウィンドウ更新往復プロパティ
+///
+/// セッション A で on_remote_stream_closed により生成された WT_MAX_STREAMS カプセルを
+/// セッション B の process_capsule に渡すと remote_limits が正しく更新される。
+#[test]
+fn prop_dynamic_max_streams_roundtrip() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let concurrent_limit = noprop::sample_u64_in(ctx, 1..200);
+        let num_streams = noprop::sample_usize_in(ctx, 1..200);
         let mut session_a = Session::new(0);
         session_a.set_established();
         session_a.initialize_local_limits(FlowControlLimits {
@@ -722,26 +868,31 @@ proptest! {
             for capsule in session_a.take_pending_capsules() {
                 if capsule.capsule_type() == 0x190B4D40 {
                     let result = session_b.process_capsule(&capsule);
-                    prop_assert!(result.is_ok(), "process_capsule failed: {:?}", result);
+                    assert!(result.is_ok(), "process_capsule failed: {:?}", result);
                 }
             }
         }
 
-        prop_assert!(
+        assert!(
             session_b.remote_limits().max_streams_uni >= concurrent_limit,
             "remote_limits should be >= initial: {} < {}",
             session_b.remote_limits().max_streams_uni,
             concurrent_limit
         );
-    }
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// advertised_max は単調増加する (データ)
-    #[test]
-    fn prop_data_advertised_max_monotonically_increases(
-        initial_window in 1u64..10000,
-        num_chunks in 1usize..100,
-        chunk_size in 1u64..200,
-    ) {
+/// Property: advertised_max は単調増加する (データ)
+#[test]
+fn prop_data_advertised_max_monotonically_increases() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let initial_window = noprop::sample_u64_in(ctx, 1..10000);
+        let num_chunks = noprop::sample_usize_in(ctx, 1..100);
+        let chunk_size = noprop::sample_u64_in(ctx, 1..200);
         let mut session = Session::new(0);
         session.set_established();
         session.initialize_local_limits(FlowControlLimits {
@@ -759,33 +910,40 @@ proptest! {
 
                 for capsule in session.take_pending_capsules() {
                     if let Capsule::MaxData { maximum } = capsule {
-                        prop_assert!(
+                        assert!(
                             maximum >= last_max,
-                            "data advertised_max decreased: {} -> {}", last_max, maximum
+                            "data advertised_max decreased: {} -> {}",
+                            last_max,
+                            maximum
                         );
                         last_max = maximum;
                     }
                 }
             }
         }
-    }
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// WT_DATA_BLOCKED は同じ maximum に対して 1 回だけ送信される
-    #[test]
-    fn prop_data_blocked_dedup(
-        limit in 0u64..100,
-        attempts in 2usize..20,
-    ) {
+/// Property: WT_DATA_BLOCKED は同じ maximum に対して 1 回だけ送信される
+#[test]
+fn prop_data_blocked_dedup() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let limit = noprop::sample_u64_in(ctx, 0..100);
+        let attempts = noprop::sample_usize_in(ctx, 2..20);
         let mut session = Session::new(0);
         session.set_established();
         session.remote_limits_mut().max_data = limit;
 
         if limit > 0 {
-            prop_assert!(session.try_send_data(limit));
+            assert!(session.try_send_data(limit));
         }
 
         for _ in 0..attempts {
-            prop_assert!(!session.try_send_data(1));
+            assert!(!session.try_send_data(1));
         }
 
         let capsules = session.take_pending_capsules();
@@ -793,9 +951,12 @@ proptest! {
             .iter()
             .filter(|c| matches!(c, Capsule::DataBlocked { .. }))
             .count();
-        prop_assert_eq!(
+        assert_eq!(
             blocked_count, 1,
-            "DATA_BLOCKED should be sent exactly once per maximum, got {}", blocked_count
+            "DATA_BLOCKED should be sent exactly once per maximum, got {}",
+            blocked_count
         );
-    }
+        Ok(())
+    })?;
+    Ok(())
 }

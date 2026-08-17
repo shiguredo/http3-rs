@@ -1,122 +1,111 @@
 //! Property-Based Testing for WebTransport Datagram
 //! (RFC 9297, draft-ietf-webtrans-http3-15 Section 4.5)
 
-use proptest::prelude::*;
 use shiguredo_http3::VarInt;
 use shiguredo_http3::webtransport::Datagram;
 
 // =============================================================================
-// Strategy ヘルパー
+// 生成ヘルパー
 // =============================================================================
 
-prop_compose! {
-    /// 有効なセッション ID (client-initiated bidirectional stream ID: 4 の倍数)
-    fn valid_session_id()(id in 0u64..250_000) -> u64 {
-        id * 4
-    }
+/// 有効なセッション ID (client-initiated bidirectional stream ID: 4 の倍数)
+fn valid_session_id(ctx: &mut noprop::TestCaseContext) -> u64 {
+    noprop::sample_u64_in(ctx, 0..250_000) * 4
 }
 
-prop_compose! {
-    /// 有効なペイロードを生成
-    fn valid_payload()(
-        len in 0usize..512,
-    )(
-        data in prop::collection::vec(any::<u8>(), len)
-    ) -> Vec<u8> {
-        data
-    }
+/// 有効なペイロードを生成
+fn valid_payload(ctx: &mut noprop::TestCaseContext) -> Vec<u8> {
+    let len = noprop::sample_usize_in(ctx, 0..512);
+    noprop::sample_bytes_vec(ctx, len)
 }
 
 // =============================================================================
 // (a) Datagram encode/decode ラウンドトリップ
 // =============================================================================
 
-proptest! {
-    /// Property: 有効な session_id と任意のペイロードで encode → decode が元と一致する
-    #[test]
-    fn prop_datagram_roundtrip(
-        session_id in valid_session_id(),
-        payload in valid_payload(),
-    ) {
+/// Property: 有効な session_id と任意のペイロードで encode → decode が元と一致する
+#[test]
+fn prop_datagram_roundtrip() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_DATAGRAM_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let session_id = valid_session_id(ctx);
+        let payload = valid_payload(ctx);
         let datagram = Datagram::new(session_id, payload.clone()).expect("test must succeed");
 
         let mut buf = Vec::new();
         datagram.encode(&mut buf);
 
-        let (decoded, consumed) = Datagram::decode(&buf)
-            .expect("decode should succeed for valid encoded datagram");
+        let (decoded, consumed) =
+            Datagram::decode(&buf).expect("decode should succeed for valid encoded datagram");
 
-        prop_assert_eq!(
-            decoded.session_id, session_id,
-            "session_id が一致しない"
-        );
-        prop_assert_eq!(
-            decoded.payload, payload,
-            "payload が一致しない"
-        );
-        prop_assert_eq!(
-            consumed,
-            buf.len(),
-            "消費バイト数がバッファ長と不一致"
-        );
-    }
+        assert_eq!(decoded.session_id, session_id, "session_id が一致しない");
+        assert_eq!(decoded.payload, payload, "payload が一致しない");
+        assert_eq!(consumed, buf.len(), "消費バイト数がバッファ長と不一致");
+        Ok(())
+    })?;
+    Ok(())
 }
 
 // =============================================================================
 // (b) quarter_stream_id == session_id / 4
 // =============================================================================
 
-proptest! {
-    /// Property: quarter_stream_id() は常に session_id / 4 を返す
-    #[test]
-    fn prop_quarter_stream_id_equals_session_id_div_4(
-        session_id in valid_session_id(),
-    ) {
+/// Property: quarter_stream_id() は常に session_id / 4 を返す
+#[test]
+fn prop_quarter_stream_id_equals_session_id_div_4() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_DATAGRAM_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let session_id = valid_session_id(ctx);
         let datagram = Datagram::new(session_id, vec![]).expect("test must succeed");
         let qsi = datagram.quarter_stream_id();
 
-        prop_assert_eq!(
-            qsi,
-            session_id / 4,
-            "quarter_stream_id != session_id / 4"
-        );
-    }
+        assert_eq!(qsi, session_id / 4, "quarter_stream_id != session_id / 4");
+        Ok(())
+    })?;
+    Ok(())
 }
 
 // =============================================================================
 // (c) decode が返す session_id は常に 4 の倍数
 // =============================================================================
 
-proptest! {
-    /// Property: decode で復元された session_id は常に 4 の倍数である
-    /// (quarter_stream_id * 4 で復元されるため)
-    #[test]
-    fn prop_decoded_session_id_always_multiple_of_4(
-        session_id in valid_session_id(),
-        payload in valid_payload(),
-    ) {
+/// Property: decode で復元された session_id は常に 4 の倍数である
+/// (quarter_stream_id * 4 で復元されるため)
+#[test]
+fn prop_decoded_session_id_always_multiple_of_4() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_DATAGRAM_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let session_id = valid_session_id(ctx);
+        let payload = valid_payload(ctx);
         let datagram = Datagram::new(session_id, payload).expect("test must succeed");
 
         let mut buf = Vec::new();
         datagram.encode(&mut buf);
 
-        let (decoded, _) = Datagram::decode(&buf)
-            .expect("decode should succeed");
+        let (decoded, _) = Datagram::decode(&buf).expect("decode should succeed");
 
-        prop_assert!(
+        assert!(
             decoded.session_id % 4 == 0,
             "decode された session_id ({}) が 4 の倍数でない",
             decoded.session_id,
         );
-    }
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: 任意の varint 値を Quarter Stream ID として直接エンコードした場合でも
-    ///           decode の結果の session_id は 4 の倍数
-    #[test]
-    fn prop_arbitrary_qsi_decodes_to_multiple_of_4(
-        qsi in 0u64..=(VarInt::MAX.get() / 4),
-        payload in valid_payload(),
-    ) {
+/// Property: 任意の varint 値を Quarter Stream ID として直接エンコードした場合でも
+///           decode の結果の session_id は 4 の倍数
+#[test]
+fn prop_arbitrary_qsi_decodes_to_multiple_of_4() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_DATAGRAM_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let qsi = noprop::sample_u64_in(ctx, 0..=(VarInt::MAX.get() / 4));
+        let payload = valid_payload(ctx);
         // Quarter Stream ID を直接エンコードする
         let mut buf = Vec::new();
         shiguredo_http3::varint::encode_into_vec(
@@ -125,16 +114,18 @@ proptest! {
         );
         buf.extend_from_slice(&payload);
 
-        let (decoded, consumed) = Datagram::decode(&buf)
-            .expect("decode should succeed for valid varint + payload");
+        let (decoded, consumed) =
+            Datagram::decode(&buf).expect("decode should succeed for valid varint + payload");
 
-        prop_assert_eq!(
+        assert_eq!(
             decoded.session_id,
             qsi * 4,
             "session_id ({}) != qsi * 4 ({})",
             decoded.session_id,
             qsi * 4,
         );
-        prop_assert_eq!(consumed, buf.len());
-    }
+        assert_eq!(consumed, buf.len());
+        Ok(())
+    })?;
+    Ok(())
 }
