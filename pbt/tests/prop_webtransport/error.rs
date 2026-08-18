@@ -1,11 +1,12 @@
 //! ApplicationErrorCode / Error のプロパティと CloseSession メッセージ長制約
 //! (draft-ietf-webtrans-http3-15 Section 6, 9.5)
 
+use pbt::strategies::sample_len;
 use shiguredo_http3::webtransport::{ApplicationErrorCode, Error, ErrorCode};
 
 /// 有効なエラーメッセージ (最大 1024 バイト)
 fn valid_error_message(ctx: &mut noprop::TestCaseContext) -> String {
-    let len = noprop::sample_usize_in(ctx, 0..=1024);
+    let len = sample_len(ctx, 0..=1024);
     let mut msg = Vec::new();
     for _ in 0..len {
         msg.push(0x20 + noprop::sample_usize_in(ctx, 0..=0x5f) as u8);
@@ -15,7 +16,7 @@ fn valid_error_message(ctx: &mut noprop::TestCaseContext) -> String {
 
 /// 1024 バイト超のメッセージ (ASCII)
 fn long_message(ctx: &mut noprop::TestCaseContext) -> String {
-    let len = noprop::sample_usize_in(ctx, 1025..2048);
+    let len = sample_len(ctx, 1025..=2047);
     let mut msg = Vec::new();
     for _ in 0..len {
         msg.push(0x20 + noprop::sample_usize_in(ctx, 0..=0x5f) as u8);

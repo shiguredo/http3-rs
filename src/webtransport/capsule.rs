@@ -498,6 +498,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_decode_empty_buffer() {
+        let result = Capsule::decode(&[]);
+        assert!(matches!(result, Ok(None)));
+    }
+
+    #[test]
     fn test_capsule_type_from_type() {
         assert_eq!(
             CapsuleType::from_type(0x2843),

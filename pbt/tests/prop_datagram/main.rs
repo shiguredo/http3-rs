@@ -1,6 +1,7 @@
 //! Property-Based Testing for WebTransport Datagram
 //! (RFC 9297, draft-ietf-webtrans-http3-15 Section 4.5)
 
+use pbt::strategies::{sample_len, sample_varint_raw_in};
 use shiguredo_http3::VarInt;
 use shiguredo_http3::webtransport::Datagram;
 
@@ -10,12 +11,12 @@ use shiguredo_http3::webtransport::Datagram;
 
 /// 有効なセッション ID (client-initiated bidirectional stream ID: 4 の倍数)
 fn valid_session_id(ctx: &mut noprop::TestCaseContext) -> u64 {
-    noprop::sample_u64_in(ctx, 0..250_000) * 4
+    sample_varint_raw_in(ctx, 0..=249_999) * 4
 }
 
 /// 有効なペイロードを生成
 fn valid_payload(ctx: &mut noprop::TestCaseContext) -> Vec<u8> {
-    let len = noprop::sample_usize_in(ctx, 0..512);
+    let len = sample_len(ctx, 0..=511);
     noprop::sample_bytes_vec(ctx, len)
 }
 
@@ -104,7 +105,7 @@ fn prop_arbitrary_qsi_decodes_to_multiple_of_4() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_DATAGRAM_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let qsi = noprop::sample_u64_in(ctx, 0..=(VarInt::MAX.get() / 4));
+        let qsi = sample_varint_raw_in(ctx, 0..=VarInt::MAX.get() / 4);
         let payload = valid_payload(ctx);
         // Quarter Stream ID を直接エンコードする
         let mut buf = Vec::new();

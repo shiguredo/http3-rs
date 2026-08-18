@@ -1,6 +1,7 @@
 //! Property-Based Testing for WebTransport Capsule Protocol
 //! (draft-ietf-webtrans-http3-15 Section 5.6, 6)
 
+use pbt::strategies::{sample_len, sample_varint_raw_in, valid_varint};
 use shiguredo_http3::webtransport::{Capsule, CapsuleValidationError, MAX_STREAMS_LIMIT};
 
 // =============================================================================
@@ -13,7 +14,7 @@ const MAX_VARINT: u64 = (1 << 62) - 1;
 /// CloseSession Capsule を生成 (メッセージは最大 1024 バイトの ASCII)
 fn close_session_capsule(ctx: &mut noprop::TestCaseContext) -> Capsule {
     let error_code = noprop::sample_u32(ctx);
-    let msg_len = noprop::sample_usize_in(ctx, 0..=1024);
+    let msg_len = sample_len(ctx, 0..=1024);
     let mut msg = Vec::new();
     for _ in 0..msg_len {
         msg.push(0x20 + noprop::sample_usize_in(ctx, 0..=0x5f) as u8);
@@ -27,14 +28,14 @@ fn close_session_capsule(ctx: &mut noprop::TestCaseContext) -> Capsule {
 
 /// MaxData Capsule を生成
 fn max_data_capsule(ctx: &mut noprop::TestCaseContext) -> Capsule {
-    let maximum = noprop::sample_u64_in(ctx, 0..=MAX_VARINT);
+    let maximum = valid_varint(ctx).get();
     Capsule::MaxData { maximum }
 }
 
 /// MaxStreams Capsule を生成
 fn max_streams_capsule(ctx: &mut noprop::TestCaseContext) -> Capsule {
     let bidirectional = noprop::sample_bool(ctx);
-    let maximum = noprop::sample_u64_in(ctx, 0..=MAX_VARINT);
+    let maximum = valid_varint(ctx).get();
     Capsule::MaxStreams {
         bidirectional,
         maximum,
@@ -43,14 +44,14 @@ fn max_streams_capsule(ctx: &mut noprop::TestCaseContext) -> Capsule {
 
 /// DataBlocked Capsule を生成
 fn data_blocked_capsule(ctx: &mut noprop::TestCaseContext) -> Capsule {
-    let maximum = noprop::sample_u64_in(ctx, 0..=MAX_VARINT);
+    let maximum = valid_varint(ctx).get();
     Capsule::DataBlocked { maximum }
 }
 
 /// StreamsBlocked Capsule を生成
 fn streams_blocked_capsule(ctx: &mut noprop::TestCaseContext) -> Capsule {
     let bidirectional = noprop::sample_bool(ctx);
-    let maximum = noprop::sample_u64_in(ctx, 0..=MAX_VARINT);
+    let maximum = valid_varint(ctx).get();
     Capsule::StreamsBlocked {
         bidirectional,
         maximum,
@@ -167,7 +168,7 @@ fn prop_validate_max_streams_ok() -> noprop::TestResult {
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
         let (current_max, maximum) = noprop::sample_with_rejection(ctx, 64, |ctx| {
-            let current_max = noprop::sample_u64_in(ctx, 0..=MAX_STREAMS_LIMIT);
+            let current_max = sample_varint_raw_in(ctx, 0..=MAX_STREAMS_LIMIT);
             let delta = noprop::sample_u64_in(ctx, 1..1000);
             let maximum = current_max.saturating_add(delta).min(MAX_STREAMS_LIMIT);
             (maximum > current_max).then_some((current_max, maximum))
@@ -191,7 +192,7 @@ fn prop_validate_max_streams_not_increased() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_CAPSULE_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let current_max = noprop::sample_u64_in(ctx, 1..=MAX_STREAMS_LIMIT);
+        let current_max = sample_varint_raw_in(ctx, 1..=MAX_STREAMS_LIMIT);
         let delta = noprop::sample_u64_in(ctx, 0..1000);
         let maximum = current_max.saturating_sub(delta);
         // saturating_sub により maximum <= current_max は常に成り立つ
@@ -239,7 +240,7 @@ fn prop_validate_max_data_ok() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_CAPSULE_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let current_max = noprop::sample_u64_in(ctx, 0..=MAX_VARINT / 2);
+        let current_max = sample_varint_raw_in(ctx, 0..=MAX_VARINT / 2);
         let delta = noprop::sample_u64_in(ctx, 1..1000);
         let maximum = current_max.saturating_add(delta);
         // current_max は MAX_VARINT / 2 以下で delta は 1000 未満のため
@@ -263,7 +264,7 @@ fn prop_validate_max_data_not_increased() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_CAPSULE_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let current_max = noprop::sample_u64_in(ctx, 1..=MAX_VARINT);
+        let current_max = sample_varint_raw_in(ctx, 1..=MAX_VARINT);
         let delta = noprop::sample_u64_in(ctx, 0..1000);
         let maximum = current_max.saturating_sub(delta);
         // saturating_sub により maximum <= current_max は常に成り立つ

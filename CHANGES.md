@@ -312,7 +312,7 @@
   - @voluntas
 - [UPDATE] `s2n-tls` を 0.3.42 に更新する
   - @voluntas
-- [UPDATE] PBT を proptest から noprop に置き換え、pbt クレートの全プロパティテストを命令形のプロパティクロージャに書き換える
+- [UPDATE] PBT を proptest から noprop に置き換え、命令形クロージャと符号化長・空・上限の境界サンプリングで全プロパティテストを書き換える
   - @voluntas
 - [FIX] `fuzz/fuzz_targets/fuzz_settings.rs` が `Settings::from_payload` の `Result` 戻り値に追従しておらず fuzz crate がコンパイルできなかった問題を修正する
   - @voluntas

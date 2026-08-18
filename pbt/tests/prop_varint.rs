@@ -1,27 +1,27 @@
 //! Property-Based Testing for QUIC Variable-Length Integer (RFC 9000 Section 16)
 
-use pbt::strategies::{invalid_varint_u64, valid_varint};
+use pbt::strategies::{invalid_varint_u64, sample_varint_raw_in, valid_varint};
 use shiguredo_http3::VarInt;
 use shiguredo_http3::varint;
 
 /// 1 バイトエンコード範囲の値を生成 (0-63)
 fn one_byte_value(ctx: &mut noprop::TestCaseContext) -> VarInt {
-    VarInt::new(noprop::sample_u64_in(ctx, 0..64)).expect("test must succeed")
+    VarInt::new(sample_varint_raw_in(ctx, 0..=63)).expect("test must succeed")
 }
 
 /// 2 バイトエンコード範囲の値を生成 (64-16383)
 fn two_byte_value(ctx: &mut noprop::TestCaseContext) -> VarInt {
-    VarInt::new(noprop::sample_u64_in(ctx, 64..16384)).expect("test must succeed")
+    VarInt::new(sample_varint_raw_in(ctx, 64..=16_383)).expect("test must succeed")
 }
 
 /// 4 バイトエンコード範囲の値を生成 (16384-1073741823)
 fn four_byte_value(ctx: &mut noprop::TestCaseContext) -> VarInt {
-    VarInt::new(noprop::sample_u64_in(ctx, 16384..1073741824)).expect("test must succeed")
+    VarInt::new(sample_varint_raw_in(ctx, 16_384..=(1 << 30) - 1)).expect("test must succeed")
 }
 
 /// 8 バイトエンコード範囲の値を生成 (1073741824-MAX)
 fn eight_byte_value(ctx: &mut noprop::TestCaseContext) -> VarInt {
-    VarInt::new(noprop::sample_u64_in(ctx, 1073741824..=VarInt::MAX.get()))
+    VarInt::new(sample_varint_raw_in(ctx, (1 << 30)..=VarInt::MAX.get()))
         .expect("test must succeed")
 }
 
@@ -30,6 +30,12 @@ fn eight_byte_value(ctx: &mut noprop::TestCaseContext) -> VarInt {
 fn prop_roundtrip_preserves_value() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_VARINT_SEED")?;
     let mut runner = noprop::Runner::new(seed);
+    // valid_varint は境界を 1/5 で選ぶ。9 境界のうち 1 バイトは 0/1/63 の 3 点
+    // なので p=1/15。256 ケースでの見逃しは (14/15)^256 ≈ 2.4e-8。
+    let saw_1 = std::cell::Cell::new(0usize);
+    let saw_2 = std::cell::Cell::new(0usize);
+    let saw_4 = std::cell::Cell::new(0usize);
+    let saw_8 = std::cell::Cell::new(0usize);
     runner.run(256, |ctx| {
         let value = valid_varint(ctx);
         let mut buf = [0u8; 8];
@@ -42,8 +48,19 @@ fn prop_roundtrip_preserves_value() -> noprop::TestResult {
             "Length mismatch for value {}",
             value
         );
+        match encoded_len {
+            1 => saw_1.set(saw_1.get() + 1),
+            2 => saw_2.set(saw_2.get() + 1),
+            4 => saw_4.set(saw_4.get() + 1),
+            8 => saw_8.set(saw_8.get() + 1),
+            other => panic!("unexpected encoded_len {other}"),
+        }
         Ok(())
     })?;
+    assert!(saw_1.get() > 0, "1 バイト符号化を未到達\n{runner}");
+    assert!(saw_2.get() > 0, "2 バイト符号化を未到達\n{runner}");
+    assert!(saw_4.get() > 0, "4 バイト符号化を未到達\n{runner}");
+    assert!(saw_8.get() > 0, "8 バイト符号化を未到達\n{runner}");
     Ok(())
 }
 
@@ -265,17 +282,30 @@ fn prop_from_u32_roundtrip() -> noprop::TestResult {
 fn prop_try_from_u64_value_domain() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_VARINT_SEED")?;
     let mut runner = noprop::Runner::new(seed);
+    // 境界 5 点を 1/5 で選ぶ。Ok 側は 0/1/MAX の 3 点なので境界経由の p=3/25、
+    // 内部の P(Ok)=1/4 と合わせて p(Ok)≈0.32。Err 側も同様に両枝へ届く。
+    let ok_cases = std::cell::Cell::new(0usize);
+    let err_cases = std::cell::Cell::new(0usize);
     runner.run(256, |ctx| {
-        let value = noprop::sample_u64(ctx);
+        let value = noprop::sample_with_boundaries(
+            ctx,
+            &[0, 1, VarInt::MAX.get(), VarInt::MAX.get() + 1, u64::MAX],
+            noprop::Ratio::one_nth(5),
+            |ctx| noprop::sample_u64(ctx),
+        );
         let result = VarInt::try_from(value);
         if value <= VarInt::MAX.get() {
             assert!(result.is_ok());
             assert_eq!(result.expect("test must succeed").get(), value);
+            ok_cases.set(ok_cases.get() + 1);
         } else {
             assert!(result.is_err());
+            err_cases.set(err_cases.get() + 1);
         }
         Ok(())
     })?;
+    assert!(ok_cases.get() > 0, "TryFrom の Ok 枝を未到達\n{runner}");
+    assert!(err_cases.get() > 0, "TryFrom の Err 枝を未到達\n{runner}");
     Ok(())
 }
 
@@ -299,7 +329,7 @@ fn prop_from_static_matches_new() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_VARINT_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let value = noprop::sample_u64_in(ctx, 0..=VarInt::MAX.get());
+        let value = valid_varint(ctx).get();
         let via_new = VarInt::new(value).expect("test must succeed");
         let via_static = VarInt::from_static(value);
         assert_eq!(via_new, via_static);

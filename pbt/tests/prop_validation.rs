@@ -1,5 +1,6 @@
 //! Property-Based Testing for HTTP/3 メッセージ検証 (RFC 9114 Section 4.1.2)
 
+use pbt::strategies::sample_varint_raw_in;
 use pbt::wire_header;
 use shiguredo_http3::Header;
 use shiguredo_http3::validation::{
@@ -304,7 +305,7 @@ fn prop_content_length_match_ok() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_VALIDATION_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let body_size = noprop::sample_u64_in(ctx, 0..10000);
+        let body_size = sample_varint_raw_in(ctx, 0..=9_999);
         let cl_str = body_size.to_string();
         let headers = vec![
             Header::new(b":method", b"GET").expect("test must succeed"),
@@ -325,8 +326,8 @@ fn prop_content_length_mismatch_err() -> noprop::TestResult {
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
         let (expected, actual) = noprop::sample_with_rejection(ctx, 64, |ctx| {
-            let e = noprop::sample_u64_in(ctx, 0..10000);
-            let a = noprop::sample_u64_in(ctx, 0..10000);
+            let e = sample_varint_raw_in(ctx, 0..=9_999);
+            let a = sample_varint_raw_in(ctx, 0..=9_999);
             (e != a).then_some((e, a))
         });
 
@@ -360,7 +361,7 @@ fn prop_field_section_size_limit() -> noprop::TestResult {
             let value = valid_field_value(ctx);
             header_list.push(Header::new(name, value).expect("test must succeed"));
         }
-        let peer_max = noprop::sample_u64_in(ctx, 0..5000);
+        let peer_max = sample_varint_raw_in(ctx, 0..=4_999);
 
         let size = calculate_field_section_size(&header_list);
         let result = check_field_section_size(&header_list, Some(peer_max));

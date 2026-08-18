@@ -379,6 +379,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_stream_header_decode_empty_buffer() {
+        assert!(StreamHeader::decode_unidirectional(&[]).is_none());
+        assert!(StreamHeader::decode_bidirectional(&[]).is_none());
+    }
+
+    #[test]
     fn test_stream_header_new_rejects_invalid_session_id() {
         // session_id % 4 != 0 は client-initiated bidi ID ではないので拒否される
         assert_eq!(

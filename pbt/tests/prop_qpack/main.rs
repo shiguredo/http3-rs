@@ -2,7 +2,7 @@
 
 mod integer;
 
-use pbt::strategies::{valid_header_name, valid_header_value};
+use pbt::strategies::{sample_len, sample_varint_raw_in, valid_header_name, valid_header_value};
 use pbt::wire_header;
 use shiguredo_http3::qpack::{
     DecodeOutput, Decoder, DecoderInstruction, DecoderStream, DecoderStreamReceiver,
@@ -18,7 +18,7 @@ const ENTRY_OVERHEAD: u64 = 32;
 
 /// 有効なストリーム ID を生成
 fn valid_stream_id(ctx: &mut noprop::TestCaseContext) -> u64 {
-    noprop::sample_u64_in(ctx, 0..1000)
+    sample_varint_raw_in(ctx, 0..=999)
 }
 
 /// 有効なインクリメント値を生成
@@ -60,7 +60,7 @@ fn prop_table_size_within_capacity() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_QPACK_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let capacity = noprop::sample_u64_in(ctx, 64..4096);
+        let capacity = sample_varint_raw_in(ctx, 64..=4095);
         let entry_count = noprop::sample_usize_in(ctx, 1..20);
         let mut table = DynamicTable::with_capacity(capacity);
 
@@ -87,7 +87,7 @@ fn prop_insert_count_monotonic() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_QPACK_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let capacity = noprop::sample_u64_in(ctx, 256..4096);
+        let capacity = sample_varint_raw_in(ctx, 256..=4095);
         let entry_count = noprop::sample_usize_in(ctx, 1..10);
         let mut table = DynamicTable::with_capacity(capacity);
         let mut prev_count = table.insert_count();
@@ -117,8 +117,8 @@ fn prop_capacity_change_maintains_invariant() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_QPACK_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let initial_capacity = noprop::sample_u64_in(ctx, 256..4096);
-        let new_capacity = noprop::sample_u64_in(ctx, 64..2048);
+        let initial_capacity = sample_varint_raw_in(ctx, 256..=4095);
+        let new_capacity = sample_varint_raw_in(ctx, 64..=2047);
         let entry_count = noprop::sample_usize_in(ctx, 1..10);
         let mut table = DynamicTable::with_capacity(initial_capacity);
 
@@ -147,7 +147,7 @@ fn prop_absolute_index_unique() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_QPACK_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let capacity = noprop::sample_u64_in(ctx, 1024..4096);
+        let capacity = sample_varint_raw_in(ctx, 1024..=4095);
         let entry_count = noprop::sample_usize_in(ctx, 2..10);
         let mut table = DynamicTable::with_capacity(capacity);
         let mut indices = Vec::new();
@@ -175,7 +175,7 @@ fn prop_set_capacity_roundtrip() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_QPACK_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let capacity = noprop::sample_u64_in(ctx, 1..=4096);
+        let capacity = sample_varint_raw_in(ctx, 1..=4096);
         let mut sender = EncoderStream::new();
         sender.set_max_table_capacity(4096);
         sender
@@ -488,7 +488,7 @@ fn prop_decoder_stream_sequential() -> noprop::TestResult {
 
 /// ASCII 印字可能文字列を生成
 fn printable_ascii(ctx: &mut noprop::TestCaseContext) -> Vec<u8> {
-    let len = noprop::sample_usize_in(ctx, 1..128);
+    let len = sample_len(ctx, 1..=127);
     let mut data = Vec::new();
     for _ in 0..len {
         data.push(0x20 + noprop::sample_usize_in(ctx, 0..0x5f) as u8);
@@ -1181,14 +1181,30 @@ fn prop_header_from_static_matches_new() -> noprop::TestResult {
 fn prop_wire_header_matches_new() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_QPACK_SEED")?;
     let mut runner = noprop::Runner::new(seed);
+    let empty_value = std::cell::Cell::new(0usize);
+    let nonempty_value = std::cell::Cell::new(0usize);
     runner.run(256, |ctx| {
         let name = valid_header_name(ctx);
         let value = valid_header_value(ctx);
         let via_new = Header::new(&name, &value).expect("test must succeed");
         let via_wire = wire_header(&name, &value);
         assert_eq!(via_new, via_wire);
+        if value.is_empty() {
+            empty_value.set(empty_value.get() + 1);
+        } else {
+            nonempty_value.set(nonempty_value.get() + 1);
+        }
         Ok(())
     })?;
+    // sample_len は 0/1/255 を 1/5 で選ぶ。空の p=1/15、見逃し ≈ 2.4e-8。
+    assert!(
+        empty_value.get() > 0,
+        "空の header value を未到達\n{runner}"
+    );
+    assert!(
+        nonempty_value.get() > 0,
+        "非空の header value を未到達\n{runner}"
+    );
     Ok(())
 }
 

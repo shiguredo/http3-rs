@@ -366,6 +366,21 @@ mod tests {
     }
 
     #[test]
+    fn test_stream_state_close_remote_then_local() {
+        // close_local → close_remote とは逆順でも Closed に到達する
+        let mut state = StreamState::Open;
+        state.close_remote();
+        assert_eq!(state, StreamState::RemoteClosed);
+        assert!(state.can_send());
+        assert!(!state.can_receive());
+
+        state.close_local();
+        assert_eq!(state, StreamState::Closed);
+        assert!(!state.can_send());
+        assert!(!state.can_receive());
+    }
+
+    #[test]
     fn test_send_buffer() {
         let mut buf = SendBuffer::new();
         assert!(!buf.has_pending());

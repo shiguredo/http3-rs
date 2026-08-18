@@ -1,6 +1,6 @@
 //! Property-Based Testing for shiguredo_http3
 //!
-//! 各構築時検査型の `valid_*` 戦略を集約する。
+//! 各構築時検査型の `valid_*` 生成器を集約する。
 //! 個別の `pbt/tests/prop_*.rs` から `use pbt::strategies::*;` で再利用する。
 
 use shiguredo_http3::qpack::{Decoder, Header};
@@ -57,25 +57,88 @@ fn encode_qpack_string(buf: &mut Vec<u8>, data: &[u8]) {
 }
 
 pub mod strategies {
+    use std::ops::RangeInclusive;
+
     use noprop::TestCaseContext;
     use shiguredo_http3::VarInt;
 
+    /// RFC 9000 Section 16 で符号化長が変わる値。
+    /// 1 バイト: 0..=63、2 バイト: 64..=16383、4 バイト: 16384..=2^30-1、
+    /// 8 バイト: 2^30..=2^62-1。
+    pub const VARINT_ENCODING_BOUNDARIES: &[u64] = &[
+        0,
+        1,
+        63,
+        64,
+        16_383,
+        16_384,
+        (1 << 30) - 1,
+        1 << 30,
+        (1 << 62) - 1,
+    ];
+
+    /// 境界を選ぶ確率 1/5。noprop は shrink しないため、一様分布だと届かない
+    /// 符号化長の変わり目や空・上限を明示的に厚くする。
+    /// 9 境界なら各点の p=1/45 ≈ 0.022、256 ケースでの見逃しは約 0.3%。
+    const BOUNDARY_RATIO: noprop::Ratio = noprop::Ratio::one_nth(5);
+
+    /// `range` 内を一様サンプリングしつつ、範囲端と VarInt 符号化境界を 1/5 で選ぶ。
+    pub fn sample_varint_raw_in(ctx: &mut TestCaseContext, range: RangeInclusive<u64>) -> u64 {
+        let start = *range.start();
+        let end = *range.end();
+        let mut boundaries = Vec::with_capacity(VARINT_ENCODING_BOUNDARIES.len() + 3);
+        boundaries.push(start);
+        if start < end {
+            boundaries.push(start + 1);
+        }
+        boundaries.extend(
+            VARINT_ENCODING_BOUNDARIES
+                .iter()
+                .copied()
+                .filter(|value| range.contains(value)),
+        );
+        boundaries.push(end);
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        noprop::sample_with_boundaries(ctx, &boundaries, BOUNDARY_RATIO, |ctx| {
+            noprop::sample_u64_in(ctx, range)
+        })
+    }
+
+    /// 可変長の長さ。空 (または下限)・下限+1・上限を 1/5 で厚くする。
+    /// 3 境界なら空の p=1/15、256 ケースでの見逃しは約 2.4e-8。
+    pub fn sample_len(ctx: &mut TestCaseContext, range: RangeInclusive<usize>) -> usize {
+        let start = *range.start();
+        let end = *range.end();
+        let mut boundaries = vec![start, end];
+        if start < end {
+            boundaries.insert(1, start + 1);
+        }
+        boundaries.dedup();
+        noprop::sample_with_boundaries(ctx, &boundaries, BOUNDARY_RATIO, |ctx| {
+            noprop::sample_usize_in(ctx, range)
+        })
+    }
+
     /// RFC 9000 Section 16: VarInt の値域 (0..=2^62 - 1)
     pub fn valid_varint(ctx: &mut TestCaseContext) -> VarInt {
-        VarInt::new(noprop::sample_u64_in(ctx, 0..=VarInt::MAX.get()))
+        VarInt::new(sample_varint_raw_in(ctx, 0..=VarInt::MAX.get()))
             .expect("value is within VarInt::MAX")
     }
 
     /// `VarInt::new` / `VarInt::try_from` が必ず `Err` を返す入力 (PBT の
-    /// negative path 用)
+    /// negative path 用)。下限 (MAX+1) と `u64::MAX` を 1/5 で厚くする。
     pub fn invalid_varint_u64(ctx: &mut TestCaseContext) -> u64 {
-        noprop::sample_u64_in(ctx, (VarInt::MAX.get() + 1)..=u64::MAX)
+        let min = VarInt::MAX.get() + 1;
+        noprop::sample_with_boundaries(ctx, &[min, u64::MAX], BOUNDARY_RATIO, |ctx| {
+            noprop::sample_u64_in(ctx, min..=u64::MAX)
+        })
     }
 
     /// RFC 9114 Section 4.2 / RFC 9110 Section 5.1: 小文字 token-char のみで
     /// 構成された valid な field name (1..64 byte)
     pub fn valid_header_name(ctx: &mut TestCaseContext) -> Vec<u8> {
-        let len = noprop::sample_usize_in(ctx, 1..64);
+        let len = sample_len(ctx, 1..=63);
         let mut name = Vec::new();
         for _ in 0..len {
             // 小文字英字 (a-z) から 1 文字ずつサンプリングする
@@ -88,7 +151,7 @@ pub mod strategies {
     /// (0x21-0x7E)、間には SP (0x20) も許す。空文字列も valid。
     /// (obs-text 0x80-0xFF は QPACK Huffman デコードとの整合性を保つため除外)
     pub fn valid_header_value(ctx: &mut TestCaseContext) -> Vec<u8> {
-        let len = noprop::sample_usize_in(ctx, 0..256);
+        let len = sample_len(ctx, 0..=255);
         let mut middle = Vec::new();
         for _ in 0..len {
             // field-content: 0x20-0x7E からサンプリングする

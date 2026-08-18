@@ -1,6 +1,7 @@
 //! Capsule の capsule_type 検証・Unknown ラウンドトリップ・不完全バッファの Sans I/O 挙動
 //! (既知バリアントのラウンドトリップは pbt/tests/prop_capsule.rs に集約)
 
+use pbt::strategies::{sample_len, sample_varint_raw_in, valid_varint};
 use shiguredo_http3::webtransport::Capsule;
 
 /// 有効なエラーコード (32-bit)
@@ -10,7 +11,7 @@ fn valid_error_code(ctx: &mut noprop::TestCaseContext) -> u32 {
 
 /// 有効なエラーメッセージ (最大 1024 バイト)
 fn valid_error_message(ctx: &mut noprop::TestCaseContext) -> String {
-    let len = noprop::sample_usize_in(ctx, 0..=1024);
+    let len = sample_len(ctx, 0..=1024);
     let mut msg = Vec::new();
     for _ in 0..len {
         msg.push(0x20 + noprop::sample_usize_in(ctx, 0..=0x5f) as u8);
@@ -20,13 +21,13 @@ fn valid_error_message(ctx: &mut noprop::TestCaseContext) -> String {
 
 /// 有効な最大値 (可変長整数範囲)
 fn valid_maximum(ctx: &mut noprop::TestCaseContext) -> u64 {
-    noprop::sample_u64_in(ctx, 0..=(1 << 62) - 1)
+    valid_varint(ctx).get()
 }
 
 /// 有効な Unknown Capsule
 fn valid_unknown_capsule(ctx: &mut noprop::TestCaseContext) -> Capsule {
-    let capsule_type = noprop::sample_u64_in(ctx, 0x100000..0x200000);
-    let payload_len = noprop::sample_usize_in(ctx, 0..256);
+    let capsule_type = sample_varint_raw_in(ctx, 0x100000..=0x1F_FFFF);
+    let payload_len = sample_len(ctx, 0..=255);
     let payload = noprop::sample_bytes_vec(ctx, payload_len);
     Capsule::Unknown {
         capsule_type,
@@ -165,11 +166,4 @@ fn prop_capsule_incomplete_buffer_max_data() -> noprop::TestResult {
         Ok(())
     })?;
     Ok(())
-}
-
-/// Property: 空バッファでは None を返す
-#[test]
-fn prop_capsule_empty_buffer_returns_none() {
-    let result = Capsule::decode(&[]);
-    assert!(matches!(result, Ok(None)));
 }

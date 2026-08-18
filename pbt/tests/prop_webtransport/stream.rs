@@ -1,11 +1,12 @@
 //! StreamHeader / Stream ID のプロパティ
 //! (draft-ietf-webtrans-http3-15 Section 4)
 
+use pbt::strategies::sample_varint_raw_in;
 use shiguredo_http3::webtransport::{StreamHeader, stream_type};
 
 /// 有効なセッション ID (client-initiated bidirectional stream ID: id % 4 == 0)
 fn valid_session_id(ctx: &mut noprop::TestCaseContext) -> u64 {
-    noprop::sample_u64_in(ctx, 0..250_000) * 4
+    sample_varint_raw_in(ctx, 0..=249_999) * 4
 }
 
 /// 不正な単方向ストリームタイプ (0x54 以外)
@@ -195,7 +196,7 @@ fn prop_stream_id_all_combinations() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_STREAM_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let base_id = noprop::sample_u64_in(ctx, 0..1_000_000);
+        let base_id = sample_varint_raw_in(ctx, 0..=999_999);
         // クライアント開始双方向 (0b00)
         let id_00 = base_id * 4;
         assert!(stream_type::is_client_initiated(id_00));
@@ -260,11 +261,4 @@ fn prop_bidirectional_header_invalid_type_fails() -> noprop::TestResult {
         Ok(())
     })?;
     Ok(())
-}
-
-/// Property: 空バッファでは StreamHeader デコード失敗
-#[test]
-fn prop_stream_header_empty_buffer_fails() {
-    assert!(StreamHeader::decode_unidirectional(&[]).is_none());
-    assert!(StreamHeader::decode_bidirectional(&[]).is_none());
 }

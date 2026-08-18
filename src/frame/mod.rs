@@ -464,4 +464,18 @@ mod tests {
         assert_eq!(unknown.frame_type().get(), 0x21);
         assert_eq!(unknown.payload(), &[1, 2, 3][..]);
     }
+
+    #[test]
+    fn test_empty_settings_frame_roundtrip() {
+        let frame = Frame::Settings(SettingsPayload::new());
+        let mut buf = vec![0u8; encoded_frame_len(&frame).expect("test must succeed")];
+        let encoded_len = encode_frame(&mut buf, &frame).expect("test must succeed");
+        let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).expect("test must succeed");
+        assert_eq!(encoded_len, decoded_len);
+        if let Frame::Settings(settings) = decoded {
+            assert!(settings.is_empty());
+        } else {
+            panic!("SETTINGS フレームであること");
+        }
+    }
 }

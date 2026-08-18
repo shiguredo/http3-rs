@@ -852,6 +852,28 @@ mod tests {
     }
 
     #[test]
+    fn test_session_state_can_send() {
+        assert!(!SessionState::Pending.can_send());
+        assert!(!SessionState::Connecting.can_send());
+        assert!(SessionState::Established.can_send());
+        assert!(SessionState::Draining.can_send());
+        assert!(!SessionState::Closed.can_send());
+    }
+
+    #[test]
+    fn test_session_direct_establish() {
+        // Connecting を経由せず Pending → Established へ遷移できる
+        let mut session = Session::new(0);
+        assert_eq!(session.state(), SessionState::Pending);
+
+        session.set_established();
+        assert_eq!(session.state(), SessionState::Established);
+
+        session.close(None);
+        assert_eq!(session.state(), SessionState::Closed);
+    }
+
+    #[test]
     fn test_session_stream_management() {
         let mut session = Session::new(0);
 

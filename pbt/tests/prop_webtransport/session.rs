@@ -1,8 +1,9 @@
 //! Session の状態遷移・フロー制御・バッファリング・GOAWAY・終了処理プロパティ
 //! (draft-ietf-webtrans-http3-15 Section 3, 4.5, 4.6, 4.7, 5.6, 6)
 
+use pbt::strategies::{sample_len, sample_varint_raw_in};
 use shiguredo_http3::webtransport::{
-    Capsule, FlowControlLimits, MAX_STREAMS_LIMIT, Session, SessionState, Stream,
+    Capsule, FlowControlLimits, MAX_STREAMS_LIMIT, Session, Stream,
 };
 
 /// 有効なエラーコード (32-bit)
@@ -12,68 +13,12 @@ fn valid_error_code(ctx: &mut noprop::TestCaseContext) -> u32 {
 
 /// 有効なエラーメッセージ (最大 1024 バイト)
 fn valid_error_message(ctx: &mut noprop::TestCaseContext) -> String {
-    let len = noprop::sample_usize_in(ctx, 0..=1024);
+    let len = sample_len(ctx, 0..=1024);
     let mut msg = Vec::new();
     for _ in 0..len {
         msg.push(0x20 + noprop::sample_usize_in(ctx, 0..=0x5f) as u8);
     }
     String::from_utf8(msg).expect("ASCII range bytes are always valid UTF-8")
-}
-
-// =============================================================================
-// 状態遷移 (draft-ietf-webtrans-http3-15 Section 3, 6)
-// =============================================================================
-
-/// Property: 有効な状態遷移パス (Pending → Connecting → Established → Draining → Closed)
-#[test]
-fn prop_session_valid_transitions() {
-    let mut session = Session::new(0);
-    assert_eq!(session.state(), SessionState::Pending);
-
-    session.set_connecting();
-    assert_eq!(session.state(), SessionState::Connecting);
-
-    session.set_established();
-    assert_eq!(session.state(), SessionState::Established);
-
-    session.set_draining();
-    assert_eq!(session.state(), SessionState::Draining);
-
-    session.close(None);
-    assert_eq!(session.state(), SessionState::Closed);
-}
-
-/// Property: Pending → Established の直接遷移も有効
-#[test]
-fn prop_session_direct_establish() {
-    let mut session = Session::new(0);
-    assert_eq!(session.state(), SessionState::Pending);
-
-    session.set_established();
-    assert_eq!(session.state(), SessionState::Established);
-
-    session.close(None);
-    assert_eq!(session.state(), SessionState::Closed);
-}
-
-/// Property: 各状態でのストリーム作成可否
-#[test]
-fn prop_session_state_can_create_stream() {
-    assert!(!SessionState::Pending.can_create_stream());
-    assert!(!SessionState::Connecting.can_create_stream());
-    assert!(SessionState::Established.can_create_stream());
-    assert!(SessionState::Draining.can_create_stream());
-    assert!(!SessionState::Closed.can_create_stream());
-}
-
-/// Property: 各状態での送信可否
-#[test]
-fn prop_session_state_can_send() {
-    assert!(!SessionState::Pending.can_send());
-    assert!(!SessionState::Connecting.can_send());
-    assert!(SessionState::Established.can_send());
-    assert!(SessionState::Draining.can_send());
-    assert!(!SessionState::Closed.can_send());
 }
 
 // =============================================================================
@@ -332,18 +277,6 @@ fn prop_session_buffer_streams_up_to_limit() -> noprop::TestResult {
     Ok(())
 }
 
-/// Property: 101 個目のバッファリングは失敗
-#[test]
-fn prop_session_buffer_streams_over_limit() {
-    let mut session = Session::new(0);
-
-    for i in 0..100 {
-        assert!(session.buffer_incoming_stream(i as u64 * 4, false));
-    }
-
-    assert!(!session.buffer_incoming_stream(99999, false));
-}
-
 /// Property: MAX_BUFFERED_DATAGRAMS (100) までバッファリング成功
 #[test]
 fn prop_session_buffer_datagrams_up_to_limit() -> noprop::TestResult {
@@ -394,21 +327,6 @@ fn prop_session_take_buffered_empties_buffer() -> noprop::TestResult {
 // =============================================================================
 // GOAWAY (draft-ietf-webtrans-http3-15 Section 4.7)
 // =============================================================================
-
-/// Property: handle_goaway 後は goaway_received が true でドレイン状態
-#[test]
-fn prop_session_goaway_sets_draining() {
-    let mut session = Session::new(0);
-    session.set_established();
-
-    assert!(!session.is_goaway_received());
-    assert_eq!(session.state(), SessionState::Established);
-
-    session.handle_goaway();
-
-    assert!(session.is_goaway_received());
-    assert_eq!(session.state(), SessionState::Draining);
-}
 
 /// Property: handle_goaway 後も既存ストリームは保持され can_send() == true
 #[test]
@@ -765,7 +683,7 @@ fn prop_advertised_max_within_limit() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SESSION_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let concurrent_limit = noprop::sample_u64_in(ctx, 1..=MAX_STREAMS_LIMIT);
+        let concurrent_limit = sample_varint_raw_in(ctx, 1..=MAX_STREAMS_LIMIT);
         let num_cycles = noprop::sample_usize_in(ctx, 1..100);
         let mut session = Session::new(0);
         session.set_established();

@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_try_from_u64_max_is_error() {
-        // PBT は any::<u64>() で広範囲を検査するが、u64::MAX 境界は明示的に固定する
+        // PBT は u64 全域をサンプリングするが、u64::MAX 境界は明示的に固定する
         assert!(VarInt::try_from(u64::MAX).is_err());
         assert!(VarInt::try_from(VarInt::MAX.get()).is_ok());
     }

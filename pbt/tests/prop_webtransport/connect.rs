@@ -1,11 +1,12 @@
 //! ConnectRequest / ConnectResponse のバリデーションとプロトコルネゴシエーション
 //! (draft-ietf-webtrans-http3-15 Section 3.2, 3.3)
 
+use pbt::strategies::sample_len;
 use shiguredo_http3::webtransport::{ConnectRequest, ConnectResponse};
 
 /// 任意の非空文字列 (HTTP ヘッダー値として安全な文字のみ)
 fn non_empty_string(ctx: &mut noprop::TestCaseContext) -> String {
-    let len = noprop::sample_usize_in(ctx, 1..64);
+    let len = sample_len(ctx, 1..=63);
     let mut s = String::new();
     for _ in 0..len {
         s.push((0x20 + noprop::sample_usize_in(ctx, 0..=0x5f)) as u8 as char);
@@ -19,7 +20,7 @@ fn non_empty_string(ctx: &mut noprop::TestCaseContext) -> String {
 /// クォート文字列のエスケープ対象文字 (',', '"', '\\') を除外する。
 fn safe_protocol_name(ctx: &mut noprop::TestCaseContext) -> String {
     let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./+";
-    let len = noprop::sample_usize_in(ctx, 1..=32);
+    let len = sample_len(ctx, 1..=32);
     let mut s = String::new();
     for _ in 0..len {
         s.push(noprop::sample_choice(ctx, chars) as char);

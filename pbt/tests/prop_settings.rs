@@ -5,6 +5,7 @@
 //! 本ファイルは noprop で構築した正常値が SettingsPayload とのラウンドトリップ /
 //! `Setting::from_wire` ↔ `Setting::as_wire` の対称性を満たすことを検査する。
 
+use pbt::strategies::{sample_varint_raw_in, valid_varint};
 use shiguredo_http3::frame::SettingsPayload;
 use shiguredo_http3::{Setting, SettingError, Settings, VarInt, webtransport};
 
@@ -19,12 +20,12 @@ const VARINT_TEST_MAX: u64 = 1 << 30;
 
 /// `0..VARINT_TEST_MAX` から VarInt を生成する
 fn arbitrary_varint(ctx: &mut noprop::TestCaseContext) -> VarInt {
-    vi(noprop::sample_u64_in(ctx, 0..VARINT_TEST_MAX))
+    vi(sample_varint_raw_in(ctx, 0..=VARINT_TEST_MAX - 1))
 }
 
 /// VarInt 全域 (`0..=VarInt::MAX`) を生成する
 fn arbitrary_varint_full(ctx: &mut noprop::TestCaseContext) -> VarInt {
-    vi(noprop::sample_u64_in(ctx, 0..=VarInt::MAX.get()))
+    valid_varint(ctx)
 }
 
 /// `Setting::from_wire` で受理される ID のみを生成する

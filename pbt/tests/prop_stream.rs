@@ -1,36 +1,7 @@
 //! Property-Based Testing for HTTP/3 ストリーム (RFC 9114 Section 6)
 
+use pbt::strategies::sample_varint_raw_in;
 use shiguredo_http3::stream::{StreamKind, StreamState, UniStreamType};
-
-// =============================================================================
-// (a) StreamState 状態遷移の対称性
-// =============================================================================
-
-/// Property: close_local → close_remote と close_remote → close_local は共に Closed に到達する
-#[test]
-fn prop_stream_state_close_symmetry() {
-    // Open → LocalClosed → Closed
-    let mut state_lr = StreamState::Open;
-    state_lr.close_local();
-    assert_eq!(state_lr, StreamState::LocalClosed);
-    state_lr.close_remote();
-    assert_eq!(
-        state_lr,
-        StreamState::Closed,
-        "close_local → close_remote で Closed にならない"
-    );
-
-    // Open → RemoteClosed → Closed
-    let mut state_rl = StreamState::Open;
-    state_rl.close_remote();
-    assert_eq!(state_rl, StreamState::RemoteClosed);
-    state_rl.close_local();
-    assert_eq!(
-        state_rl,
-        StreamState::Closed,
-        "close_remote → close_local で Closed にならない"
-    );
-}
 
 // =============================================================================
 // (b) Reset は全ての状態から遷移可能で、Reset 後は send/receive 不可
@@ -76,7 +47,7 @@ fn prop_stream_kind_classification() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_STREAM_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let stream_id = noprop::sample_u64_in(ctx, 0..1_000_000);
+        let stream_id = sample_varint_raw_in(ctx, 0..=999_999);
         let kind = StreamKind::from_stream_id(stream_id);
         let low_bits = stream_id & 0x03;
 
@@ -117,7 +88,7 @@ fn prop_stream_kind_bidi_uni_exclusive() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_STREAM_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let stream_id = noprop::sample_u64_in(ctx, 0..1_000_000);
+        let stream_id = sample_varint_raw_in(ctx, 0..=999_999);
         let kind = StreamKind::from_stream_id(stream_id);
         assert_ne!(
             kind.is_bidirectional(),
@@ -135,7 +106,7 @@ fn prop_stream_kind_initiator_exclusive() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_STREAM_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let stream_id = noprop::sample_u64_in(ctx, 0..1_000_000);
+        let stream_id = sample_varint_raw_in(ctx, 0..=999_999);
         let kind = StreamKind::from_stream_id(stream_id);
         assert_ne!(
             kind.is_client_initiated(),
@@ -157,7 +128,7 @@ fn prop_reserved_stream_type_formula() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_STREAM_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let n = noprop::sample_u64_in(ctx, 0..10000);
+        let n = sample_varint_raw_in(ctx, 0..=9_999);
         let t = 0x1f * n + 0x21;
         assert!(
             UniStreamType::is_reserved(t),
@@ -193,13 +164,13 @@ fn prop_non_grease_above_threshold() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_STREAM_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let n = noprop::sample_u64_in(ctx, 0..10000);
+        let n = sample_varint_raw_in(ctx, 0..=9_999);
         let offset = noprop::sample_u64_in(ctx, 1..0x1f);
         let t = 0x1f * n + 0x21 + offset;
         // offset が 0x1f の倍数でない限り is_reserved() == false のはず
         // ただし offset + 0x21 が次の GREASE 値に一致する場合がある。
         // 正確には (t - 0x21) % 0x1f != 0 なら false
-        if (t - 0x21) % 0x1f != 0 {
+        if !(t - 0x21).is_multiple_of(0x1f) {
             assert!(
                 !UniStreamType::is_reserved(t),
                 "{:#x} が is_reserved() == true (GREASE パターンに合致しないのに)",
@@ -209,44 +180,4 @@ fn prop_non_grease_above_threshold() -> noprop::TestResult {
         Ok(())
     })?;
     Ok(())
-}
-
-// =============================================================================
-// (e) StreamState の can_send / can_receive の不変条件
-// =============================================================================
-
-/// Property: Open 状態では can_send==true, can_receive==true
-#[test]
-fn prop_open_state_can_send_receive() {
-    let state = StreamState::Open;
-    assert!(state.can_send());
-    assert!(state.can_receive());
-}
-
-/// Property: LocalClosed では can_send==false, can_receive==true
-#[test]
-fn prop_local_closed_no_send() {
-    let mut state = StreamState::Open;
-    state.close_local();
-    assert!(!state.can_send());
-    assert!(state.can_receive());
-}
-
-/// Property: RemoteClosed では can_send==true, can_receive==false
-#[test]
-fn prop_remote_closed_no_receive() {
-    let mut state = StreamState::Open;
-    state.close_remote();
-    assert!(state.can_send());
-    assert!(!state.can_receive());
-}
-
-/// Property: Closed では can_send==false, can_receive==false
-#[test]
-fn prop_closed_no_send_no_receive() {
-    let mut state = StreamState::Open;
-    state.close_local();
-    state.close_remote();
-    assert!(!state.can_send());
-    assert!(!state.can_receive());
 }

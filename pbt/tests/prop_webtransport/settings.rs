@@ -52,18 +52,6 @@ fn prop_settings_flow_control_enabled_by_initial_values() -> noprop::TestResult 
     Ok(())
 }
 
-/// Property: 全て 0 または wt_enabled = 0 なら無効
-#[test]
-fn prop_settings_disabled_when_zero() {
-    let settings = Settings::new();
-    assert!(!settings.is_enabled());
-    assert!(!settings.declares_flow_control());
-}
-
-// =============================================================================
-// Settings iter (draft-ietf-webtrans-http3-15 Section 9.2)
-// =============================================================================
-
 /// Property: builder で設定した値と iter() 出力が一致。0 の値は含まれない
 #[test]
 fn prop_settings_iter_matches_builder() -> noprop::TestResult {

@@ -2,6 +2,7 @@
 //!
 //! 境界値テストは tests/test_qpack_integer.rs を参照。
 
+use pbt::strategies::sample_varint_raw_in;
 use shiguredo_http3::qpack::integer;
 
 // RFC 9204 Section 4.1.1: 62 ビットまでデコード可能 (MUST)
@@ -12,6 +13,21 @@ fn sample_prefix_bits(ctx: &mut noprop::TestCaseContext) -> u8 {
     noprop::sample_usize_in(ctx, 1..=8) as u8
 }
 
+/// prefix 長に応じた 1 バイト境界と VarInt 符号化境界を厚くした整数値
+fn sample_integer_value(ctx: &mut noprop::TestCaseContext, prefix_bits: u8) -> u64 {
+    let max_prefix = (1u64 << prefix_bits) - 1;
+    let mut boundaries = vec![0, 1, MAX_DECODABLE_VALUE];
+    if max_prefix > 1 {
+        boundaries.push(max_prefix - 1);
+    }
+    boundaries.push(max_prefix);
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    noprop::sample_with_boundaries(ctx, &boundaries, noprop::Ratio::one_nth(5), |ctx| {
+        sample_varint_raw_in(ctx, 0..=MAX_DECODABLE_VALUE)
+    })
+}
+
 /// Property: encode -> decode のラウンドトリップで値が一致する (スライス版)
 #[test]
 fn prop_integer_roundtrip_slice() -> noprop::TestResult {
@@ -19,7 +35,7 @@ fn prop_integer_roundtrip_slice() -> noprop::TestResult {
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
         let prefix_bits = sample_prefix_bits(ctx);
-        let value = noprop::sample_u64_in(ctx, 0..=MAX_DECODABLE_VALUE);
+        let value = sample_integer_value(ctx, prefix_bits);
         let raw_prefix = noprop::sample_u8(ctx);
 
         let prefix_mask = 0xFFu8.checked_shl(prefix_bits as u32).unwrap_or(0);
@@ -56,7 +72,7 @@ fn prop_integer_roundtrip_vec() -> noprop::TestResult {
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
         let prefix_bits = sample_prefix_bits(ctx);
-        let value = noprop::sample_u64_in(ctx, 0..=MAX_DECODABLE_VALUE);
+        let value = sample_integer_value(ctx, prefix_bits);
         let raw_prefix = noprop::sample_u8(ctx);
 
         let prefix_mask = 0xFFu8.checked_shl(prefix_bits as u32).unwrap_or(0);
@@ -82,7 +98,7 @@ fn prop_slice_and_vec_encode_match() -> noprop::TestResult {
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
         let prefix_bits = sample_prefix_bits(ctx);
-        let value = noprop::sample_u64_in(ctx, 0..=MAX_DECODABLE_VALUE);
+        let value = sample_integer_value(ctx, prefix_bits);
         let raw_prefix = noprop::sample_u8(ctx);
 
         let prefix_mask = 0xFFu8.checked_shl(prefix_bits as u32).unwrap_or(0);

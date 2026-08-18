@@ -2,6 +2,7 @@
 //!
 //! get_stream_data のループ終了性とデータ完全性を検証する。
 
+use pbt::strategies::sample_len;
 use shiguredo_http3::{ClientConnection, Header};
 
 /// リクエスト送信後の take_stream_data ループ用ヘルパー
@@ -39,7 +40,7 @@ fn prop_get_stream_data_terminates() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_CONNECTION_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let body_len = noprop::sample_usize_in(ctx, 0..8192);
+        let body_len = sample_len(ctx, 0..=8191);
         let body = vec![0xABu8; body_len];
 
         let mut client = ClientConnection::with_default_settings();
@@ -77,8 +78,12 @@ fn prop_get_stream_data_terminates() -> noprop::TestResult {
 fn prop_get_stream_data_all_data_collected() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_CONNECTION_SEED")?;
     let mut runner = noprop::Runner::new(seed);
+    // sample_len は 0/1/上限を 1/5 で選ぶ。3 境界なら空の p=1/15、
+    // 256 ケースでの見逃しは (14/15)^256 ≈ 2.4e-8。
+    let empty_body = std::cell::Cell::new(0usize);
+    let nonempty_body = std::cell::Cell::new(0usize);
     runner.run(256, |ctx| {
-        let body_len = noprop::sample_usize_in(ctx, 0..8192);
+        let body_len = sample_len(ctx, 0..=8191);
         let body = vec![0xCDu8; body_len];
 
         let mut client = ClientConnection::with_default_settings();
@@ -107,8 +112,15 @@ fn prop_get_stream_data_all_data_collected() -> noprop::TestResult {
             collected.len(),
             body_len
         );
+        if body_len == 0 {
+            empty_body.set(empty_body.get() + 1);
+        } else {
+            nonempty_body.set(nonempty_body.get() + 1);
+        }
         Ok(())
     })?;
+    assert!(empty_body.get() > 0, "空ボディを未到達\n{runner}");
+    assert!(nonempty_body.get() > 0, "非空ボディを未到達\n{runner}");
     Ok(())
 }
 
@@ -123,7 +135,7 @@ fn prop_get_stream_data_returns_none_after_consume() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_CONNECTION_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let body_len = noprop::sample_usize_in(ctx, 0..8192);
+        let body_len = sample_len(ctx, 0..=8191);
         let body = vec![0xEFu8; body_len];
 
         let mut client = ClientConnection::with_default_settings();

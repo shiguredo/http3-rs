@@ -1,5 +1,6 @@
 //! Property-Based Testing for HTTP/3 Frames (RFC 9114)
 
+use pbt::strategies::{sample_len, sample_varint_raw_in};
 use shiguredo_http3::VarInt;
 use shiguredo_http3::frame::{
     DataPayload, Frame, FrameType, GoawayPayload, HeadersPayload, SettingsPayload, UnknownFrame,
@@ -24,19 +25,19 @@ fn valid_frame_type(ctx: &mut noprop::TestCaseContext) -> FrameType {
 
 /// 有効なペイロードデータを生成
 fn valid_payload(ctx: &mut noprop::TestCaseContext) -> Vec<u8> {
-    let len = noprop::sample_usize_in(ctx, 0..1024);
+    let len = sample_len(ctx, 0..=1023);
     noprop::sample_bytes_vec(ctx, len)
 }
 
 /// 有効なストリーム ID を生成 (GOAWAY 用)
 fn valid_goaway_id(ctx: &mut noprop::TestCaseContext) -> u64 {
     // クライアント開始双方向ストリームは 4 の倍数
-    noprop::sample_u64_in(ctx, 0..1000) * 4
+    sample_varint_raw_in(ctx, 0..=999) * 4
 }
 
 /// 有効な QPACK エンコード済みヘッダーを生成
 fn valid_encoded_headers(ctx: &mut noprop::TestCaseContext) -> Vec<u8> {
-    let len = noprop::sample_usize_in(ctx, 2..256);
+    let len = sample_len(ctx, 2..=255);
     let data = noprop::sample_bytes_vec(ctx, len);
     let mut result = vec![0x00, 0x00]; // RIC=0, Delta Base=0
     result.extend(data.into_iter().skip(2));
@@ -63,7 +64,7 @@ fn valid_settings_entries(ctx: &mut noprop::TestCaseContext) -> Vec<shiguredo_ht
         if !seen.insert(id) {
             continue;
         }
-        let value = noprop::sample_u64_in(ctx, 0..65536);
+        let value = sample_varint_raw_in(ctx, 0..=65_535);
         let normalized = if matches!(id, 0x08 | 0x33 | 0x2b603742) {
             value & 1
         } else {
@@ -274,29 +275,6 @@ fn prop_settings_frame_roundtrip() -> noprop::TestResult {
     Ok(())
 }
 
-/// Property: 空の SETTINGS フレームは有効
-#[test]
-fn prop_empty_settings_frame_valid() {
-    let frame = Frame::Settings(SettingsPayload::new());
-
-    let mut buf = vec![0u8; encoded_frame_len(&frame).expect("test must succeed")];
-    let encoded_len = encode_frame(&mut buf, &frame).expect("test must succeed");
-
-    let (decoded, decoded_len) = decode_frame(&buf[..encoded_len]).expect("test must succeed");
-
-    assert_eq!(encoded_len, decoded_len);
-
-    if let Frame::Settings(settings) = decoded {
-        assert!(settings.is_empty());
-    } else {
-        panic!("Expected SETTINGS frame");
-    }
-}
-
-// =============================================================================
-// GOAWAY Frame Properties
-// =============================================================================
-
 /// Property: GOAWAY フレームのエンコード/デコードラウンドトリップ
 #[test]
 fn prop_goaway_frame_roundtrip() -> noprop::TestResult {
@@ -339,7 +317,7 @@ fn prop_unknown_frame_preserved() -> noprop::TestResult {
     runner.run(256, |ctx| {
         // 既知 / HTTP/2 専用フレームタイプを除外
         let unknown_type = noprop::sample_with_rejection(ctx, 256, |ctx| {
-            let t = noprop::sample_u64_in(ctx, 0..(1u64 << 62));
+            let t = sample_varint_raw_in(ctx, 0..=(1u64 << 62) - 1);
             (FrameType::from_type(t).is_none() && !FrameType::is_http2_only(t)).then_some(t)
         });
         let payload = valid_payload(ctx);
@@ -403,7 +381,7 @@ fn prop_goaway_from_static_matches_new() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_FRAME_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
-        let value = noprop::sample_u64_in(ctx, 0..=VarInt::MAX.get());
+        let value = sample_varint_raw_in(ctx, 0..=VarInt::MAX.get());
         let via_new = GoawayPayload::new(VarInt::new(value).expect("test must succeed"));
         let via_static = GoawayPayload::from_static(value);
         assert_eq!(via_new, via_static);
