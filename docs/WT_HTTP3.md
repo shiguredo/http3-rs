@@ -1,31 +1,36 @@
-# WebTransport over HTTP/3: draft 02 / 07 / 15 の差分
+# WebTransport over HTTP/3: draft 02 / 07 / 14 / 15 / 16 の差分
 
-このドキュメントは `draft-ietf-webtrans-http3` の draft 02, 07, 15 の主要な差分をまとめたものである。
+このドキュメントは `draft-ietf-webtrans-http3` の draft 02, 07, 14, 15, 16 の主要な差分をまとめたものである。
 
 ## 参照ドキュメント
 
 - `refs/webtrans/draft-ietf-webtrans-http3-02.txt` (2021-10-25)
 - `refs/webtrans/draft-ietf-webtrans-http3-07.txt` (2023-06-13)
+- `refs/webtrans/draft-ietf-webtrans-http3-14.txt` (2025-10-20)
 - `refs/webtrans/draft-ietf-webtrans-http3-15.txt` (2026-03-02)
+- `refs/webtrans/draft-ietf-webtrans-http3-16.txt` (2026-07-06)
 
 ## 総括
 
-| 項目 | draft-02 | draft-07 | draft-15 |
-|------|----------|----------|----------|
-| `:protocol` 値 | `webtransport` | `webtransport` | `webtransport-h3` |
-| SETTINGS パラメータ名 | `SETTINGS_ENABLE_WEBTRANSPORT` | `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` | `SETTINGS_WT_ENABLED` |
-| SETTINGS コードポイント | `0x2b603742` | `0xc671706a` | `0x2c7cf000` |
-| アプリエラーコード幅 | 8 bit | 32 bit | 32 bit |
-| セッション終了カプセル名 | `CLOSE_WEBTRANSPORT_SESSION` | `CLOSE_WEBTRANSPORT_SESSION` | `WT_CLOSE_SESSION` |
-| ドレインカプセル | なし | `DRAIN_WEBTRANSPORT_SESSION` | `WT_DRAIN_SESSION` |
-| セッションレベルフロー制御 | なし | なし | あり (カプセルベース) |
-| `SETTINGS_ENABLE_CONNECT_PROTOCOL` | 暗黙 (不要) | サーバーのみ必須 | サーバーのみ必須 |
-| `SETTINGS_H3_DATAGRAM` | 不要 | 明示的に必須 | 明示的に必須 |
-| QUIC `max_datagram_frame_size` | 不要 | 明示的に必須 | 明示的に必須 |
-| `reset_stream_at` | 不要 | 不要 | 必須 |
-| ALPN ネゴシエーション | なし | なし | あり (`WT-Available-Protocols` / `WT-Protocol`) |
-| TLS エクスポーター | なし | なし | あり (`EXPORTER-WebTransport`) |
-| 優先度制御 | なし | なし | RFC 9218 推奨 |
+| 項目 | draft-02 | draft-07 | draft-14 | draft-15 | draft-16 |
+|------|----------|----------|----------|----------|----------|
+| `:protocol` 値 | `webtransport` | `webtransport` | `webtransport` | `webtransport-h3` | `webtransport-h3` |
+| SETTINGS パラメータ名 | `SETTINGS_ENABLE_WEBTRANSPORT` | `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` | `SETTINGS_WT_MAX_SESSIONS` | `SETTINGS_WT_ENABLED` | `SETTINGS_WT_ENABLED` |
+| SETTINGS コードポイント | `0x2b603742` | `0xc671706a` | `0x14e9cd29` | `0x2c7cf000` | `0x2c7cf000` |
+| アプリエラーコード幅 | 8 bit | 32 bit | 32 bit | 32 bit | 32 bit |
+| セッション終了カプセル名 | `CLOSE_WEBTRANSPORT_SESSION` | `CLOSE_WEBTRANSPORT_SESSION` | `WT_CLOSE_SESSION` | `WT_CLOSE_SESSION` | `WT_CLOSE_SESSION` |
+| ドレインカプセル | なし | `DRAIN_WEBTRANSPORT_SESSION` | `WT_DRAIN_SESSION` | `WT_DRAIN_SESSION` | `WT_DRAIN_SESSION` |
+| セッションレベルフロー制御 | なし | なし | あり (カプセルベース) | あり (カプセルベース) | あり (カプセルベース) |
+| `SETTINGS_ENABLE_CONNECT_PROTOCOL` | 暗黙 (不要) | サーバーのみ必須 | サーバーのみ必須 | サーバーのみ必須 | サーバーのみ必須 |
+| `SETTINGS_H3_DATAGRAM` | 不要 | 明示的に必須 | 明示的に必須 | 明示的に必須 | 明示的に必須 |
+| QUIC `max_datagram_frame_size` | 不要 | 明示的に必須 | 明示的に必須 | 明示的に必須 | 明示的に必須 |
+| `reset_stream_at` | 不要 | 不要 | 必須 | 必須 | 必須 |
+| ALPN ネゴシエーション | なし | なし | あり (`WT-Available-Protocols` / `WT-Protocol`) | あり (`WT-Available-Protocols` / `WT-Protocol`) | あり (`WT-Available-Protocols` / `WT-Protocol`) |
+| TLS エクスポーター | なし | なし | あり (`EXPORTER-WebTransport`) | あり (`EXPORTER-WebTransport`) | あり (`EXPORTER-WebTransport`) |
+| 優先度制御 | なし | なし | RFC 9218 推奨 | RFC 9218 推奨 | RFC 9218 推奨 |
+| `SETTINGS_WT_ENABLED` の値 | — | — | — | 値 > 0 | 値は 1 (`> 1` は `H3_SETTINGS_ERROR`) |
+| フロー制御カプセルの単調性 | — | — | 前回より小さい値はエラー | 前回より小さい値はエラー | 増加しない値 (同値含む) はエラー |
+| `WT_MAX_STREAMS` > 2^60 | — | — | セッションエラー | `H3_DATAGRAM_ERROR` | `WT_FLOW_CONTROL_ERROR` |
 
 ---
 
@@ -54,6 +59,12 @@
   - `SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI` (`0x2b65`)
   - `SETTINGS_WT_INITIAL_MAX_DATA` (`0x2b61`)
 
+**draft-16**:
+- SETTINGS コードポイントは draft-15 と同一 (`SETTINGS_WT_ENABLED` = `0x2c7cf000`)
+- 値は 1。クライアントは 1 より大きい値を `H3_SETTINGS_ERROR` として扱う (Section 3.1)
+- 0-RTT 再開時、クライアントはフロー制御値が前回より減少していたら `H3_SETTINGS_ERROR` で接続を閉じる (Section 3.2)
+- クライアントはサーバー応答前にカプセルを楽観的に送信してよい。サーバーは 2xx を送るまで処理してはならない (Section 3.2)
+
 ### 1.2 Extended CONNECT
 
 **draft-02**:
@@ -66,12 +77,18 @@
 - バージョンネゴシエーションは `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` のコードポイント変更で実施
 - ヘッダーベースのバージョンネゴシエーションは廃止
 
-**draft-15**:
-- `:protocol` = `webtransport-h3` に変更 (Capsule ベース方式の `webtransport` と明確に分離)
+**draft-14**:
+- `:protocol` = `webtransport` (変更なし)
+- バージョンネゴシエーションは `SETTINGS_WT_MAX_SESSIONS` (`0x14e9cd29`) のコードポイント変更で実施
 - アプリケーションプロトコルネゴシエーション追加:
   - `WT-Available-Protocols` ヘッダー (クライアント → サーバー, Structured Fields List)
   - `WT-Protocol` ヘッダー (サーバー → クライアント, Structured Fields Item)
   - 失敗時は `WT_ALPN_ERROR` でセッションを閉じる
+
+**draft-15 / draft-16**:
+- `:protocol` = `webtransport-h3` に変更 (Capsule ベース方式の `webtransport` と明確に分離)
+- アプリケーションプロトコルネゴシエーションは draft-14 と同様
+- SETTINGS コードポイントは draft-15 と draft-16 で同一のため、SETTINGS だけでは区別できない
 
 ### 1.3 0-RTT
 
@@ -84,6 +101,9 @@
 
 **draft-15**:
 - フロー制御値も 0-RTT 受け入れ時に減らしてはならない
+
+**draft-16**:
+- クライアントは再開接続の SETTINGS がキャッシュしたフロー制御値を減少させていたら、`H3_SETTINGS_ERROR` で接続を閉じなければならない
 
 ---
 
@@ -172,9 +192,9 @@
 | draft-07 | `DRAIN_WEBTRANSPORT_SESSION` |
 | draft-15 | `WT_DRAIN_SESSION` |
 
-### 4.3 フロー制御カプセル (draft-15 のみ)
+### 4.3 フロー制御カプセル (draft-14 以降)
 
-draft-15 で追加されたセッションレベルフロー制御のためのカプセル:
+draft-14 で追加されたセッションレベルフロー制御のためのカプセル:
 
 | カプセル | コードポイント | 用途 |
 |---------|---------------|------|
@@ -185,11 +205,11 @@ draft-15 で追加されたセッションレベルフロー制御のための�
 | `WT_STREAMS_BLOCKED` (bidi) | `0x190B4D43` | 双方向ストリームのブロック通知 |
 | `WT_STREAMS_BLOCKED` (uni) | `0x190B4D44` | 単方向ストリームのブロック通知 |
 
-- 前回の値より小さい値の `WT_MAX_STREAMS` / `WT_MAX_DATA` を受信した場合は `WT_FLOW_CONTROL_ERROR`
-- `WT_MAX_STREAMS` の Maximum Streams が 2^60 を超えた場合は `H3_DATAGRAM_ERROR`
+- 前回の値より小さい値の `WT_MAX_STREAMS` / `WT_MAX_DATA` を受信した場合は `WT_FLOW_CONTROL_ERROR` (draft-16 では増加しない値、同値を含む)
+- `WT_MAX_STREAMS` の Maximum Streams が 2^60 を超えた場合、draft-15 では `H3_DATAGRAM_ERROR`、draft-16 では `WT_FLOW_CONTROL_ERROR`
 - 全フロー制御カプセルは hop-by-hop (中継者が消費して自身の信号を生成)
 
-### 4.4 禁止カプセル (draft-15 のみ)
+### 4.4 禁止カプセル (draft-14 以降)
 
 HTTP/3 版では QUIC ネイティブのストリームレベルフロー制御を使うため、以下のカプセルは禁止:
 
@@ -232,13 +252,13 @@ HTTP/3 版では QUIC ネイティブのストリームレベルフロー制御�
 
 ### 6.1 プロトコルエラーコード
 
-| エラーコード | コードポイント | draft-02 | draft-07 | draft-15 |
-|-------------|---------------|----------|----------|----------|
-| `H3_WEBTRANSPORT_BUFFERED_STREAM_REJECTED` / `WT_BUFFERED_STREAM_REJECTED` | `0x3994bd84` | あり | あり | あり |
-| `WEBTRANSPORT_SESSION_GONE` / `WT_SESSION_GONE` | `0x170d7b68` | なし | あり | あり |
-| `WT_FLOW_CONTROL_ERROR` | `0x045d4487` | なし | なし | あり |
-| `WT_ALPN_ERROR` | `0x0817b3dd` | なし | なし | あり |
-| `WT_REQUIREMENTS_NOT_MET` | `0x212c0d48` | なし | なし | あり |
+| エラーコード | コードポイント | draft-02 | draft-07 | draft-14 | draft-15 | draft-16 |
+|-------------|---------------|----------|----------|----------|----------|----------|
+| `H3_WEBTRANSPORT_BUFFERED_STREAM_REJECTED` / `WT_BUFFERED_STREAM_REJECTED` | `0x3994bd84` | あり | あり | あり | あり | あり |
+| `WEBTRANSPORT_SESSION_GONE` / `WT_SESSION_GONE` | `0x170d7b68` | なし | あり | あり | あり | あり |
+| `WT_FLOW_CONTROL_ERROR` | `0x045d4487` | なし | なし | あり | あり | あり |
+| `WT_ALPN_ERROR` | `0x0817b3dd` | なし | なし | あり | あり | あり |
+| `WT_REQUIREMENTS_NOT_MET` | `0x212c0d48` | なし | なし | あり | あり | あり |
 
 ### 6.2 HTTP/3 既存エラーコードの使用
 
@@ -249,14 +269,14 @@ HTTP/3 版では QUIC ネイティブのストリームレベルフロー制御�
 | `H3_MESSAGE_ERROR` | セッション終了カプセル後の追加データ受信 | 全 draft |
 | `H3_SETTINGS_ERROR` | SETTINGS 値の不正 / 0-RTT でのフロー制御値減少 | 全 draft |
 | `H3_REQUEST_REJECTED` / `HTTP_REQUEST_REJECTED` | セッション数超過時のリクエスト拒否 | 全 draft |
-| `H3_DATAGRAM_ERROR` | `WT_MAX_STREAMS` の値超過 | draft-15 |
-| `H3_EXCESSIVE_LOAD` | 不審な使用パターン | draft-15 |
+| `H3_DATAGRAM_ERROR` | `WT_MAX_STREAMS` の値超過 | draft-15 のみ (draft-16 では `WT_FLOW_CONTROL_ERROR`) |
+| `H3_EXCESSIVE_LOAD` | 不審な使用パターン | draft-14 以降 |
 
 ---
 
-## 7. フロー制御 (draft-15 のみ)
+## 7. フロー制御 (draft-14 以降)
 
-draft-15 ではセッションレベルのフロー制御が追加された。これは QUIC のコネクションレベルフロー制御と類似の仕組みをセッション単位で提供する。
+draft-14 以降ではセッションレベルのフロー制御が追加された。これは QUIC のコネクションレベルフロー制御と類似の仕組みをセッション単位で提供する。
 
 ### 7.1 有効化条件
 
@@ -278,7 +298,9 @@ draft-15 ではセッションレベルのフロー制御が追加された。�
 
 ---
 
-## 8. draft-15 のみの新機能
+## 8. draft-14 以降の新機能
+
+これらの機能は draft-14 で導入され、draft-15 / draft-16 でも維持されている。draft-15 固有の変更は `:protocol` の `webtransport-h3` 化と `SETTINGS_WT_ENABLED` への置き換えである。
 
 ### 8.1 RESET_STREAM_AT の必須化
 
@@ -310,10 +332,11 @@ WebTransport の前提条件 (SETTINGS / トランスポートパラメータ) �
 |----------|---------------|-------|
 | `SETTINGS_ENABLE_WEBTRANSPORT` | `0x2b603742` | draft-02 |
 | `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` | `0xc671706a` | draft-07 |
-| `SETTINGS_WT_ENABLED` | `0x2c7cf000` | draft-15 |
-| `SETTINGS_WT_INITIAL_MAX_STREAMS_UNI` | `0x2b64` | draft-15 |
-| `SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI` | `0x2b65` | draft-15 |
-| `SETTINGS_WT_INITIAL_MAX_DATA` | `0x2b61` | draft-15 |
+| `SETTINGS_WT_MAX_SESSIONS` | `0x14e9cd29` | draft-14 |
+| `SETTINGS_WT_ENABLED` | `0x2c7cf000` | draft-15 / draft-16 |
+| `SETTINGS_WT_INITIAL_MAX_STREAMS_UNI` | `0x2b64` | draft-14 以降 |
+| `SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI` | `0x2b65` | draft-14 以降 |
+| `SETTINGS_WT_INITIAL_MAX_DATA` | `0x2b61` | draft-14 以降 |
 
 ### HTTP/3 フレームタイプ
 
@@ -333,14 +356,14 @@ WebTransport の前提条件 (SETTINGS / トランスポートパラメータ) �
 |---------|---------------|-------|
 | `CLOSE_WEBTRANSPORT_SESSION` / `WT_CLOSE_SESSION` | `0x2843` | 全 draft |
 | `DRAIN_WEBTRANSPORT_SESSION` / `WT_DRAIN_SESSION` | `0x78ae` | draft-07 以降 |
-| `WT_MAX_DATA` | `0x190B4D3D` | draft-15 |
-| `WT_MAX_STREAM_DATA` (禁止) | `0x190B4D3E` | draft-15 |
-| `WT_MAX_STREAMS` (bidi) | `0x190B4D3F` | draft-15 |
-| `WT_MAX_STREAMS` (uni) | `0x190B4D40` | draft-15 |
-| `WT_DATA_BLOCKED` | `0x190B4D41` | draft-15 |
-| `WT_STREAM_DATA_BLOCKED` (禁止) | `0x190B4D42` | draft-15 |
-| `WT_STREAMS_BLOCKED` (bidi) | `0x190B4D43` | draft-15 |
-| `WT_STREAMS_BLOCKED` (uni) | `0x190B4D44` | draft-15 |
+| `WT_MAX_DATA` | `0x190B4D3D` | draft-14 以降 |
+| `WT_MAX_STREAM_DATA` (禁止) | `0x190B4D3E` | draft-14 以降 |
+| `WT_MAX_STREAMS` (bidi) | `0x190B4D3F` | draft-14 以降 |
+| `WT_MAX_STREAMS` (uni) | `0x190B4D40` | draft-14 以降 |
+| `WT_DATA_BLOCKED` | `0x190B4D41` | draft-14 以降 |
+| `WT_STREAM_DATA_BLOCKED` (禁止) | `0x190B4D42` | draft-14 以降 |
+| `WT_STREAMS_BLOCKED` (bidi) | `0x190B4D43` | draft-14 以降 |
+| `WT_STREAMS_BLOCKED` (uni) | `0x190B4D44` | draft-14 以降 |
 
 ### HTTP/3 エラーコード
 
@@ -348,9 +371,9 @@ WebTransport の前提条件 (SETTINGS / トランスポートパラメータ) �
 |-------------|---------------|-------|
 | `WT_BUFFERED_STREAM_REJECTED` | `0x3994bd84` | 全 draft |
 | `WT_SESSION_GONE` | `0x170d7b68` | draft-07 以降 |
-| `WT_FLOW_CONTROL_ERROR` | `0x045d4487` | draft-15 |
-| `WT_ALPN_ERROR` | `0x0817b3dd` | draft-15 |
-| `WT_REQUIREMENTS_NOT_MET` | `0x212c0d48` | draft-15 |
+| `WT_FLOW_CONTROL_ERROR` | `0x045d4487` | draft-14 以降 |
+| `WT_ALPN_ERROR` | `0x0817b3dd` | draft-14 以降 |
+| `WT_REQUIREMENTS_NOT_MET` | `0x212c0d48` | draft-14 以降 |
 | `WT_APPLICATION_ERROR` 範囲 | `0x52e4a40fa8db` - `0x52e5ac983162` | draft-07 以降 (draft-02 は 8 bit 範囲) |
 
 ---
@@ -364,10 +387,10 @@ WebTransport の前提条件 (SETTINGS / トランスポートパラメータ) �
 
 RFC 9220 も同様に「a new HTTP/2 setting sent by a server to allow the client to use Extended CONNECT」と定義している。
 
-draft-ietf-webtrans-http3-15 Section 3.1 では、サーバーとクライアントの送信リストを明確に分離している:
+draft-ietf-webtrans-http3-16 Section 3.1 では、サーバーとクライアントの送信リストを明確に分離している:
 
 **サーバーが送信するもの:**
-- `SETTINGS_WT_ENABLED` (値 > 0)
+- `SETTINGS_WT_ENABLED` (値 1。draft-15 では値 > 0)
 - `SETTINGS_ENABLE_CONNECT_PROTOCOL` (値 1)
 - `SETTINGS_H3_DATAGRAM` (値 1)
 - `max_datagram_frame_size` transport parameter (値 > 0)
@@ -382,3 +405,19 @@ draft-ietf-webtrans-http3-15 Section 3.1 では、サーバーとクライアン
 クライアントの送信リストに `SETTINGS_ENABLE_CONNECT_PROTOCOL` は含まれない。サーバーはクライアントが `SETTINGS_ENABLE_CONNECT_PROTOCOL` を送信しなくても WebTransport CONNECT リクエストを受理しなければならない。
 
 nghttp3 (ngtcp2) は RFC に準拠し、クライアント側では `enable_connect_protocol = 0` に強制設定して SETTINGS フレームに含めない (`nghttp3_conn.c` line 420)。
+
+---
+
+## 11. draft-16 固有の変更
+
+SETTINGS コードポイントと `:protocol` は draft-15 と同一である。本実装は draft-16 の検証ロジックを draft-15 以降に適用する (`DraftVersion::Draft15`)。
+
+| 項目 | draft-15 | draft-16 |
+|------|----------|----------|
+| `SETTINGS_WT_ENABLED` | 値 > 0 | 値は 1。クライアントは > 1 を `H3_SETTINGS_ERROR` として扱う |
+| `WT_MAX_DATA` / `WT_MAX_STREAMS` の単調性 | 前回より小さい値はエラー | 増加しない値 (同値を含む) は `WT_FLOW_CONTROL_ERROR` |
+| `WT_MAX_STREAMS` > 2^60 | `H3_DATAGRAM_ERROR` (接続エラー) | `WT_FLOW_CONTROL_ERROR` (セッションエラー) |
+| `WT_STREAMS_BLOCKED` > 2^60 | 検証なし | `WT_FLOW_CONTROL_ERROR` (セッションエラー) |
+| 非対応リソースへの応答 | 404 を推奨 | 405 を推奨 |
+| 0-RTT 再開時のフロー制御値減少 | サーバー側の制約 | クライアントも `H3_SETTINGS_ERROR` で接続を閉じる |
+| 楽観的カプセル送信 | 規定なし | クライアントは 2xx 受信前にカプセルを送ってよい。サーバーは 2xx 送信まで処理しない |

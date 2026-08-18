@@ -31,7 +31,7 @@ Rust で実装された依存 0 かつ Sans I/O な HTTP/3 と WebTransport over
 - QUIC 非依存
   - 任意の QUIC 実装と組み合わせ可能
 - RFC 9114 (HTTP/3) および RFC 9204 (QPACK) 準拠
-- WebTransport over HTTP/3 (draft-ietf-webtrans-http3-15) サポート
+- WebTransport over HTTP/3 (draft-ietf-webtrans-http3-16) サポート
 
 ## 使い方
 
@@ -50,10 +50,10 @@ let init = conn.init_h3_streams(2, 6, 10).unwrap();
 
 // リクエストを送信
 let stream_id = conn.send_request(&[
-    Header::new(b":method", b"GET"),
-    Header::new(b":path", b"/"),
-    Header::new(b":scheme", b"https"),
-    Header::new(b":authority", b"example.com"),
+    Header::new(b":method", b"GET").unwrap(),
+    Header::new(b":path", b"/").unwrap(),
+    Header::new(b":scheme", b"https").unwrap(),
+    Header::new(b":authority", b"example.com").unwrap(),
 ], true).unwrap();
 
 // 送信データを取得して QUIC で送信 (FIN はデータ消費後の追加呼び出しで交付される)
@@ -111,8 +111,8 @@ while let Some(event) = conn.poll_event().unwrap() {
             // リクエストヘッダー受信完了
             // レスポンスを送信
             conn.send_response(stream_id, &[
-                Header::new(b":status", b"200"),
-                Header::new(b"content-type", b"text/plain"),
+                Header::new(b":status", b"200").unwrap(),
+                Header::new(b"content-type", b"text/plain").unwrap(),
             ], false).unwrap();
             conn.send_body(stream_id, b"Hello, World!", true).unwrap();
         }
@@ -140,20 +140,21 @@ loop {
 use shiguredo_http3::qpack::{Encoder, Decoder, Header};
 
 // エンコード
-let encoder = Encoder::new();
+let mut encoder = Encoder::new();
 let headers = vec![
-    Header::new(b":method", b"GET"),
-    Header::new(b":path", b"/"),
-    Header::new(b":scheme", b"https"),
-    Header::new(b":authority", b"example.com"),
+    Header::new(b":method", b"GET").unwrap(),
+    Header::new(b":path", b"/").unwrap(),
+    Header::new(b":scheme", b"https").unwrap(),
+    Header::new(b":authority", b"example.com").unwrap(),
 ];
 
 let mut buf = vec![0u8; 1024];
-let encoded_len = encoder.encode(&mut buf, &headers).unwrap();
+let encoded_len = encoder.encode(&mut buf, &headers, 0).unwrap();
 
 // デコード
 let decoder = Decoder::new();
 let decoded = decoder.decode(&buf[..encoded_len]).unwrap();
+assert_eq!(decoded[0].name(), b":method");
 ```
 
 ### WebTransport over HTTP/3
@@ -186,7 +187,7 @@ let stream = Stream::new(4, 0, true); // stream_id, session_id, bidirectional
 session.add_stream(stream);
 
 // ストリームヘッダーのエンコード/デコード
-let header = StreamHeader::new(0); // session_id
+let header = StreamHeader::new(0).unwrap(); // session_id
 let mut buf = Vec::new();
 // 単方向ストリーム: Stream Type (0x54) + Session ID
 header.encode_unidirectional(&mut buf);
@@ -198,12 +199,16 @@ let datagram = Datagram::new(0, b"hello".to_vec()).unwrap();
 let mut buf = Vec::new();
 datagram.encode(&mut buf);
 let (decoded, consumed) = Datagram::decode(&buf).unwrap();
+assert_eq!(decoded.session_id, 0);
+assert_eq!(decoded.payload, b"hello");
+assert_eq!(consumed, buf.len());
 
 // Capsule を送信キューに追加
 session.queue_capsule(Capsule::MaxData { maximum: 2_000_000 });
 
 // 送信待ち Capsule を取り出す
 let capsules = session.take_pending_capsules();
+assert_eq!(capsules.len(), 1);
 
 // グレースフルシャットダウン
 session.drain();
@@ -241,7 +246,7 @@ assert_eq!(session.state(), SessionState::Draining);
 - QPACK デコーダーストリーム (0x03)
 - リクエスト/レスポンスストリーム
 
-### エラーコード (RFC 9114 Section 8.1)
+### エラーコード (RFC 9114 Section 8.1 / RFC 9297 Section 5.2)
 
 - H3_NO_ERROR (0x100)
 - H3_GENERAL_PROTOCOL_ERROR (0x101)
@@ -258,8 +263,7 @@ assert_eq!(session.state(), SessionState::Draining);
 - H3_REQUEST_CANCELLED (0x10c)
 - H3_REQUEST_INCOMPLETE (0x10d)
 - H3_MESSAGE_ERROR (0x10e)
-- H3_CONNECT_ERROR (0x10f)
-- H3_VERSION_FALLBACK (0x110)
+- H3_DATAGRAM_ERROR (0x33)
 - QPACK_DECOMPRESSION_FAILED (0x200)
 - QPACK_ENCODER_STREAM_ERROR (0x201)
 - QPACK_DECODER_STREAM_ERROR (0x202)
@@ -275,6 +279,7 @@ assert_eq!(session.state(), SessionState::Draining);
 - `StreamReset` - ストリームリセット (RESET_STREAM 受信)
 - `StopSending` - 送信停止要求 (STOP_SENDING 受信)
 - `GoawayReceived` - GOAWAY 受信
+- `WebTransport` - WebTransport 関連イベント (`WebTransportEvent` にネスト)
 - `ConnectionError` - 接続エラー
 
 ### 未実装機能
@@ -331,34 +336,50 @@ draft-ietf-webtrans-http3 の複数バージョンをサポートし、ピアの
 
 詳細な差分は [`docs/WT_HTTP3.md`](docs/WT_HTTP3.md) を参照してください。
 
+SETTINGS コードポイントが同一のため、draft-15 と draft-16 は SETTINGS だけでは区別できません。本実装は draft-16 の検証ロジック (単調性チェック、`SETTINGS_WT_ENABLED > 1` の拒否など) を draft-15 以降に適用します。
+
 ### draft 毎の主要な挙動の違い
 
-| 項目 | draft-02 | draft-07 | draft-15 |
-|------|----------|----------|----------|
-| `:protocol` 値 | `webtransport` | `webtransport` | `webtransport-h3` |
-| SETTINGS パラメータ | `SETTINGS_ENABLE_WEBTRANSPORT` (`0x2b603742`) | `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` (`0xc671706a`) | `SETTINGS_WT_ENABLED` (`0x2c7cf000`) |
-| バージョンネゴシエーション | `Sec-Webtransport-Http3-Draft02` ヘッダー | SETTINGS コードポイント | SETTINGS コードポイント + ALPN ヘッダー |
-| アプリケーションエラーコード幅 | 8 bit | 32 bit | 32 bit |
-| `SETTINGS_ENABLE_CONNECT_PROTOCOL` | 暗黙 (不要) | サーバーのみ必須 | サーバーのみ必須 |
-| `SETTINGS_H3_DATAGRAM` | 不要 | 明示的に必須 | 明示的に必須 |
-| QUIC `max_datagram_frame_size` | 不要 | 明示的に必須 | 明示的に必須 |
-| `reset_stream_at` transport parameter | 不要 | 不要 | 必須 |
-| データグラム形式 | Datagram Format Type `WEB_TRANSPORT` (`0xff7c00`) | Quarter Stream ID (RFC 9297) | Quarter Stream ID (RFC 9297) |
-| セッション終了カプセル | `CLOSE_WEBTRANSPORT_SESSION` | `CLOSE_WEBTRANSPORT_SESSION` | `WT_CLOSE_SESSION` |
-| ドレインカプセル | なし | `DRAIN_WEBTRANSPORT_SESSION` | `WT_DRAIN_SESSION` |
-| セッション終了時のエラーコード | 指定なし | `WEBTRANSPORT_SESSION_GONE` (`0x170d7b68`) | `WT_SESSION_GONE` (`0x170d7b68`) |
-| セッションレベルフロー制御 | なし | なし | カプセルベース (`WT_MAX_DATA` / `WT_MAX_STREAMS`) |
-| ALPN ネゴシエーション | なし | なし | `WT-Available-Protocols` / `WT-Protocol` |
-| TLS エクスポーター | なし | なし | `EXPORTER-WebTransport` |
-| 優先度制御 | なし | なし | RFC 9218 推奨 |
-| `RESET_STREAM_AT` の使用 | 不要 | 不要 | 必須 (ストリームヘッダー確実配信のため) |
+| 項目 | draft-02 | draft-07 | draft-14 | draft-15 / draft-16 |
+|------|----------|----------|----------|---------------------|
+| `:protocol` 値 | `webtransport` | `webtransport` | `webtransport` | `webtransport-h3` |
+| SETTINGS パラメータ | `SETTINGS_ENABLE_WEBTRANSPORT` (`0x2b603742`) | `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` (`0xc671706a`) | `SETTINGS_WT_MAX_SESSIONS` (`0x14e9cd29`) | `SETTINGS_WT_ENABLED` (`0x2c7cf000`) |
+| バージョンネゴシエーション | `Sec-Webtransport-Http3-Draft02` ヘッダー | SETTINGS コードポイント | SETTINGS コードポイント + ALPN ヘッダー | SETTINGS コードポイント + ALPN ヘッダー |
+| アプリケーションエラーコード幅 | 8 bit | 32 bit | 32 bit | 32 bit |
+| `SETTINGS_ENABLE_CONNECT_PROTOCOL` | 暗黙 (不要) | サーバーのみ必須 | サーバーのみ必須 | サーバーのみ必須 |
+| `SETTINGS_H3_DATAGRAM` | 不要 | 明示的に必須 | 明示的に必須 | 明示的に必須 |
+| QUIC `max_datagram_frame_size` | 不要 | 明示的に必須 | 明示的に必須 | 明示的に必須 |
+| `reset_stream_at` transport parameter | 不要 | 不要 | 必須 | 必須 |
+| データグラム形式 | Datagram Format Type `WEB_TRANSPORT` (`0xff7c00`) | Quarter Stream ID (RFC 9297) | Quarter Stream ID (RFC 9297) | Quarter Stream ID (RFC 9297) |
+| セッション終了カプセル | `CLOSE_WEBTRANSPORT_SESSION` | `CLOSE_WEBTRANSPORT_SESSION` | `WT_CLOSE_SESSION` | `WT_CLOSE_SESSION` |
+| ドレインカプセル | なし | `DRAIN_WEBTRANSPORT_SESSION` | `WT_DRAIN_SESSION` | `WT_DRAIN_SESSION` |
+| セッション終了時のエラーコード | 指定なし | `WEBTRANSPORT_SESSION_GONE` (`0x170d7b68`) | `WT_SESSION_GONE` (`0x170d7b68`) | `WT_SESSION_GONE` (`0x170d7b68`) |
+| セッションレベルフロー制御 | なし | なし | カプセルベース (`WT_MAX_DATA` / `WT_MAX_STREAMS`) | カプセルベース (`WT_MAX_DATA` / `WT_MAX_STREAMS`) |
+| ALPN ネゴシエーション | なし | なし | `WT-Available-Protocols` / `WT-Protocol` | `WT-Available-Protocols` / `WT-Protocol` |
+| TLS エクスポーター | なし | なし | `EXPORTER-WebTransport` | `EXPORTER-WebTransport` |
+| 優先度制御 | なし | なし | RFC 9218 推奨 | RFC 9218 推奨 |
+| `RESET_STREAM_AT` の使用 | 不要 | 不要 | 必須 (ストリームヘッダー確実配信のため) | 必須 (ストリームヘッダー確実配信のため) |
 
-draft-02 / draft-07 ではセッションレベルフロー制御が存在しないため、同時セッションは原則 1 つに制限されます。draft-15 ではカプセルベースのフロー制御 (`WT_MAX_DATA`, `WT_MAX_STREAMS`, `WT_DATA_BLOCKED`, `WT_STREAMS_BLOCKED`) によって複数セッションを扱えます。
+draft-02 / draft-07 ではセッションレベルフロー制御が存在しないため、同時セッションは原則 1 つに制限されます。draft-14 以降ではカプセルベースのフロー制御 (`WT_MAX_DATA`, `WT_MAX_STREAMS`, `WT_DATA_BLOCKED`, `WT_STREAMS_BLOCKED`) によって複数セッションを扱えます。
+
+### draft-15 と draft-16 の差分
+
+SETTINGS コードポイントと `:protocol` は同一です。draft-16 で変わった検証とエラー処理は次のとおりです。
+
+| 項目 | draft-15 | draft-16 |
+|------|----------|----------|
+| `SETTINGS_WT_ENABLED` の値 | 値 > 0 でサポート表明 | 値は 1。クライアントは > 1 を `H3_SETTINGS_ERROR` として扱う |
+| `WT_MAX_DATA` / `WT_MAX_STREAMS` の単調性 | 前回より小さい値はエラー | 増加しない値 (同値を含む) は `WT_FLOW_CONTROL_ERROR` |
+| `WT_MAX_STREAMS` > 2^60 | `H3_DATAGRAM_ERROR` (接続エラー) | `WT_FLOW_CONTROL_ERROR` (セッションエラー) |
+| `WT_STREAMS_BLOCKED` > 2^60 | 検証なし | `WT_FLOW_CONTROL_ERROR` (セッションエラー) |
+| 非対応リソースへの応答 | 404 を推奨 | 405 を推奨 |
+| 0-RTT 再開時のフロー制御値減少 | サーバー側の制約 | クライアントも `H3_SETTINGS_ERROR` で接続を閉じる |
+| 楽観的カプセル送信 | 規定なし | クライアントは 2xx 受信前にカプセルを送ってよい。サーバーは 2xx 送信まで処理しない |
 
 ### CONNECT リクエスト/レスポンス
 
 - 拡張 CONNECT (RFC 8441, RFC 9220) によるセッション確立
-- ドラフトバージョンネゴシエーション (draft-02/07/14/15)
+- ドラフトバージョンネゴシエーション (draft-02/07/14/15/16)
 - `:protocol` 疑似ヘッダー (`webtransport` / `webtransport-h3`)
 - トランスポートケイパビリティ検証 (SETTINGS / QUIC パラメータ)
 - CONNECT リクエスト/レスポンスバリデーション
@@ -412,10 +433,10 @@ draft-02 / draft-07 ではセッションレベルフロー制御が存在しな
 - SETTINGS_ENABLE_WEBTRANSPORT (0x2b603742) - draft-02
 - SETTINGS_WEBTRANSPORT_MAX_SESSIONS (0xc671706a) - draft-07
 - SETTINGS_WT_MAX_SESSIONS (0x14e9cd29) - draft-14
-- SETTINGS_WT_ENABLED (0x2c7cf000) - draft-15
-- SETTINGS_WT_INITIAL_MAX_STREAMS_UNI (0x2b64) - draft-15
-- SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI (0x2b65) - draft-15
-- SETTINGS_WT_INITIAL_MAX_DATA (0x2b61) - draft-15
+- SETTINGS_WT_ENABLED (0x2c7cf000) - draft-15 / draft-16
+- SETTINGS_WT_INITIAL_MAX_STREAMS_UNI (0x2b64) - draft-14 以降
+- SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI (0x2b65) - draft-14 以降
+- SETTINGS_WT_INITIAL_MAX_DATA (0x2b61) - draft-14 以降
 
 ## 制限 (DoS 対策)
 
@@ -483,8 +504,8 @@ tokio-s2n-quic との差異は、QUIC および HTTP/3 プロトコル処理に 
   - HTTP/3 における拡張 CONNECT の適用
 - draft-ietf-webtrans-overview-12 - WebTransport Protocol Framework
   - <https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-overview-12>
-- draft-ietf-webtrans-http3-15 - WebTransport over HTTP/3
-  - <https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-15>
+- draft-ietf-webtrans-http3-16 - WebTransport over HTTP/3
+  - <https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16>
 
 ## ライセンス
 
