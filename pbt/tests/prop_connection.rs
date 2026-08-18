@@ -2,7 +2,6 @@
 //!
 //! get_stream_data のループ終了性とデータ完全性を検証する。
 
-use proptest::prelude::*;
 use shiguredo_http3::{ClientConnection, Header};
 
 /// リクエスト送信後の take_stream_data ループ用ヘルパー
@@ -34,10 +33,13 @@ fn drain_stream_data(
 // get_stream_data Termination Properties
 // =============================================================================
 
-proptest! {
-    /// Property: 任意サイズのボディで get_stream_data ループが有限回で終了する
-    #[test]
-    fn prop_get_stream_data_terminates(body_len in 0usize..8192) {
+/// Property: 任意サイズのボディで get_stream_data ループが有限回で終了する
+#[test]
+fn prop_get_stream_data_terminates() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_CONNECTION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let body_len = noprop::sample_usize_in(ctx, 0..8192);
         let body = vec![0xABu8; body_len];
 
         let mut client = ClientConnection::with_default_settings();
@@ -51,21 +53,32 @@ proptest! {
         ];
 
         // ボディ付きリクエストを送信 (fin=false でヘッダーのみ先に送信)
-        let stream_id = client.send_request(&request_headers, false).expect("test must succeed");
-        client.send_body(stream_id, &body, true).expect("test must succeed");
+        let stream_id = client
+            .send_request(&request_headers, false)
+            .expect("test must succeed");
+        client
+            .send_body(stream_id, &body, true)
+            .expect("test must succeed");
 
         let (_collected, iterations) = drain_stream_data(&mut client, stream_id, 10);
 
-        prop_assert!(
+        assert!(
             iterations < 10,
             "get_stream_data ループが 10 回以内に終了しなかった (iterations={})",
             iterations
         );
-    }
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: ループで収集したデータ長が元のフレームデータ長と一致する (データ欠損なし)
-    #[test]
-    fn prop_get_stream_data_all_data_collected(body_len in 0usize..8192) {
+/// Property: ループで収集したデータ長が元のフレームデータ長と一致する (データ欠損なし)
+#[test]
+fn prop_get_stream_data_all_data_collected() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_CONNECTION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let body_len = noprop::sample_usize_in(ctx, 0..8192);
         let body = vec![0xCDu8; body_len];
 
         let mut client = ClientConnection::with_default_settings();
@@ -78,28 +91,39 @@ proptest! {
             Header::new(b":authority", b"example.com").expect("test must succeed"),
         ];
 
-        let stream_id = client.send_request(&request_headers, false).expect("test must succeed");
-        client.send_body(stream_id, &body, true).expect("test must succeed");
+        let stream_id = client
+            .send_request(&request_headers, false)
+            .expect("test must succeed");
+        client
+            .send_body(stream_id, &body, true)
+            .expect("test must succeed");
 
         let (collected, _iterations) = drain_stream_data(&mut client, stream_id, 10);
 
         // 収集データにはフレームヘッダーも含まれるため、ボディ長以上であることを検証
-        prop_assert!(
+        assert!(
             collected.len() >= body_len,
             "収集データ長 {} がボディ長 {} より小さい",
             collected.len(),
             body_len
         );
-    }
+        Ok(())
+    })?;
+    Ok(())
+}
 
-    /// Property: FIN 交付後に get_stream_data が None を返す
-    ///
-    /// drain_stream_data はデータ交付 → FIN 交付 → None の順でループを抜けるため、
-    /// ここでの検証対象は「FIN 交付後の None」である。
-    /// (FIN はデータ全消費後の追加呼び出しで交付されるため、全データ消費直後の
-    ///  get_stream_data は (空, fin=true) を返す)
-    #[test]
-    fn prop_get_stream_data_returns_none_after_consume(body_len in 0usize..8192) {
+/// Property: FIN 交付後に get_stream_data が None を返す
+///
+/// drain_stream_data はデータ交付 → FIN 交付 → None の順でループを抜けるため、
+/// ここでの検証対象は「FIN 交付後の None」である。
+/// (FIN はデータ全消費後の追加呼び出しで交付されるため、全データ消費直後の
+///  get_stream_data は (空, fin=true) を返す)
+#[test]
+fn prop_get_stream_data_returns_none_after_consume() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_CONNECTION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let body_len = noprop::sample_usize_in(ctx, 0..8192);
         let body = vec![0xEFu8; body_len];
 
         let mut client = ClientConnection::with_default_settings();
@@ -112,18 +136,24 @@ proptest! {
             Header::new(b":authority", b"example.com").expect("test must succeed"),
         ];
 
-        let stream_id = client.send_request(&request_headers, false).expect("test must succeed");
-        client.send_body(stream_id, &body, true).expect("test must succeed");
+        let stream_id = client
+            .send_request(&request_headers, false)
+            .expect("test must succeed");
+        client
+            .send_body(stream_id, &body, true)
+            .expect("test must succeed");
 
         // データと FIN をすべて消費
         let (_collected, _iterations) = drain_stream_data(&mut client, stream_id, 10);
 
         // FIN 交付後は None が返ることを検証
         let result = client.get_stream_data(stream_id);
-        prop_assert!(
+        assert!(
             result.is_none(),
             "FIN 交付後に get_stream_data が None ではなく {:?} を返した",
             result.map(|(d, f)| (d.len(), f))
         );
-    }
+        Ok(())
+    })?;
+    Ok(())
 }

@@ -37,3 +37,8 @@ shiguredo_http3 = { path = "." }
 [dependencies]
 
 [features]
+
+# noprop は panic 必須 (パニックでケース失敗を検出するため)
+# test プロファイルは dev プロファイルの panic 設定を引き継ぐため dev 側に指定する
+[profile.dev]
+panic = "unwind"
