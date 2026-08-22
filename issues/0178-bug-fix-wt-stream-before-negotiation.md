@@ -3,7 +3,7 @@
 - Created: 2026-08-14
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-wt-stream-before-negotiation
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-08-23
 
 ## 目的
 
@@ -19,17 +19,30 @@ WT ネゴシエーション未完了時に到着した正当な WT bidi スト�
 
 ## 設計方針
 
-- ネゴシエーション未完了時に先頭 0x41 の bidi ストリームを受信した場合の扱いを確定する (例: ストリームをバッファリングしてネゴシエーション完了後に WT 経路に回す、または 0x41 をフレームとして解釈せず正しく破棄する)
+- **未ネゴシエーション時 (`is_wt_fully_negotiated()` が false、主にクライアントの SETTINGS 未受信) に先頭 0x41 の bidi ストリームを受信した場合は、ストリームデータを保留 (バッファリング) し、ネゴシエーション完了後に WT 経路 (`handle_wt_bidi_stream`) に回す方式を採用する**
+  - 根拠: draft-16 Section 4.6「WebTransport endpoints SHOULD buffer streams and datagrams until they can be associated with an established session」
+  - 破棄は採らない。理由は次の 2 つ: 正当な WT bidi ストリームのデータを失うこと、および bidi ストリームは RFC 9114 上デフォルトでリクエストストリームであり、0143 の 0x54 (uni) で採用した RFC 9114 Section 6.2 の abort 方式 (unknown stream type の MUST が定める 2 択) が適用できないため (Section 6.2 の対象は unknown stream type のみ)
+  - 0147 の CONNECT 保留 (`deferred_wt_connects` を SETTINGS 受信時に処理) と同様の方式・同タイミングで処理する
 - 0x41 を「length 前置の HTTP/3 フレーム」として解釈しないこと (WT_STREAM は length を持たず、2 番目の varint は session_id)
-- サーバー側先頭位置の 0x41 無視 (0142 で実装済み) との整合を保つ
+- 保留データは SETTINGS 受信時に再ディスパッチする。`is_wt_fully_negotiated()` が true なら WT 経路 (`handle_wt_bidi_stream`) へ回す。false のまま (ピアの SETTINGS が WT 非対応等、WT がネゴシエーションされないことが確定した場合) は保留したストリームを破棄する (0x41 を length 前置の HTTP/3 フレームとして解釈しないため。RFC 9114 Section 9 の未知要素の無視に相当し、リクエストストリームとして流し込まない)
+- 保留には上限 (ストリーム数・データ量) を設け、超過時はストリームをリセットして破棄する (draft-16 Section 4.6「endpoints MUST limit the number of buffered streams and datagrams」)
+- **0142 との整合**: 0142 の「サーバー側先頭位置の 0x41 は接続エラーにしない (未ネゴシエーション時は無視)」という決定は維持する。本 issue は、0142 の実装が 0x41 を length 前置フレームとして解釈して消費する無視の実装を保留 (バッファリング) に置き換える。これに伴い、0142 の完了条件の「未ネゴシエーション: 無視」は「未ネゴシエーション: 保留 (ネゴシエーション完了後に WT 経路へ)」に更新される
+- **0143 との整合**: 0143 は 0x54 (uni) について RFC 9114 Section 6.2 の abort 方式を採用しバッファリングしない。bidi (0x41) は unknown stream type ではないため同条文は適用されず、draft-16 Section 4.6 の SHOULD buffer が適用される。両者は矛盾しない
 
 ## 完了条件
 
-- ネゴシエーション未完了時に先頭 0x41 の bidi ストリームが到着しても、ボディが誤解析されず接続が壊れない
-- ネゴシエーション完了後に到着した同ストリームは WT ストリームとして処理される
+- ネゴシエーション未完了時 (主にクライアントの SETTINGS 未受信) に先頭 0x41 の bidi ストリームが到着しても、接続エラーにならずボディが誤解析されない (ストリームデータが保留される)
+- ネゴシエーション完了後に、保留されていた同ストリームが WT ストリームとして処理される (`BidiStreamOpen` / `BidiStreamData` イベントが発火する)
+- ピアの SETTINGS が WT 非対応の場合は、保留されていたストリームが破棄され、接続は壊れない
+- 保留の上限を超えたストリームは破棄され、接続は壊れない
+- ネゴシエーション完了後に到着した同ストリームは従来どおり WT ストリームとして処理される
 - テストが追加される (`src/connection/mod.rs` の `#[cfg(test)]` モジュールでネゴシエーション未完了時の到着順を再現する統合テスト)
 - `cargo test --all` と `cargo fmt --all -- --check` と `cargo clippy --all-targets --all-features -- -D warnings` が通る
 
 ## 解決方法
 
-- (未定)
+- `src/connection/mod.rs` の `Connection::feed_stream` / `Connection::dispatch_client_bidi_stream` を変更し、サーバー側の新規クライアント開始 bidi ストリームを `is_wt_fully_negotiated()` の状態に関わらず先頭 varint で判定し、0x41 かつ未ネゴシエーションならストリームデータを保留バッファに格納する
+- SETTINGS 受信時 (`Connection::process_control_stream` 内、`process_deferred_wt_connects` の後) に保留バッファを再ディスパッチし、`is_wt_fully_negotiated()` が true なら `handle_wt_bidi_stream` 経由で WT ストリームとして処理し、false のままなら保留したストリームを破棄する
+- 保留には上限 (ストリーム数・データ量) を設け、超過時はストリームをリセットして破棄する (draft-16 Section 4.6)
+- テスト: `src/connection/mod.rs` の `#[cfg(test)]` モジュールで、SETTINGS 受信前に先頭 0x41 の bidi ストリームを feed → 接続エラーにならず保留 → SETTINGS と CONNECT 受信後に WT イベント (`BidiStreamOpen` / `BidiStreamData`) が発火することを検証する。ピアの SETTINGS が WT 非対応の場合のストリーム破棄と、保留上限超過時の破棄も検証する
+- 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 3.1 / 4.3 / 4.6、`refs/h3/rfc9114.txt` Section 9
