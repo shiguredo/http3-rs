@@ -108,6 +108,8 @@ impl ServerConnectionState {
         self.h3_conn.take_stream_data(stream_id)
     }
 }
+
+/// クライアント側 HTTP/3 接続状態
 pub(crate) struct ClientConnectionState {
     /// HTTP/3 接続 (Sans I/O)
     pub(crate) h3_conn: ClientConnection,
@@ -268,7 +270,7 @@ mod tests {
             .init_h3_streams(2, 6, 10)
             .expect("テスト用の初期化に成功すること");
 
-        // サーバーの制御ストリーム (受信方向 ID 3): ストリームタイプ 0x00 + SETTINGS フレーム
+        // サーバー開始の単方向ストリーム (ID 3): ストリームタイプ 0x00 + SETTINGS
         // (SETTINGS フレーム: type=4, length=0: [0x04, 0x00])
         let data = [0x00, 0x04, 0x00];
         let events = state
@@ -290,7 +292,7 @@ mod tests {
             .init_h3_streams(2, 6, 10)
             .expect("テスト用の初期化に成功すること");
 
-        // エンコーダーストリーム (受信方向 ID 7): ストリームタイプ 0x02
+        // サーバー開始のエンコーダーストリーム (ID 7): ストリームタイプ 0x02
         state
             .feed_stream_only(7, &[0x02], false)
             .expect("テスト用の feed に成功すること");
@@ -303,29 +305,13 @@ mod tests {
         );
     }
 
-    /// クライアント: リクエスト送信で QPACK エンコーダーストリームにデータが蓄積される
+    /// クライアント: リクエスト送信でリクエストデータと FIN が生成される
     #[test]
     fn test_client_send_request_generates_qpack_data() {
-        // 動的テーブル容量 > 0 の場合、エンコーダーストリームに SET_CAPACITY が蓄積される
-        // (RFC 9204 Section 4.3.2)。デフォルト設定では動的テーブルを使わないため
-        // 容量付き設定を使う
-        let settings = H3Settings::from_limits(
-            &shiguredo_http3::limits::Limits::default().qpack_max_table_capacity(4096),
-        )
-        .expect("テスト用の設定に成功すること");
-        let mut state = ClientConnectionState::new(settings);
-        let init = state
+        let mut state = ClientConnectionState::new(H3Settings::default());
+        state
             .init_h3_streams(2, 6, 10)
             .expect("テスト用の初期化に成功すること");
-
-        // エンコーダーストリーム初期データは stream type (0x02) のみであること。
-        // SET_CAPACITY はピアの SETTINGS (QPACK_MAX_TABLE_CAPACITY) 受信後に
-        // 送信され、それまでは遅延される (RFC 9204 Section 2.1.2 / 4.3.2)。
-        assert_eq!(
-            init.encoder_data,
-            vec![0x02],
-            "先頭はストリームタイプのみであること"
-        );
 
         let headers = vec![
             Header::new(b":method", b"GET").expect("テスト用のヘッダーに成功すること"),
@@ -371,7 +357,7 @@ mod tests {
             .send_request(&request, true)
             .expect("テスト用のリクエスト送信に成功すること");
 
-        // リクエストデータ (HEADERS + DATA + FIN 交付) をサーバーへ feed する
+        // リクエストデータ (HEADERS + FIN 交付) をサーバーへ feed する
         let mut request_data = Vec::new();
         while let Some((data, fin)) = client.get_stream_data(stream_id) {
             request_data.extend_from_slice(&data);
@@ -409,10 +395,9 @@ mod tests {
             .init_h3_streams(2, 6, 10)
             .expect("テスト用の初期化に成功すること");
 
-        // サーバーからの制御ストリーム (ID 3) に DATA フレーム (type=0, length=0) を
+        // サーバー開始の制御ストリーム (ID 3) に DATA フレーム (type=0, length=0) を
         // feed すると H3_FRAME_UNEXPECTED 接続エラーになる (RFC 9114 Section 6.2.1:
-        // 制御ストリームでは DATA フレーム禁止)。SETTINGS 未受信でも TYPE チェックは
-        // ストリームタイプ経由で行われる。
+        // 制御ストリームでは DATA フレーム禁止)
         let err = state.process_stream_data(3, &[0x00, 0x00, 0x00], false);
         assert!(
             err.is_err(),

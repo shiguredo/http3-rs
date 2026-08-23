@@ -40,10 +40,10 @@ tokio-s2n-quic クレートのロジック (config / h3 / webtransport / interna
 
 - `crates/tokio-s2n-quic/src/internal/connection_state.rs` に `#[cfg(test)]` モジュールを追加し、8 件のユニットテストを実装した
   - `test_client_init_h3_streams` / `test_server_init_h3_streams`: 制御ストリーム・QPACK ストリーム初期化データ (ストリームタイプ) の検証
-  - `test_drain_qpack_data_after_init_is_empty`: 初期データが init_h3_streams で取り切られ、ドレインに残らないこと
+  - `test_drain_qpack_data_after_init_is_empty`: 初期データが `init_h3_streams` で取り切られ、ドレインに残らないこと
   - `test_client_settings_received`: ピアの SETTINGS 受信で `SettingsReceived` イベントが生成されること
-  - `test_feed_stream_only_does_not_generate_events`: QPACK ストリームが feed_stream_only で処理され、イベントが生成されないこと
-  - `test_client_send_request_generates_qpack_data`: 動的テーブル容量 > 0 での SET_CAPACITY 遅延とリクエスト送信・FIN 交付の検証
+  - `test_feed_stream_only_does_not_generate_events`: QPACK ストリームが `feed_stream_only` で処理され、イベントが生成されないこと
+  - `test_client_send_request_generates_qpack_data`: リクエスト送信と FIN 交付の検証
   - `test_server_prepare_response_generates_stream_data`: クライアントからのリクエスト feed → レスポンス準備 → データ + FIN 交付の E2E 検証
   - `test_process_stream_data_error_is_forwarded`: 制御ストリーム上の DATA フレームが接続エラーとして透過されること
-- `WtSession` のユニットテストは QUIC 実接続 (BidirectionalStreamAcceptor / SendStream) が必要なため、本 issue では connection_state.rs のテストのみを追加した (WtSession の検証は 0156 / 0158 の統合テストで行う)
+- `WtSession` のユニットテストは QUIC 実接続 (BidirectionalStreamAcceptor / SendStream) が必要なため、本 issue では `connection_state.rs` のテストのみを追加した (WtSession の検証は 0156 / 0158 の統合テストで行う)
