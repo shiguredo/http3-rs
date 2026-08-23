@@ -38,6 +38,7 @@ def update_version(file_path: str, dry_run: bool) -> Optional[str]:
         )
     else:
         # -canary.X がない場合、次のマイナーバージョンにして -canary.0 を追加
+        # (例: 2.0.3 -> 2.1.0-canary.0)
         updated_package, count = re.subn(
             r'(version\s*=\s*")(\d+)\.(\d+)\.(\d+)',
             lambda m: f"{m.group(1)}{m.group(2)}.{int(m.group(3)) + 1}.0-canary.0",
@@ -85,7 +86,7 @@ def update_version(file_path: str, dry_run: bool) -> Optional[str]:
     return new_version
 
 
-# cargo update shiguredo_http11 を実行
+# cargo update shiguredo_http3 を実行
 def run_cargo_update(dry_run: bool) -> None:
     if dry_run:
         print("Dry-run: Would run 'cargo update shiguredo_http3'")
