@@ -629,6 +629,24 @@ impl Server {
 
             match result {
                 Ok((pkt_written, data_written)) => {
+                    // nghttp3 に書き込んだ量を通知 (WRITE_MORE でもデータは進んでいる)
+                    if let Some(dw) = data_written
+                        && (dw > 0 || fin)
+                    {
+                        let conn = match self.connections.get_mut(conn_key) {
+                            Some(conn) => conn,
+                            None => return Ok(()),
+                        };
+                        conn.h3_conn.add_write_offset(stream_id, dw)?;
+                    }
+
+                    // WRITE_MORE + データなし: パケットが満杯になり、これ以上
+                    // ストリームデータを詰められない。パケットは flush_all の
+                    // write_pkt で完成・送信されるため、ここでループを抜ける。
+                    if pkt_written == 0 && data_written.is_none() {
+                        break;
+                    }
+
                     // パケットを即座に送信
                     if pkt_written > 0
                         && let Err(e) = self
@@ -639,25 +657,21 @@ impl Server {
                         return Err(Error::Internal(format!("send error: {}", e)));
                     }
 
-                    // nghttp3 に書き込んだ量を通知
-                    if let Some(dw) = data_written
-                        && (dw > 0 || fin)
-                    {
-                        let conn = match self.connections.get_mut(conn_key) {
-                            Some(conn) => conn,
-                            None => return Ok(()),
-                        };
-                        conn.h3_conn.add_write_offset(stream_id, dw)?;
-                    }
+                    continue;
                 }
                 Err(Error::StreamDataBlocked(_)) => {
-                    // ngtcp2 examples: nghttp3_conn_block_stream を呼び出して続行
+                    // ngtcp2 examples: nghttp3_conn_block_stream を呼び出して続行。
+                    // block_stream 後も nghttp3 が同じストリームのデータを返し続ける
+                    // 可能性はゼロではないため、次の ACK (extend_max_stream_data
+                    // コールバック) で unblock されるまでループを抜ける
+                    // (RFC 9000 Section 4.1: 送信許可はピアの MAX_STREAM_DATA で
+                    //  拡張されるまで増えない)。
                     let conn = match self.connections.get_mut(conn_key) {
                         Some(conn) => conn,
                         None => return Ok(()),
                     };
                     conn.h3_conn.block_stream(stream_id);
-                    continue;
+                    break;
                 }
                 Err(Error::StreamShutWr(_)) => {
                     // ngtcp2 examples: nghttp3_conn_shutdown_stream_write を呼び出して続行

@@ -616,7 +616,6 @@ impl Client {
             if written == 0 {
                 break;
             }
-
             // UDP で送信
             self.socket
                 .send_to(&self.send_buf[..written], self.remote_addr)
@@ -708,22 +707,35 @@ impl Client {
 
             match result {
                 Ok((pkt_written, data_written)) => {
-                    // パケットをコピーして収集
-                    if pkt_written > 0 {
-                        packets.push(self.send_buf[..pkt_written].to_vec());
-                    }
-
-                    // nghttp3 に書き込んだ量を通知
+                    // nghttp3 に書き込んだ量を通知 (WRITE_MORE でもデータは進んでいる)
                     if let Some(dw) = data_written
                         && (dw > 0 || fin)
                     {
                         self.h3_conn.add_write_offset(stream_id, dw)?;
                     }
+
+                    // WRITE_MORE + データなし: パケットが満杯になり、これ以上
+                    // ストリームデータを詰められない。パケットは flush の
+                    // write_pkt で完成・送信されるため、ここでループを抜ける。
+                    if pkt_written == 0 && data_written.is_none() {
+                        break;
+                    }
+
+                    // パケットをコピーして収集
+                    if pkt_written > 0 {
+                        packets.push(self.send_buf[..pkt_written].to_vec());
+                    }
+
+                    continue;
                 }
                 Err(Error::StreamDataBlocked(_)) => {
-                    // ngtcp2 examples: nghttp3_conn_block_stream を呼び出して続行
+                    // ngtcp2 examples: nghttp3_conn_block_stream を呼び出して続行。
+                    // block_stream 後も nghttp3 が同じストリームのデータを返し続ける
+                    // 可能性はゼロではないため、次の ACK (extend_max_stream_data
+                    // コールバック) で unblock されるまでループを抜ける
+                    // (RFC 9000 Section 4.1)。
                     self.h3_conn.block_stream(stream_id);
-                    continue;
+                    break;
                 }
                 Err(Error::StreamShutWr(_)) => {
                     // ngtcp2 examples: nghttp3_conn_shutdown_stream_write を呼び出して続行

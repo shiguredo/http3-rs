@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::ptr;
 
 use libc::c_int;
-use nghttp3_sys::{nghttp3_conn, nghttp3_conn_add_ack_offset};
+use nghttp3_sys::{nghttp3_conn, nghttp3_conn_add_ack_offset, nghttp3_conn_unblock_stream};
 use ngtcp2_sys::*;
 
 use crate::crypto::TlsSession;
@@ -588,6 +588,30 @@ impl Connection {
         fin: bool,
         ts: u64,
     ) -> Result<(usize, Option<usize>)> {
+        self.write_stream_with_flags(buf, stream_id, data, fin, ts, 0)
+    }
+
+    /// ストリームデータを書き込み (フラグ指定付き)
+    ///
+    /// `flags` に [`ngtcp2_sys::NGTCP2_WRITE_STREAM_FLAG_MORE`] を指定すると、
+    /// 1 つのパケットに複数ストリームのデータを詰められる ([`NGTCP2_ERR_WRITE_MORE`] を
+    /// 返して続きを要求する)。指定しない場合は、渡したデータから 1 つのパケットを
+    /// 完成させて返す (ストリーム単位で 1 パケットずつ送るシンプルな構造になる)。
+    ///
+    /// # Returns
+    ///
+    /// `(pkt_written, Some(data_written))` を返す。`pkt_written` が 0 の場合は
+    /// パケットが生成されなかった (バッファ不足等)。`data_written` は今回
+    /// 書き込まれたストリームデータ量。
+    pub fn write_stream_with_flags(
+        &mut self,
+        buf: &mut [u8],
+        stream_id: StreamId,
+        data: &[u8],
+        fin: bool,
+        ts: u64,
+        flags: u32,
+    ) -> Result<(usize, Option<usize>)> {
         let mut pi = ngtcp2_pkt_info { ecn: 0 };
         let mut datalen: ngtcp2_ssize = -1;
 
@@ -614,8 +638,8 @@ impl Connection {
             len: data.len(),
         };
 
-        // ngtcp2 examples に従い、NGTCP2_WRITE_STREAM_FLAG_MORE を使用
-        let mut flags = ngtcp2_sys::NGTCP2_WRITE_STREAM_FLAG_MORE;
+        // ngtcp2 examples に従い、指定されたフラグに FIN を合成する
+        let mut flags = flags;
         if fin {
             flags |= ngtcp2_sys::NGTCP2_WRITE_STREAM_FLAG_FIN;
         }
@@ -1105,6 +1129,9 @@ fn create_client_callbacks() -> ngtcp2_callbacks {
     // ACK 済みストリームデータオフセットコールバック
     callbacks.acked_stream_data_offset = Some(acked_stream_data_offset_callback);
 
+    // ストリームデータ送信許可拡張コールバック
+    callbacks.extend_max_stream_data = Some(extend_max_stream_data_callback);
+
     // DATAGRAM 受信コールバック
     callbacks.recv_datagram = Some(recv_datagram_callback);
 
@@ -1136,6 +1163,9 @@ fn create_server_callbacks() -> ngtcp2_callbacks {
 
     // ACK 済みストリームデータオフセットコールバック
     callbacks.acked_stream_data_offset = Some(acked_stream_data_offset_callback);
+
+    // ストリームデータ送信許可拡張コールバック
+    callbacks.extend_max_stream_data = Some(extend_max_stream_data_callback);
 
     // DATAGRAM 受信コールバック
     callbacks.recv_datagram = Some(recv_datagram_callback);
@@ -1241,6 +1271,38 @@ unsafe extern "C" fn acked_stream_data_offset_callback(
             stream_id,
             offset + datalen,
         );
+    }
+
+    0
+}
+
+/// ストリームデータの送信許可が拡張されたときのコールバック
+///
+/// ピアの MAX_STREAM_DATA 受信や初期ウィンドウ設定で送信許可が広がった際に呼ばれる
+/// (RFC 9000 Section 4.1)。フロー制御で `block_stream` されたストリームがあれば
+/// `nghttp3_conn_unblock_stream` で送信を再開する。
+///
+/// user_data には `ConnectionUserData` が渡され、`set_h3_conn_ptr` で設定された
+/// nghttp3_conn ポインタを使って通知する。nghttp3_conn が未設定 (null) の場合は
+/// 何もしない (Http3Connection が破棄済み)。
+unsafe extern "C" fn extend_max_stream_data_callback(
+    _conn: *mut ngtcp2_conn,
+    stream_id: i64,
+    _max_data: u64,
+    user_data: *mut c_void,
+    _stream_user_data: *mut c_void,
+) -> c_int {
+    if user_data.is_null() {
+        return 0;
+    }
+
+    unsafe {
+        let conn_user_data = &mut *(user_data as *mut ConnectionUserData);
+        let h3_conn_ptr = conn_user_data.h3_conn_ptr;
+        if h3_conn_ptr.is_null() {
+            return 0;
+        }
+        nghttp3_conn_unblock_stream(h3_conn_ptr as *mut nghttp3_conn, stream_id);
     }
 
     0

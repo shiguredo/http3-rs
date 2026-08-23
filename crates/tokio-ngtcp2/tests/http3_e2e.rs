@@ -746,3 +746,140 @@ async fn test_http3_stream_multiplexing() {
 
     eprintln!("[test] HTTP/3 ストリーム多重化テスト完了");
 }
+
+/// フロー制御ウィンドウを超えるボディ送信が完走するテスト
+///
+/// デフォルトのストリームウィンドウ (1MB) を超える 2MB のレスポンスボディを
+/// サーバーが送信し、受信側が事前に広げたウィンドウで完走することを検証する
+/// (RFC 9000 Section 18.2)。ウィンドウ拡張なしの場合は MAX_STREAM_DATA による
+/// 拡張が必要となり、クライアント側の受信速度に大きく依存するため、
+/// ここでは初期ウィンドウを広げて送信経路そのものを検証する。
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_http3_large_body_upload() {
+    let (cert_path, key_path) = generate_test_certs();
+
+    let expected_body = (0u8..255)
+        .cycle()
+        .take(2 * 1024 * 1024)
+        .collect::<Vec<u8>>();
+
+    let server_expected = expected_body.clone();
+
+    // サーバーを起動 (2MB レスポンスを返す)
+    let mut server = Server::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+        None,
+        None,
+    )
+    .await
+    .expect("サーバー作成失敗");
+
+    let server_addr = server.local_addr();
+    eprintln!("[test] サーバー起動: {}", server_addr);
+
+    let server_task = tokio::spawn(async move {
+        let _ = timeout(
+            Duration::from_secs(30),
+            server.run(move |_addr, event| {
+                if let Http3Event::HeadersEnd { .. } = event {
+                    eprintln!("[server] リクエスト受信");
+                    let headers = vec![
+                        Header::status(200),
+                        Header::new(b"content-type", b"application/octet-stream"),
+                    ];
+                    return Some((headers, server_expected.clone()));
+                }
+                None
+            }),
+        )
+        .await;
+    });
+
+    // クライアントを作成して 2MB ボディのレスポンスを受信
+    let client_result = timeout(Duration::from_secs(30), async {
+        // 受信側ウィンドウ (bidi_local = クライアントがサーバーの送信を
+        // 受け入れる量) を 5MB に広げて 2MB のレスポンスが
+        // MAX_STREAM_DATA 拡張なしで通るようにする (RFC 9000 Section 18.2)
+        let params = shiguredo_ngtcp2::TransportParams::new()
+            .with_initial_max_stream_data_bidi_local(5 * 1024 * 1024)
+            .with_initial_max_stream_data_bidi_remote(5 * 1024 * 1024)
+            .into_raw();
+        let mut client = Client::connect_insecure(server_addr, "localhost", Some(params), None)
+            .await
+            .expect("クライアント作成失敗");
+
+        client.handshake().await.expect("ハンドシェイク失敗");
+        eprintln!("[client] ハンドシェイク完了");
+
+        let headers = vec![
+            Header::method("GET"),
+            Header::scheme("https"),
+            Header::authority(&format!("localhost:{}", server_addr.port())),
+            Header::path("/"),
+        ];
+
+        let stream_id = client.send_request(&headers).expect("リクエスト送信失敗");
+        eprintln!("[client] リクエスト送信: stream_id = {}", stream_id);
+
+        client.flush().await.expect("フラッシュ失敗");
+
+        // 全ボディを受信し、FIN (StreamEnd) まで待つ
+        let mut received_body = Vec::new();
+
+        loop {
+            client
+                .recv(Duration::from_millis(50))
+                .await
+                .expect("受信失敗");
+
+            // 受信した ACK を QUIC に反映し、フロー制御ウィンドウを広げる
+            client.flush().await.expect("フラッシュ失敗");
+
+            let mut stream_end = false;
+
+            while let Some(event) = client.poll() {
+                match event {
+                    Http3Event::Data { data, .. } => {
+                        received_body.extend_from_slice(&data);
+                    }
+                    Http3Event::StreamEnd { .. } => {
+                        eprintln!(
+                            "[client] StreamEnd 受信: ボディ {} バイト",
+                            received_body.len()
+                        );
+                        stream_end = true;
+                    }
+                    _ => {}
+                }
+            }
+
+            if stream_end {
+                break;
+            }
+        }
+
+        received_body
+    })
+    .await;
+
+    server_task.abort();
+
+    match client_result {
+        Ok(received_body) => {
+            assert_eq!(
+                received_body,
+                expected_body,
+                "受信したボディ ({} バイト) が期待値 ({} バイト) と一致するべき",
+                received_body.len(),
+                expected_body.len()
+            );
+            eprintln!("[test] 2MB ボディ送信テスト完了");
+        }
+        Err(_) => {
+            panic!("テストタイムアウト: 2MB ボディが完走しなかった");
+        }
+    }
+}

@@ -116,6 +116,24 @@ impl TransportParams {
         self
     }
 
+    /// 双方向ストリームの初期最大データ量 (リモート受信) を設定する
+    ///
+    /// ピアがローカルに送信できる 1 ストリームあたりのデータ量の最大値。
+    /// (RFC 9000 Section 18.2)
+    pub fn with_initial_max_stream_data_bidi_remote(mut self, max_data: u64) -> Self {
+        self.0.initial_max_stream_data_bidi_remote = max_data;
+        self
+    }
+
+    /// 双方向ストリームの初期最大データ量 (ローカル受信) を設定する
+    ///
+    /// ローカルがピアから受信できる 1 ストリームあたりのデータ量の最大値。
+    /// (RFC 9000 Section 18.2)
+    pub fn with_initial_max_stream_data_bidi_local(mut self, max_data: u64) -> Self {
+        self.0.initial_max_stream_data_bidi_local = max_data;
+        self
+    }
+
     /// 最大双方向ストリーム数を設定する
     pub fn with_max_streams_bidi(mut self, max_streams: u64) -> Self {
         self.0.initial_max_streams_bidi = max_streams;
