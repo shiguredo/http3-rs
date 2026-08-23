@@ -1,7 +1,7 @@
 # content-length 値に + 符号付き数値が受理される
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-23
 - Branch: feature/fix-content-length-plus-sign
 - Polished: {YYYY-MM-DD}
 
@@ -31,3 +31,8 @@ RFC 9110 Section 8.6 の `content-length = 1*DIGIT` 文法に違反する値 (�
 
 - `src/validation.rs` (content-length 検査関数)
 - 一次資料: `refs/rfc9110.txt` Section 8.6
+
+### 修正内容
+
+- `src/validation.rs` の `validate_content_length` で、`parse::<u64>` の前に値の全バイトが `is_ascii_digit` であることを検査し、`1*DIGIT` (RFC 9110 Section 8.6) に違反する値 (例: `+5`, `-1`) を malformed として拒否するように修正した
+- `tests/test_validation.rs` に `test_content_length_with_plus_sign_is_malformed` / `test_content_length_with_minus_sign_is_malformed` を追加した

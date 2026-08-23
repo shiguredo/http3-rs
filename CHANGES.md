@@ -191,6 +191,8 @@
   - @voluntas
 - [ADD] `Connection::register_local_wt_stream` / `ClientConnection::register_local_wt_stream` / `ServerConnection::register_local_wt_stream` を追加し、ローカル開始の WebTransport 双方向ストリームをセッションに登録できるようにする (RFC 9000 Section 2.1 / draft-ietf-webtrans-http3-16 Section 4.3)
   - @voluntas
+- [FIX] content-length 値の検査を 1*DIGIT 文法検査に変更し、`+5` / `-1` 等の符号付き値の受理を拒否する (RFC 9110 Section 8.6)
+  - @voluntas
 - [FIX] QPACK エンコーダーストリームレシーバーでテーブル操作前にバッファを drain していた処理順序を修正する
   - @voluntas
 - [FIX] send_request で GOAWAY 境界超過およびフロー制御なし WT セッション上限超過時に ConnectionError ではなく StreamError を返すよう修正する

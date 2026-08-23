@@ -711,9 +711,13 @@ pub fn validate_content_length(
             return Err(Error::StreamError(ErrorCode::MessageError));
         }
 
-        // 値が非負整数でなければ malformed
+        // 値が 1*DIGIT でなければ malformed (RFC 9110 Section 8.6)。
+        // u64 への parse は先頭の + を許容するため、全バイトの数字検査を先に行う。
         let value_str = std::str::from_utf8(header.value())
             .map_err(|_| Error::StreamError(ErrorCode::MessageError))?;
+        if !value_str.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(Error::StreamError(ErrorCode::MessageError));
+        }
         let value = value_str
             .parse::<u64>()
             .map_err(|_| Error::StreamError(ErrorCode::MessageError))?;

@@ -676,6 +676,20 @@ fn test_content_length_non_numeric_is_malformed() {
 }
 
 #[test]
+fn test_content_length_with_plus_sign_is_malformed() {
+    // content-length: +5 は 1*DIGIT 文法違反: malformed (RFC 9110 Section 8.6)
+    let headers = vec![wire_header(b"content-length", b"+5")];
+    assert!(validate_content_length(&headers, 5, false).is_err());
+}
+
+#[test]
+fn test_content_length_with_minus_sign_is_malformed() {
+    // content-length: -1 は 1*DIGIT 文法違反: malformed (RFC 9110 Section 8.6)
+    let headers = vec![wire_header(b"content-length", b"-1")];
+    assert!(validate_content_length(&headers, 0, false).is_err());
+}
+
+#[test]
 fn test_content_length_skip_body_check_is_ok() {
     // skip_body_check = true の場合は body サイズ不一致でも Ok (HEAD/1xx/204/304)
     let headers = vec![wire_header(b"content-length", b"100")];
