@@ -114,7 +114,11 @@ async fn test_http3_request_response() {
         Ok(Ok(response)) => {
             let response_str = String::from_utf8_lossy(&response);
             eprintln!("[test] レスポンス: {}", response_str);
-            eprintln!("[test] 通信成功 (レスポンス長: {} bytes)", response.len());
+            assert!(
+                response_str.trim() == "Hello from quinn HTTP/3 server!",
+                "レスポンスボディが期待値と一致しない: {:?}",
+                response_str
+            );
         }
         Ok(Err(e)) => {
             panic!("クライアントエラー: {:?}", e);

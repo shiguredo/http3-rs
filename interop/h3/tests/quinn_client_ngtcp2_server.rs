@@ -77,9 +77,10 @@ async fn test_http3_request_response() {
         Ok(Ok(response)) => {
             let response_str = String::from_utf8_lossy(&response);
             eprintln!("[test] レスポンス: {}", response_str);
-            assert!(
-                response_str.contains("Hello") || !response.is_empty(),
-                "レスポンスが期待通りでない: {:?}",
+            assert_eq!(
+                response_str.trim(),
+                "Hello from HTTP/3 server!",
+                "レスポンスボディが期待値と一致しない: {:?}",
                 response_str
             );
         }

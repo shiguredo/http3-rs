@@ -75,12 +75,10 @@ async fn test_webtransport_session() {
     match client_result {
         Ok(Some(session_id)) => {
             eprintln!("[test] WT session established: session_id = {}", session_id);
+            assert_eq!(session_id, 0, "最初のセッション ID は 0 であること");
         }
         Ok(None) => {
-            // ngtcp2 (draft-15) と quinn/h3 (draft-02) のバージョン不一致で失敗する可能性がある
-            eprintln!(
-                "[test] WT session failed (expected: draft version mismatch between ngtcp2/draft-15 and h3-webtransport/draft-02)"
-            );
+            panic!("WT session failed (expected: success)");
         }
         Err(_) => {
             panic!("timeout");

@@ -108,8 +108,6 @@ impl ServerConnectionState {
         self.h3_conn.take_stream_data(stream_id)
     }
 }
-
-/// クライアント側 HTTP/3 接続状態
 pub(crate) struct ClientConnectionState {
     /// HTTP/3 接続 (Sans I/O)
     pub(crate) h3_conn: ClientConnection,
@@ -203,5 +201,222 @@ impl ClientConnectionState {
     /// ストリームの送信データを取得する
     pub(crate) fn get_stream_data(&mut self, stream_id: u64) -> Option<(Vec<u8>, bool)> {
         self.h3_conn.take_stream_data(stream_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shiguredo_http3::Event;
+
+    /// クライアント側の初期化データを検証する
+    #[test]
+    fn test_client_init_h3_streams() {
+        let mut state = ClientConnectionState::new(H3Settings::default());
+        let init = state
+            .init_h3_streams(2, 6, 10)
+            .expect("テスト用の初期化に成功すること");
+
+        assert_eq!(init.control_stream_id, 2);
+        assert_eq!(init.encoder_stream_id, 6);
+        assert_eq!(init.decoder_stream_id, 10);
+
+        // 制御ストリームの初期データはストリームタイプ 0x00 (制御ストリーム) で始まる
+        assert_eq!(init.control_data[0], 0x00);
+        // QPACK エンコーダーストリームはストリームタイプ 0x02 で始まる
+        assert_eq!(init.encoder_data[0], 0x02);
+        // QPACK デコーダーストリームはストリームタイプ 0x03 で始まる
+        assert_eq!(init.decoder_data[0], 0x03);
+    }
+
+    /// サーバー側の初期化データを検証する
+    #[test]
+    fn test_server_init_h3_streams() {
+        let mut state = ServerConnectionState::new(H3Settings::default());
+        let init = state
+            .init_h3_streams(3, 7, 11)
+            .expect("テスト用の初期化に成功すること");
+
+        assert_eq!(init.control_stream_id, 3);
+        assert_eq!(init.control_data[0], 0x00);
+        assert_eq!(init.encoder_data[0], 0x02);
+        assert_eq!(init.decoder_data[0], 0x03);
+    }
+
+    /// QPACK ストリームの送信待ちデータをドレインする
+    #[test]
+    fn test_drain_qpack_data_after_init_is_empty() {
+        // init_h3_streams が初期データを take_stream_data で取り切るため、
+        // 初期化直後の QPACK ドレインは空であること (漏れがあるとデータが残る)
+        let mut state = ClientConnectionState::new(H3Settings::default());
+        state
+            .init_h3_streams(2, 6, 10)
+            .expect("テスト用の初期化に成功すること");
+
+        let qpack = state.drain_qpack_data();
+        assert!(
+            qpack.is_empty(),
+            "初期データは init_h3_streams で取り出され、ドレインに残らないこと: {qpack:?}"
+        );
+    }
+
+    /// ピアの SETTINGS 受信で SettingsReceived イベントが生成される
+    #[test]
+    fn test_client_settings_received() {
+        let mut state = ClientConnectionState::new(H3Settings::default());
+        state
+            .init_h3_streams(2, 6, 10)
+            .expect("テスト用の初期化に成功すること");
+
+        // サーバーの制御ストリーム (受信方向 ID 3): ストリームタイプ 0x00 + SETTINGS フレーム
+        // (SETTINGS フレーム: type=4, length=0: [0x04, 0x00])
+        let data = [0x00, 0x04, 0x00];
+        let events = state
+            .process_stream_data(3, &data, false)
+            .expect("テスト用の SETTINGS 処理に成功すること");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::SettingsReceived { .. })),
+            "SettingsReceived イベントが生成されること: {events:?}"
+        );
+    }
+
+    /// QPACK エンコーダーストリームは feed_stream_only で処理し、イベント化しない
+    #[test]
+    fn test_feed_stream_only_does_not_generate_events() {
+        let mut state = ClientConnectionState::new(H3Settings::default());
+        state
+            .init_h3_streams(2, 6, 10)
+            .expect("テスト用の初期化に成功すること");
+
+        // エンコーダーストリーム (受信方向 ID 7): ストリームタイプ 0x02
+        state
+            .feed_stream_only(7, &[0x02], false)
+            .expect("テスト用の feed に成功すること");
+        assert!(
+            state
+                .drain_events()
+                .expect("イベントドレインに成功すること")
+                .is_empty(),
+            "エンコーダーストリームからはイベントが生成されないこと"
+        );
+    }
+
+    /// クライアント: リクエスト送信で QPACK エンコーダーストリームにデータが蓄積される
+    #[test]
+    fn test_client_send_request_generates_qpack_data() {
+        // 動的テーブル容量 > 0 の場合、エンコーダーストリームに SET_CAPACITY が蓄積される
+        // (RFC 9204 Section 4.3.2)。デフォルト設定では動的テーブルを使わないため
+        // 容量付き設定を使う
+        let settings = H3Settings::from_limits(
+            &shiguredo_http3::limits::Limits::default().qpack_max_table_capacity(4096),
+        )
+        .expect("テスト用の設定に成功すること");
+        let mut state = ClientConnectionState::new(settings);
+        let init = state
+            .init_h3_streams(2, 6, 10)
+            .expect("テスト用の初期化に成功すること");
+
+        // エンコーダーストリーム初期データは stream type (0x02) のみであること。
+        // SET_CAPACITY はピアの SETTINGS (QPACK_MAX_TABLE_CAPACITY) 受信後に
+        // 送信され、それまでは遅延される (RFC 9204 Section 2.1.2 / 4.3.2)。
+        assert_eq!(
+            init.encoder_data,
+            vec![0x02],
+            "先頭はストリームタイプのみであること"
+        );
+
+        let headers = vec![
+            Header::new(b":method", b"GET").expect("テスト用のヘッダーに成功すること"),
+            Header::new(b":scheme", b"https").expect("テスト用のヘッダーに成功すること"),
+            Header::new(b":authority", b"example.com").expect("テスト用のヘッダーに成功すること"),
+            Header::new(b":path", b"/").expect("テスト用のヘッダーに成功すること"),
+        ];
+        let stream_id = state
+            .send_request(&headers, true)
+            .expect("テスト用のリクエスト送信に成功すること");
+
+        // リクエスト本体も取得できる (取得後に FIN が交付される)
+        let (_, fin) = state
+            .get_stream_data(stream_id)
+            .expect("送信データがあること");
+        assert!(!fin, "データ取得時点では FIN ではないこと");
+        let (_, fin) = state
+            .get_stream_data(stream_id)
+            .expect("追加要求で FIN が交付されること");
+        assert!(fin, "追加取得で FIN が交付されること");
+    }
+
+    /// レスポンス準備でサーバーがヘッダー・ボディをリクエストストリームに出力する
+    #[test]
+    fn test_server_prepare_response_generates_stream_data() {
+        let mut state = ServerConnectionState::new(H3Settings::default());
+        state
+            .init_h3_streams(3, 7, 11)
+            .expect("テスト用の初期化に成功すること");
+
+        // クライアントからのリクエストを直接 feed する (リクエストストリーム ID 0)
+        let request = vec![
+            Header::new(b":method", b"GET").expect("テスト用のヘッダーに成功すること"),
+            Header::new(b":scheme", b"https").expect("テスト用のヘッダーに成功すること"),
+            Header::new(b":authority", b"example.com").expect("テスト用のヘッダーに成功すること"),
+            Header::new(b":path", b"/").expect("テスト用のヘッダーに成功すること"),
+        ];
+        let mut client = ClientConnectionState::new(H3Settings::default());
+        client
+            .init_h3_streams(2, 6, 10)
+            .expect("テスト用の初期化に成功すること");
+        let stream_id = client
+            .send_request(&request, true)
+            .expect("テスト用のリクエスト送信に成功すること");
+
+        // リクエストデータ (HEADERS + DATA + FIN 交付) をサーバーへ feed する
+        let mut request_data = Vec::new();
+        while let Some((data, fin)) = client.get_stream_data(stream_id) {
+            request_data.extend_from_slice(&data);
+            if fin {
+                break;
+            }
+            // FIN 交付の追加呼び出し (データ消費後の (空, fin=true))
+        }
+        state
+            .process_stream_data(stream_id, &request_data, true)
+            .expect("テスト用のリクエスト feed に成功すること");
+
+        let response =
+            vec![Header::new(b":status", b"200").expect("テスト用のヘッダーに成功すること")];
+        state
+            .prepare_response(stream_id, &response, b"hello")
+            .expect("テスト用のレスポンス準備に成功すること");
+
+        let (data, fin) = state
+            .get_stream_data(stream_id)
+            .expect("送信データがあること");
+        assert!(!data.is_empty(), "レスポンスデータが生成されること");
+        assert!(!fin, "データ取得時点では FIN ではないこと");
+        let (_, fin) = state
+            .get_stream_data(stream_id)
+            .expect("追加要求で FIN が交付されること");
+        assert!(fin, "追加取得で FIN が交付されること");
+    }
+
+    /// ストリームデータの feed エラーが透過される
+    #[test]
+    fn test_process_stream_data_error_is_forwarded() {
+        let mut state = ClientConnectionState::new(H3Settings::default());
+        state
+            .init_h3_streams(2, 6, 10)
+            .expect("テスト用の初期化に成功すること");
+
+        // サーバーからの制御ストリーム (ID 3) に DATA フレーム (type=0, length=0) を
+        // feed すると H3_FRAME_UNEXPECTED 接続エラーになる (RFC 9114 Section 6.2.1:
+        // 制御ストリームでは DATA フレーム禁止)。SETTINGS 未受信でも TYPE チェックは
+        // ストリームタイプ経由で行われる。
+        let err = state.process_stream_data(3, &[0x00, 0x00, 0x00], false);
+        assert!(
+            err.is_err(),
+            "制御ストリームへの DATA フレームはエラーになること: {err:?}"
+        );
     }
 }

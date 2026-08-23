@@ -68,18 +68,13 @@ async fn test_webtransport_session() {
     match result {
         Ok(Ok(())) => {
             eprintln!("[test] WT session established");
+            // サーバー側で CONNECT リクエスト (HeadersEnd) を受け取ったことを検証する
         }
         Ok(Err(e)) => {
-            // h3 (draft-02) と ngtcp2 (draft-15) のドラフトバージョン不一致で失敗する可能性がある
-            eprintln!(
-                "[test] WT session failed (expected: draft version mismatch): {:?}",
-                e
-            );
+            panic!("WT session failed: {:?}", e);
         }
         Err(_) => {
-            // h3-webtransport (draft-02) と ngtcp2 (draft-15) の SETTINGS 不一致で
-            // タイムアウトする可能性がある
-            eprintln!("[test] timeout (expected: draft version mismatch)");
+            panic!("timeout");
         }
     }
 }

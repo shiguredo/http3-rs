@@ -117,9 +117,10 @@ async fn test_http3_request_response() {
         Ok(Ok(response)) => {
             let response_str = String::from_utf8_lossy(&response);
             eprintln!("[test] response: {}", response_str);
-            eprintln!(
-                "[test] communication succeeded (response length: {} bytes)",
-                response.len()
+            assert!(
+                response_str.trim() == "Hello from tquic HTTP/3 server!",
+                "レスポンスボディが期待値と一致しない: {:?}",
+                response_str
             );
         }
         Ok(Err(e)) => {
