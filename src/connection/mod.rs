@@ -147,7 +147,6 @@ pub struct Connection {
     /// それぞれ運ぶ。新規 WT セッション拒否や WT draining 伝播の判定には
     /// `peer_goaway_request_boundary()` を使うこと。
     /// (RFC 9114 Section 5.2 / 7.2.6)
-    peer_goaway_received: bool,
     /// 直近で受信した GOAWAY の ID (複数受信時の単調減少チェック用)
     ///
     /// 値の意味はロール依存: クライアント受信なら request stream ID、
@@ -162,8 +161,6 @@ pub struct Connection {
     /// サーバープッシュ自体はサポートしないが、RFC 9114 Section 7.2.7 で定義された
     /// 単調増加制約だけは検証する (後退は H3_ID_ERROR)。
     max_push_id: Option<VarInt>,
-    /// 送信待ちストリーム ID
-    writable_streams: VecDeque<u64>,
     /// QPACK ブロック中のストリームを ricnt (Required Insert Count) 順でソートする
     ///
     /// `retry_blocked_streams()` で ricnt が小さいストリームから順にリトライし、
@@ -357,11 +354,9 @@ impl Connection {
             peer_decoder_stream_id: None,
             events: VecDeque::new(),
             error: None,
-            peer_goaway_received: false,
             peer_goaway_last_id: None,
             last_sent_goaway_id: None,
             max_push_id: None,
-            writable_streams: VecDeque::new(),
             blocked_by_ricnt: BTreeSet::new(),
             ignored_uni_streams: HashSet::new(),
             pending_uni_streams: HashMap::new(),
@@ -443,9 +438,6 @@ impl Connection {
             return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
         }
         self.control_send.set_stream_id(stream_id);
-        if self.control_send.has_pending() {
-            self.writable_streams.push_back(stream_id);
-        }
         Ok(())
     }
 
@@ -473,9 +465,6 @@ impl Connection {
             self.encoder_stream
                 .encode_set_capacity(capacity)
                 .map_err(Error::Qpack)?;
-        }
-        if self.encoder_stream.has_pending() {
-            self.writable_streams.push_back(stream_id);
         }
         Ok(())
     }
@@ -508,9 +497,6 @@ impl Connection {
         for cancel_stream_id in std::mem::take(&mut self.deferred_stream_cancellations) {
             self.decoder_stream
                 .encode_stream_cancellation(cancel_stream_id);
-        }
-        if self.decoder_stream.has_pending() {
-            self.writable_streams.push_back(stream_id);
         }
         Ok(())
     }
@@ -558,46 +544,6 @@ impl Connection {
             decoder_stream_id,
             decoder_data,
         })
-    }
-
-    /// QPACK エンコーダーストリームへの参照を取得
-    pub fn encoder_stream(&self) -> &EncoderStream {
-        &self.encoder_stream
-    }
-
-    /// QPACK エンコーダーストリームへの可変参照を取得
-    pub fn encoder_stream_mut(&mut self) -> &mut EncoderStream {
-        &mut self.encoder_stream
-    }
-
-    /// QPACK デコーダーストリームへの参照を取得
-    pub fn decoder_stream(&self) -> &DecoderStream {
-        &self.decoder_stream
-    }
-
-    /// QPACK デコーダーストリームへの可変参照を取得
-    pub fn decoder_stream_mut(&mut self) -> &mut DecoderStream {
-        &mut self.decoder_stream
-    }
-
-    /// QPACK 動的エンコーダーへの参照を取得
-    pub fn qpack_encoder(&self) -> &DynamicEncoder {
-        &self.qpack_encoder
-    }
-
-    /// QPACK 動的エンコーダーへの可変参照を取得
-    pub fn qpack_encoder_mut(&mut self) -> &mut DynamicEncoder {
-        &mut self.qpack_encoder
-    }
-
-    /// QPACK 動的デコーダーへの参照を取得
-    pub fn qpack_decoder(&self) -> &DynamicDecoder {
-        &self.qpack_dynamic_decoder
-    }
-
-    /// QPACK 動的デコーダーへの可変参照を取得
-    pub fn qpack_decoder_mut(&mut self) -> &mut DynamicDecoder {
-        &mut self.qpack_dynamic_decoder
     }
 
     /// ストリームが終了条件を満たした場合に `streams` から除去する
@@ -1269,7 +1215,6 @@ impl Connection {
                         return Err(Error::ConnectionError(ErrorCode::IdError));
                     }
 
-                    self.peer_goaway_received = true;
                     self.peer_goaway_last_id = Some(goaway_id);
                     self.events
                         .push_back(Event::GoawayReceived { id: goaway_id });

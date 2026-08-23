@@ -14,6 +14,8 @@ use crate::varint::VarInt;
 #[repr(u64)]
 pub enum ErrorCode {
     /// 正常終了 (0x100)
+    ///
+    /// 受信したエラーコードの `from_code` 変換網羅性のため維持する (本実装では生成しない)。
     NoError = 0x100,
     /// プロトコル全般のエラー (0x101)
     GeneralProtocolError = 0x101,
@@ -28,6 +30,8 @@ pub enum ErrorCode {
     /// フレームエラー (0x106)
     FrameError = 0x106,
     /// 過剰な負荷 (0x107)
+    ///
+    /// 受信したエラーコードの `from_code` 変換網羅性のため維持する (本実装では生成しない)。
     ExcessiveLoad = 0x107,
     /// ID エラー (0x108)
     IdError = 0x108,
@@ -41,8 +45,12 @@ pub enum ErrorCode {
     /// このコードで拒否されたリクエストはクライアントが安全に再送できる。
     RequestRejected = 0x10b,
     /// リクエストキャンセル (0x10c)
+    ///
+    /// 受信したエラーコードの `from_code` 変換網羅性のため維持する (本実装では生成しない)。
     RequestCancelled = 0x10c,
     /// リクエスト不完全 (0x10d)
+    ///
+    /// 受信したエラーコードの `from_code` 変換網羅性のため維持する (本実装では生成しない)。
     RequestIncomplete = 0x10d,
     /// メッセージエラー (0x10e)
     MessageError = 0x10e,
@@ -125,8 +133,6 @@ pub enum Error {
     ConnectionError(ErrorCode),
     /// ストリームエラー (ストリームをリセットすべき)
     StreamError(ErrorCode),
-    /// バッファ不足 (追加データが必要)
-    BufferTooShort,
     /// ストリームが見つからない
     StreamNotFound(u64),
     /// ストリームがクローズ済み
@@ -199,7 +205,6 @@ impl fmt::Display for Error {
         match self {
             Self::ConnectionError(code) => write!(f, "connection error: {code}"),
             Self::StreamError(code) => write!(f, "stream error: {code}"),
-            Self::BufferTooShort => write!(f, "buffer too short"),
             Self::StreamNotFound(id) => write!(f, "stream not found: {id}"),
             Self::StreamClosed(id) => write!(f, "stream closed: {id}"),
             Self::FrameDecode(e) => write!(f, "frame decode error: {e}"),
@@ -225,8 +230,6 @@ impl core::error::Error for Error {
 pub enum FrameDecodeError {
     /// バッファ不足
     BufferTooShort,
-    /// 不明なフレームタイプ
-    UnknownFrameType(u64),
     /// 無効なフレーム長
     InvalidLength,
     /// SETTINGS パラメータの構築時検査でエラーが発生した
@@ -244,7 +247,6 @@ impl fmt::Display for FrameDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BufferTooShort => write!(f, "buffer too short"),
-            Self::UnknownFrameType(t) => write!(f, "unknown frame type: {t:#x}"),
             Self::InvalidLength => write!(f, "invalid frame length"),
             Self::InvalidSetting(e) => write!(f, "invalid settings parameter: {e}"),
             Self::Http2Frame(t) => write!(f, "http/2 frame not allowed: {:#x}", t.get()),
@@ -279,8 +281,6 @@ pub enum QpackError {
     InvalidIndex(u64),
     /// 無効なハフマン符号
     InvalidHuffman,
-    /// 文字列が長すぎる
-    StringTooLong,
     /// デコード失敗
     DecodeFailed,
     /// 動的テーブルが無効 (最大容量 0)
@@ -301,7 +301,6 @@ impl fmt::Display for QpackError {
             Self::BufferTooShort => write!(f, "buffer too short"),
             Self::InvalidIndex(idx) => write!(f, "invalid index: {idx}"),
             Self::InvalidHuffman => write!(f, "invalid huffman encoding"),
-            Self::StringTooLong => write!(f, "string too long"),
             Self::DecodeFailed => write!(f, "decode failed"),
             Self::DynamicTableDisabled => {
                 write!(f, "dynamic table disabled (max capacity is zero)")
@@ -361,8 +360,5 @@ mod tests {
     fn test_error_display() {
         let e = Error::ConnectionError(ErrorCode::FrameError);
         assert_eq!(format!("{e}"), "connection error: H3_FRAME_ERROR");
-
-        let e = Error::BufferTooShort;
-        assert_eq!(format!("{e}"), "buffer too short");
     }
 }

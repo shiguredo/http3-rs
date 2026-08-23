@@ -270,13 +270,6 @@ pub enum Event {
     },
     /// WebTransport イベント
     WebTransport(WebTransportEvent),
-    /// 接続エラー
-    ConnectionError {
-        /// エラーコード
-        error_code: u64,
-        /// エラー理由
-        reason: String,
-    },
 }
 
 impl Event {

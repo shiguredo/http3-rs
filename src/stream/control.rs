@@ -141,8 +141,6 @@ pub(crate) struct ControlStreamRecv {
     recv_buf: RecvBuffer,
     /// 受信状態
     recv_state: ControlRecvState,
-    /// 受信した SETTINGS
-    peer_settings: Option<Settings>,
 }
 
 impl ControlStreamRecv {
@@ -152,7 +150,6 @@ impl ControlStreamRecv {
             stream_id: None,
             recv_buf: RecvBuffer::new(),
             recv_state: ControlRecvState::WaitingType,
-            peer_settings: None,
         }
     }
 
@@ -257,8 +254,10 @@ impl ControlStreamRecv {
 
                     // SETTINGS が最初のフレームである必要がある (RFC 9114 Section 6.2.1)
                     if self.recv_state == ControlRecvState::WaitingSettings {
-                        if let Frame::Settings(ref payload) = frame {
-                            self.peer_settings = Some(Settings::from_payload(payload));
+                        if matches!(frame, Frame::Settings(_)) {
+                            // SETTINGS の内容検証は ControlStreamRecv では行わず、
+                            // 接続層 (Connection) 側の process_control_stream から
+                            // Settings::from_payload で検証する (二重管理を避ける)
                             self.recv_state = ControlRecvState::Ready;
                         } else {
                             // SETTINGS 以外の最初のフレームは H3_MISSING_SETTINGS。

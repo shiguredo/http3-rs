@@ -63,65 +63,6 @@ pub fn cleanup_certificate_files(cert_path: &PathBuf, key_path: &PathBuf) {
     }
 }
 
-/// QUIC 可変長整数をエンコードする (RFC 9000 Section 16)
-///
-/// `value` が VarInt 範囲 (`0..=2^62 - 1`) を超える場合は panic する。
-pub fn encode_varint(value: u64) -> Vec<u8> {
-    let mut buf = Vec::new();
-    let v = shiguredo_http3::VarInt::new(value).expect("interop varint value fits in VarInt");
-    shiguredo_http3::varint::encode_into_vec(&mut buf, v);
-    buf
-}
-
-/// QUIC 可変長整数をデコードする (RFC 9000 Section 16)
-pub fn decode_varint(data: &[u8]) -> Option<(u64, usize)> {
-    shiguredo_http3::varint::decode(data)
-        .ok()
-        .map(|(v, n)| (v.get(), n))
-}
-
-/// WebTransport 双方向ストリームヘッダーをエンコードする
-///
-/// RFC draft-ietf-webtrans-http3 Section 4.3
-/// Signal Value (0x41) + Session ID
-pub fn encode_wt_bidi_header(session_id: u64) -> Vec<u8> {
-    let mut buf = Vec::new();
-    shiguredo_http3::webtransport::StreamHeader::new(session_id)
-        .expect("session_id must be a client-initiated bidi stream id")
-        .encode_bidirectional(&mut buf);
-    buf
-}
-
-/// WebTransport 双方向ストリームヘッダーをデコードする
-///
-/// 成功時は (session_id, consumed_bytes) を返す
-pub fn decode_wt_bidi_header(data: &[u8]) -> Option<(u64, usize)> {
-    let (header, consumed) =
-        shiguredo_http3::webtransport::StreamHeader::decode_bidirectional(data)?;
-    Some((header.session_id(), consumed))
-}
-
-/// WebTransport 単方向ストリームヘッダーをエンコードする
-///
-/// RFC draft-ietf-webtrans-http3 Section 4.2
-/// Stream Type (0x54) + Session ID
-pub fn encode_wt_uni_header(session_id: u64) -> Vec<u8> {
-    let mut buf = Vec::new();
-    shiguredo_http3::webtransport::StreamHeader::new(session_id)
-        .expect("session_id must be a client-initiated bidi stream id")
-        .encode_unidirectional(&mut buf);
-    buf
-}
-
-/// WebTransport 単方向ストリームヘッダーをデコードする
-///
-/// 成功時は (session_id, consumed_bytes) を返す
-pub fn decode_wt_uni_header(data: &[u8]) -> Option<(u64, usize)> {
-    let (header, consumed) =
-        shiguredo_http3::webtransport::StreamHeader::decode_unidirectional(data)?;
-    Some((header.session_id(), consumed))
-}
-
 // --- quinn + h3-webtransport ヘルパー ---
 
 use std::sync::Arc;

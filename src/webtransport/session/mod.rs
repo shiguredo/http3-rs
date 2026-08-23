@@ -251,11 +251,6 @@ impl Session {
         &self.local_limits
     }
 
-    /// ローカルが設定したフロー制御リミットを可変参照で取得
-    pub fn local_limits_mut(&mut self) -> &mut FlowControlLimits {
-        &mut self.local_limits
-    }
-
     /// フロー制御状態を取得
     pub fn flow_state(&self) -> &FlowControlState {
         &self.flow_state
@@ -269,11 +264,6 @@ impl Session {
     /// フロー制御を有効として扱うかどうかを設定
     pub fn set_flow_control_enabled(&mut self, enabled: bool) {
         self.flow_control_enabled = enabled;
-    }
-
-    /// フロー制御を有効として扱うかどうか
-    pub fn is_flow_control_enabled(&self) -> bool {
-        self.flow_control_enabled
     }
 
     /// ローカルフロー制御の初期値を設定
@@ -553,11 +543,6 @@ impl Session {
     /// 送信待ち Capsule を取得
     pub fn pending_capsules(&self) -> &[Capsule] {
         &self.pending_capsules
-    }
-
-    /// 送信待ち Capsule をクリア
-    pub fn clear_pending_capsules(&mut self) {
-        self.pending_capsules.clear();
     }
 
     /// 送信待ち Capsule を取り出す

@@ -36,6 +36,9 @@ pub enum ErrorCode {
     /// クライアントが HTTP/3 接続を閉じる際に使用する。
     /// draft-ietf-webtrans-http3-15 Section 3.1, Section 9.5
     /// 将来のドラフトで変更される可能性がある
+    ///
+    /// `from_code` による受信エラーコード変換網羅性のため維持する
+    /// (本実装では生成しない)。
     RequirementsNotMet = 0x212c0d48,
 }
 
