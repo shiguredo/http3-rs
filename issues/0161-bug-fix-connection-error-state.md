@@ -1,7 +1,7 @@
 # Connection のエラー状態 (self.error) が本番経路で設定されない
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-23
 - Branch: feature/fix-connection-error-state
 - Polished: {YYYY-MM-DD}
 
@@ -32,3 +32,11 @@
 ### 関連ファイル
 
 - `src/connection/mod.rs` (`Connection.error` / `feed_stream` / `send_*` / `poll_event`)
+
+### 修正内容
+
+- `Connection` に、結果が `Error::ConnectionError` であれば `self.error` に記録し、以後の呼び出しを同じエラーで拒否するヘルパー (`check_error_state` / `remember_connection_error`) を追加した (RFC 9114 Section 8.1: 接続エラー後の接続は回復不能)
+- `feed_stream` / `poll_event` / `drain_events` / `send_body` / `send_goaway` / `stream_reset` / `stop_sending` の各公開 API で、接続エラーを返した経路で `self.error` に記録し、エラー設定後は `check_error_state` で拒否する
+- `send_request` / `send_response` は内部関数 (`*_inner`) に分離し、公開側で `remember_connection_error` を通すようにした
+- ストリーム単位のエラー (`StreamError` / `StreamNotFound` 等) は接続エラーではないため記録しない
+- inline テストに `test_connection_error_state_is_recorded_on_feed_stream` (接続エラーが記録され各 API が拒否される) と `test_stream_error_does_not_set_connection_error_state` (ストリームエラーは記録されない) を追加した

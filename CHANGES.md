@@ -193,6 +193,8 @@
   - @voluntas
 - [FIX] content-length 値の検査を 1*DIGIT 文法検査に変更し、`+5` / `-1` 等の符号付き値の受理を拒否する (RFC 9110 Section 8.6)
   - @voluntas
+- [FIX] `Connection` に接続エラー状態 (`self.error`) を本番経路で設定し、接続エラー後の `feed_stream` / ポーリング / 送信 API を拒否する (RFC 9114 Section 8.1)
+  - @voluntas
 - [TEST] `SETTINGS_WT_ENABLED > 1` を受信したクライアントが `H3_SETTINGS_ERROR` になるテストを追加する (draft-ietf-webtrans-http3-16 Section 3.1)
   - @voluntas
 - [CHANGE] `webtransport::StreamHeader::session_id` フィールドを private 化し、構築を検証済みの `StreamHeader::new` 経由のみに制限する (値域違反の session_id で encode するとパニックする問題の構造的排除。`session_id()` アクセサを追加)

@@ -624,66 +624,99 @@ impl Connection {
         }
     }
 
+    /// 接続エラー状態を確認する
+    ///
+    /// 接続エラーが設定済みの場合はそのエラーを返す。
+    /// 接続エラー (RFC 9114 Section 8.1) 後の接続は回復不能であり、
+    /// 以後のデータ処理・イベント生成・送信 API 呼び出しを拒否する。
+    fn check_error_state(&self) -> Result<(), Error> {
+        if let Some(ref err) = self.error {
+            return Err(err.clone());
+        }
+        Ok(())
+    }
+
+    /// 接続エラーを返した場合にエラー状態を記録する
+    ///
+    /// `Error::ConnectionError` は接続が回復不能であることを意味するため、
+    /// 以後の API 呼び出しを拒否するために記録する。ストリームエラー等の
+    /// 接続単位以外のエラーは記録しない (該当ストリームのみ回復不能)。
+    fn remember_connection_error<T>(&mut self, result: Result<T, Error>) -> Result<T, Error> {
+        if let Err(err @ Error::ConnectionError(_)) = &result {
+            self.error = Some(err.clone());
+        }
+        result
+    }
+
     /// QUIC からストリームデータを受信
+    ///
+    /// 接続エラーが設定済みの場合はエラーを返し、データを処理しない。
+    /// 本メソッドが接続エラー (具体的事由を返す) を返した場合、エラー状態を記録し
+    /// 以後の呼び出しは同じエラーを返す。エラー後の `Connection` は破棄すること
+    /// (RFC 9114 Section 8.1)。
     pub fn feed_stream(&mut self, stream_id: u64, data: &[u8], fin: bool) -> Result<(), Error> {
         if let Some(ref err) = self.error {
             return Err(err.clone());
         }
 
-        let kind = StreamKind::from_stream_id(stream_id);
+        let result = (|| {
+            let kind = StreamKind::from_stream_id(stream_id);
 
-        // 単方向ストリームの場合
-        if kind.is_unidirectional() {
-            self.handle_unidirectional_stream(stream_id, data, fin)?;
-            return Ok(());
-        }
+            // 単方向ストリームの場合
+            if kind.is_unidirectional() {
+                self.handle_unidirectional_stream(stream_id, data, fin)?;
+                return Ok(());
+            }
 
-        // クライアントが server-initiated bidi stream を受信した場合
-        if self.role == Role::Client && kind.is_server_initiated() {
-            // WebTransport の能力ネゴシエーションが完了している場合のみ受け入れる
-            // (draft-ietf-webtrans-http3-15 Section 3.1, 4.3)
-            if self.is_wt_fully_negotiated() {
+            // クライアントが server-initiated bidi stream を受信した場合
+            if self.role == Role::Client && kind.is_server_initiated() {
+                // WebTransport の能力ネゴシエーションが完了している場合のみ受け入れる
+                // (draft-ietf-webtrans-http3-15 Section 3.1, 4.3)
+                if self.is_wt_fully_negotiated() {
+                    self.handle_wt_bidi_stream(stream_id, data, fin)?;
+                    return Ok(());
+                }
+                // WebTransport 無効時は接続エラー (RFC 9114 Section 6.1)
+                return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
+            }
+
+            // 既に確定済みまたはヘッダー解決中の WT bidi stream ならデータ/FIN を処理する
+            if self.wt_bidi_streams.contains_key(&stream_id)
+                || self.pending_wt_bidi_streams.contains_key(&stream_id)
+            {
                 self.handle_wt_bidi_stream(stream_id, data, fin)?;
                 return Ok(());
             }
-            // WebTransport 無効時は接続エラー (RFC 9114 Section 6.1)
-            return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
-        }
 
-        // 既に確定済みまたはヘッダー解決中の WT bidi stream ならデータ/FIN を処理する
-        if self.wt_bidi_streams.contains_key(&stream_id)
-            || self.pending_wt_bidi_streams.contains_key(&stream_id)
-        {
-            self.handle_wt_bidi_stream(stream_id, data, fin)?;
-            return Ok(());
-        }
+            // ディスパッチ保留中のクライアント開始 bidi stream に後続データが到着した場合
+            if self.pending_bidi_dispatch.contains_key(&stream_id) {
+                return self.dispatch_client_bidi_stream(stream_id, data, fin);
+            }
 
-        // ディスパッチ保留中のクライアント開始 bidi stream に後続データが到着した場合
-        if self.pending_bidi_dispatch.contains_key(&stream_id) {
-            return self.dispatch_client_bidi_stream(stream_id, data, fin);
-        }
+            // サーバー側: クライアント開始の新規 bidi stream は先頭 varint で
+            // WT bidi (0x41) かリクエストストリームかを判定する
+            // ネゴシエーション完了を確認し、未完了の場合はリクエストストリームとして処理する
+            // (draft-ietf-webtrans-http3-15 Section 3.1, 4.3)
+            if self.role == Role::Server
+                && kind.is_client_initiated()
+                && self.is_wt_fully_negotiated()
+                && !self.streams.contains_key(&stream_id)
+            {
+                return self.dispatch_client_bidi_stream(stream_id, data, fin);
+            }
 
-        // サーバー側: クライアント開始の新規 bidi stream は先頭 varint で
-        // WT bidi (0x41) かリクエストストリームかを判定する
-        // ネゴシエーション完了を確認し、未完了の場合はリクエストストリームとして処理する
-        // (draft-ietf-webtrans-http3-15 Section 3.1, 4.3)
-        if self.role == Role::Server
-            && kind.is_client_initiated()
-            && self.is_wt_fully_negotiated()
-            && !self.streams.contains_key(&stream_id)
-        {
-            return self.dispatch_client_bidi_stream(stream_id, data, fin);
-        }
+            // 双方向ストリーム (リクエスト/レスポンス)
+            let result = self.handle_bidirectional_stream(stream_id, data, fin);
 
-        // 双方向ストリーム (リクエスト/レスポンス)
-        let result = self.handle_bidirectional_stream(stream_id, data, fin);
+            // ストリームが両方向クローズ + 送信完了済みなら除去する
+            // (受信経路からも除去条件を満たすことがあるため。エラー経路でも
+            //  セッション終了 (tombstone) 済みの CONNECT ストリームは除去する)
+            self.remove_stream_if_done(stream_id);
+            result?;
+            Ok(())
+        })();
 
-        // ストリームが両方向クローズ + 送信完了済みなら除去する
-        // (受信経路からも除去条件を満たすことがあるため。エラー経路でも
-        //  セッション終了 (tombstone) 済みの CONNECT ストリームは除去する)
-        self.remove_stream_if_done(stream_id);
-        result?;
-        Ok(())
+        self.remember_connection_error(result)
     }
 
     /// 単方向ストリームを処理
@@ -1581,8 +1614,12 @@ impl Connection {
     /// QPACK ブロック中のストリームがある場合、動的テーブルの更新状況に基づいて
     /// ブロック解除を試みる。
     pub fn poll_event(&mut self) -> Result<Option<Event>, Error> {
-        self.retry_blocked_streams()?;
-        Ok(self.events.pop_front())
+        let result = (|| {
+            self.check_error_state()?;
+            self.retry_blocked_streams()?;
+            Ok(self.events.pop_front())
+        })();
+        self.remember_connection_error(result)
     }
 
     /// イベントキューの全イベントを取り出す
@@ -1594,8 +1631,12 @@ impl Connection {
     /// ブロック解除を試みる。これにより `feed_stream()` がクロスストリームの
     /// イベントを生成しないことを保証する。
     pub fn drain_events(&mut self) -> Result<Vec<Event>, Error> {
-        self.retry_blocked_streams()?;
-        Ok(self.events.drain(..).collect())
+        let result = (|| {
+            self.check_error_state()?;
+            self.retry_blocked_streams()?;
+            Ok(self.events.drain(..).collect())
+        })();
+        self.remember_connection_error(result)
     }
 
     /// 送信可能なストリームを取得
@@ -1762,6 +1803,13 @@ impl Connection {
     /// 消費された後に `get_stream_data` / `take_stream_data` の追加呼び出しで交付される
     /// (RFC 9114 Section 4.1)。
     pub(crate) fn send_request(&mut self, headers: &[Header], fin: bool) -> Result<u64, Error> {
+        let result = self.send_request_inner(headers, fin);
+        self.remember_connection_error(result)
+    }
+
+    fn send_request_inner(&mut self, headers: &[Header], fin: bool) -> Result<u64, Error> {
+        self.check_error_state()?;
+
         if self.role != Role::Client {
             return Err(Error::ConnectionError(ErrorCode::InternalError));
         }
@@ -1878,6 +1926,18 @@ impl Connection {
         headers: &[Header],
         fin: bool,
     ) -> Result<(), Error> {
+        let result = self.send_response_inner(stream_id, headers, fin);
+        self.remember_connection_error(result)
+    }
+
+    fn send_response_inner(
+        &mut self,
+        stream_id: u64,
+        headers: &[Header],
+        fin: bool,
+    ) -> Result<(), Error> {
+        self.check_error_state()?;
+
         if self.role != Role::Server {
             return Err(Error::ConnectionError(ErrorCode::InternalError));
         }
@@ -1953,13 +2013,16 @@ impl Connection {
 
     /// ボディを送信
     pub fn send_body(&mut self, stream_id: u64, data: &[u8], fin: bool) -> Result<(), Error> {
-        let stream = self
-            .streams
-            .get_mut(&stream_id)
-            .ok_or(Error::StreamNotFound(stream_id))?;
+        let result = (|| {
+            self.check_error_state()?;
+            let stream = self
+                .streams
+                .get_mut(&stream_id)
+                .ok_or(Error::StreamNotFound(stream_id))?;
 
-        stream.send_body(data, fin)?;
-        Ok(())
+            stream.send_body(data, fin)
+        })();
+        self.remember_connection_error(result)
     }
 
     /// GOAWAY を送信
@@ -1973,35 +2036,40 @@ impl Connection {
     /// 同一 ID の再送は許可される (RFC 9114 Section 5.2: "MUST NOT increase the value")。
     /// 既に送信済みの値より大きい ID を渡すと `IdError` を返す。
     pub fn send_goaway(&mut self, id: VarInt) -> Result<(), Error> {
-        // GOAWAY ID の型検証 (RFC 9114 Section 5.2)
-        let id_u64 = id.get();
-        match self.role {
-            Role::Server => {
-                // サーバー → クライアント: client-initiated bidirectional stream ID
-                // client-initiated bidi stream ID は 4 の倍数 (0, 4, 8, ...)
-                if !id_u64.is_multiple_of(4) {
-                    return Err(Error::ConnectionError(ErrorCode::IdError));
+        let result = (|| {
+            self.check_error_state()?;
+
+            // GOAWAY ID の型検証 (RFC 9114 Section 5.2)
+            let id_u64 = id.get();
+            match self.role {
+                Role::Server => {
+                    // サーバー → クライアント: client-initiated bidirectional stream ID
+                    // client-initiated bidi stream ID は 4 の倍数 (0, 4, 8, ...)
+                    if !id_u64.is_multiple_of(4) {
+                        return Err(Error::ConnectionError(ErrorCode::IdError));
+                    }
+                }
+                Role::Client => {
+                    // クライアント → サーバー: push ID
+                    // サーバープッシュ未対応のため 0 のみ許可
+                    if id_u64 != 0 {
+                        return Err(Error::ConnectionError(ErrorCode::IdError));
+                    }
                 }
             }
-            Role::Client => {
-                // クライアント → サーバー: push ID
-                // サーバープッシュ未対応のため 0 のみ許可
-                if id_u64 != 0 {
-                    return Err(Error::ConnectionError(ErrorCode::IdError));
-                }
+
+            // 段階的送信: ID は単調減少でなければならない (RFC 9114 Section 5.2)
+            if let Some(last_id) = self.last_sent_goaway_id
+                && id > last_id
+            {
+                return Err(Error::ConnectionError(ErrorCode::IdError));
             }
-        }
 
-        // 段階的送信: ID は単調減少でなければならない (RFC 9114 Section 5.2)
-        if let Some(last_id) = self.last_sent_goaway_id
-            && id > last_id
-        {
-            return Err(Error::ConnectionError(ErrorCode::IdError));
-        }
-
-        self.control_send.send_goaway(id)?;
-        self.last_sent_goaway_id = Some(id);
-        Ok(())
+            self.control_send.send_goaway(id)?;
+            self.last_sent_goaway_id = Some(id);
+            Ok(())
+        })();
+        self.remember_connection_error(result)
     }
 
     /// QUIC から RESET_STREAM 受信時に呼ぶ
@@ -2019,45 +2087,50 @@ impl Connection {
         error_code: u64,
         final_size: u64,
     ) -> Result<(), Error> {
-        // RESET_STREAM は peer が送信するストリームの中断を通知するフレームのため、
-        // 判定対象は受信側クリティカルストリーム (control_recv / peer QPACK stream)。
-        // STOP_SENDING (送信側が対象) とは方向が逆になる点に注意。
-        let is_critical = self.control_recv.stream_id() == Some(stream_id)
-            || self.peer_encoder_stream_id == Some(stream_id)
-            || self.peer_decoder_stream_id == Some(stream_id);
-        if is_critical {
-            return Err(Error::ConnectionError(ErrorCode::ClosedCriticalStream));
-        }
+        let result = (|| {
+            self.check_error_state()?;
 
-        if let Some(stream) = self.streams.get_mut(&stream_id) {
-            let state = stream.state_mut();
-            state.reset();
-        }
-        // QPACK ブロック状態をクリアする
-        self.clear_qpack_blocked(stream_id);
-        // QPACK Stream Cancellation を送信 (RFC 9204 Section 2.2.2.2)
-        // max_dynamic_table_capacity が 0 の場合は省略可能
-        self.send_stream_cancellation_if_needed(stream_id);
+            // RESET_STREAM は peer が送信するストリームの中断を通知するフレームのため、
+            // 判定対象は受信側クリティカルストリーム (control_recv / peer QPACK stream)。
+            // STOP_SENDING (送信側が対象) とは方向が逆になる点に注意。
+            let is_critical = self.control_recv.stream_id() == Some(stream_id)
+                || self.peer_encoder_stream_id == Some(stream_id)
+                || self.peer_decoder_stream_id == Some(stream_id);
+            if is_critical {
+                return Err(Error::ConnectionError(ErrorCode::ClosedCriticalStream));
+            }
 
-        // WebTransport セッション/データストリームへのリセット伝播
-        // (draft-ietf-webtrans-http3-15 Section 4.4 / Section 6)
-        if !self.handle_wt_stream_reset(stream_id, error_code, final_size) {
-            // 非 WebTransport ストリーム: 汎用イベントを発行
-            self.events.push_back(Event::StreamReset {
-                stream_id,
-                error_code,
-            });
-        }
+            if let Some(stream) = self.streams.get_mut(&stream_id) {
+                let state = stream.state_mut();
+                state.reset();
+            }
+            // QPACK ブロック状態をクリアする
+            self.clear_qpack_blocked(stream_id);
+            // QPACK Stream Cancellation を送信 (RFC 9204 Section 2.2.2.2)
+            // max_dynamic_table_capacity が 0 の場合は省略可能
+            self.send_stream_cancellation_if_needed(stream_id);
 
-        // Reset になった時点で除去する。ピア RESET 後は QUIC 層が追加データを
-        // 配達しないため、feed_stream の出口や process_stream_frames のループ後
-        // チェックでは発火しない。送信バッファに未交付のローカル送信データが
-        // ある場合は破棄する (RFC 9114 Section 4.1.1 の未クローズ方向の急停止
-        // SHOULD。RFC 9000 Section 4.4 により送信方向は RESET の影響を受けず
-        // 維持されるが、キャンセル時は送信を継続しない)
-        self.remove_stream_if_done(stream_id);
+            // WebTransport セッション/データストリームへのリセット伝播
+            // (draft-ietf-webtrans-http3-15 Section 4.4 / Section 6)
+            if !self.handle_wt_stream_reset(stream_id, error_code, final_size) {
+                // 非 WebTransport ストリーム: 汎用イベントを発行
+                self.events.push_back(Event::StreamReset {
+                    stream_id,
+                    error_code,
+                });
+            }
 
-        Ok(())
+            // Reset になった時点で除去する。ピア RESET 後は QUIC 層が追加データを
+            // 配達しないため、feed_stream の出口や process_stream_frames のループ後
+            // チェックでは発火しない。送信バッファに未交付のローカル送信データが
+            // ある場合は破棄する (RFC 9114 Section 4.1.1 の未クローズ方向の急停止
+            // SHOULD。RFC 9000 Section 4.4 により送信方向は RESET の影響を受けず
+            // 維持されるが、キャンセル時は送信を継続しない)
+            self.remove_stream_if_done(stream_id);
+
+            Ok(())
+        })();
+        self.remember_connection_error(result)
     }
 
     /// QPACK ブロック状態と `blocked_by_ricnt` エントリをクリアする
@@ -2082,44 +2155,49 @@ impl Connection {
     /// ストリームのローカル側をクローズし、イベントを発行する。
     /// クリティカルストリームへの STOP_SENDING は接続エラー (RFC 9114 Section 6.2.1, RFC 9204 Section 4.2)
     pub fn stop_sending(&mut self, stream_id: u64, error_code: u64) -> Result<(), Error> {
-        // STOP_SENDING は「こちらが送信するストリームの送信停止」を要求するフレームのため、
-        // 判定対象は送信側クリティカルストリーム (control_send / ローカル QPACK encoder・decoder)。
-        // 受信側ストリーム (control_recv / peer QPACK stream) はこちらが送信しないため対象外。
-        let is_critical = self.control_send.stream_id() == Some(stream_id)
-            || self.encoder_stream_id == Some(stream_id)
-            || self.decoder_stream_id == Some(stream_id);
-        if is_critical {
-            return Err(Error::ConnectionError(ErrorCode::ClosedCriticalStream));
-        }
+        let result = (|| {
+            self.check_error_state()?;
 
-        if let Some(stream) = self.streams.get_mut(&stream_id) {
-            let state = stream.state_mut();
-            state.close_local();
-            // STOP_SENDING は送信停止の要求であり、以後データを送れないため
-            // 送信バッファを破棄する (RFC 9000 Section 3.5)。
-            // 破棄しないと両方向クローズ後も is_send_complete が false のまま
-            // ストリームが除去されず残留する。
-            // なお STOP_SENDING への RESET_STREAM 応答 (RFC 9000 Section 3.5)
-            // は統合層の責務であり、統合層は Event::StopSending を受けて
-            // 送信ストリームをリセットすること
-            stream.discard_send_data();
-        }
-        // QPACK ブロック状態をクリアする (stream_reset と同じ)
-        self.clear_qpack_blocked(stream_id);
-        // QPACK Stream Cancellation を送信 (RFC 9204 Section 2.2.2.2)
-        self.send_stream_cancellation_if_needed(stream_id);
+            // STOP_SENDING は「こちらが送信するストリームの送信停止」を要求するフレームのため、
+            // 判定対象は送信側クリティカルストリーム (control_send / ローカル QPACK encoder・decoder)。
+            // 受信側ストリーム (control_recv / peer QPACK stream) はこちらが送信しないため対象外。
+            let is_critical = self.control_send.stream_id() == Some(stream_id)
+                || self.encoder_stream_id == Some(stream_id)
+                || self.decoder_stream_id == Some(stream_id);
+            if is_critical {
+                return Err(Error::ConnectionError(ErrorCode::ClosedCriticalStream));
+            }
 
-        // WebTransport セッション/データストリームへの STOP_SENDING 伝播
-        // (draft-ietf-webtrans-http3-15 Section 4.4 / Section 6)
-        if !self.handle_wt_stop_sending(stream_id, error_code) {
-            self.events.push_back(Event::StopSending {
-                stream_id,
-                error_code,
-            });
-        }
-        // セッション終了済み (tombstone) の CONNECT ストリームを除去する
-        self.remove_stream_if_done(stream_id);
-        Ok(())
+            if let Some(stream) = self.streams.get_mut(&stream_id) {
+                let state = stream.state_mut();
+                state.close_local();
+                // STOP_SENDING は送信停止の要求であり、以後データを送れないため
+                // 送信バッファを破棄する (RFC 9000 Section 3.5)。
+                // 破棄しないと両方向クローズ後も is_send_complete が false のまま
+                // ストリームが除去されず残留する。
+                // なお STOP_SENDING への RESET_STREAM 応答 (RFC 9000 Section 3.5)
+                // は統合層の責務であり、統合層は Event::StopSending を受けて
+                // 送信ストリームをリセットすること
+                stream.discard_send_data();
+            }
+            // QPACK ブロック状態をクリアする (stream_reset と同じ)
+            self.clear_qpack_blocked(stream_id);
+            // QPACK Stream Cancellation を送信 (RFC 9204 Section 2.2.2.2)
+            self.send_stream_cancellation_if_needed(stream_id);
+
+            // WebTransport セッション/データストリームへの STOP_SENDING 伝播
+            // (draft-ietf-webtrans-http3-15 Section 4.4 / Section 6)
+            if !self.handle_wt_stop_sending(stream_id, error_code) {
+                self.events.push_back(Event::StopSending {
+                    stream_id,
+                    error_code,
+                });
+            }
+            // セッション終了済み (tombstone) の CONNECT ストリームを除去する
+            self.remove_stream_if_done(stream_id);
+            Ok(())
+        })();
+        self.remember_connection_error(result)
     }
 
     /// 必要に応じて QPACK Stream Cancellation を送信 (RFC 9204 Section 2.2.2.2)
@@ -5235,6 +5313,76 @@ mod tests {
             Error::ConnectionError(ErrorCode::FrameError),
             "feed_stream は元の FrameError を返すこと"
         );
+    }
+
+    #[test]
+    fn test_connection_error_state_is_recorded_on_feed_stream() {
+        // feed_stream が接続エラーを返すと error 状態に記録され、
+        // 以後のポーリング・送信 API が同じエラーを返すことを検証する
+        let mut conn = wt_negotiated_client();
+
+        // WT ネゴシエーション済みクライアントで不正な signal value (0x01) の bidi ストリームを
+        // 受信すると H3_FRAME_ERROR 接続エラーになる
+        let err = conn.feed_stream(1, &[0x01, 0x00], false).unwrap_err();
+        assert!(
+            matches!(err, Error::ConnectionError(ErrorCode::FrameError)),
+            "接続エラーであること: {err:?}"
+        );
+
+        // エラー状態が記録され、poll_event / send_body / send_goaway / stream_reset /
+        // stop_sending / send_request が同じエラーを返す (拒否される)
+        let expected = Error::ConnectionError(ErrorCode::FrameError);
+        assert_eq!(
+            conn.poll_event().unwrap_err(),
+            expected,
+            "poll_event は拒否されること"
+        );
+        assert_eq!(
+            conn.drain_events().unwrap_err(),
+            expected,
+            "drain_events は拒否されること"
+        );
+        assert_eq!(
+            conn.send_body(4, b"x", false).unwrap_err(),
+            expected,
+            "send_body は拒否されること"
+        );
+        assert_eq!(
+            conn.send_goaway(VarInt::from_static(0)).unwrap_err(),
+            expected,
+            "send_goaway は拒否されること"
+        );
+        assert_eq!(
+            conn.stream_reset(4, 0, 0).unwrap_err(),
+            expected,
+            "stream_reset は拒否されること"
+        );
+        assert_eq!(
+            conn.stop_sending(4, 0).unwrap_err(),
+            expected,
+            "stop_sending は拒否されること"
+        );
+        let headers = vec![Header::new(b":method", b"GET").expect("test must succeed")];
+        assert_eq!(
+            conn.send_request(&headers, true).unwrap_err(),
+            expected,
+            "send_request は拒否されること"
+        );
+    }
+
+    #[test]
+    fn test_stream_error_does_not_set_connection_error_state() {
+        // ストリーム単位のエラー (StreamError) は接続エラー状態を記録しないことを検証する
+        let mut conn = Connection::client(Settings::default());
+        conn.set_control_stream_id(2).expect("test must succeed");
+
+        // 存在しないストリームへの send_body は StreamNotFound
+        let err = conn.send_body(4, b"x", false).unwrap_err();
+        assert!(
+            matches!(err, Error::StreamNotFound(4)),
+            "ストリームエラーであること: {err:?}"
+        );
+        assert!(conn.error.is_none(), "ストリームエラーは記録されないこと");
     }
 
     #[test]
