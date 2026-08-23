@@ -1,4 +1,4 @@
-//! WebTransport ドラフトバージョン管理 (0125: connect/mod.rs から分離)
+//! WebTransport ドラフトバージョン管理 connect/mod.rs からの分離
 //!
 //! ドラフトバージョンごとの SETTINGS 構築とプロトコルネゴシエーションを担う。
 //! (draft-ietf-webtrans-http3-02/07/14/15 Section 3.1, 7.1)

@@ -1,7 +1,7 @@
 //! WebTransport セッション (draft-ietf-webtrans-http3-15 Section 3, 6)
 //!
 //! WebTransport セッションの状態管理を提供。
-//! 0125: フロー制御型を `flow_control.rs` に分離。
+//! フロー制御型は `flow_control.rs` で管理する。
 
 pub(crate) mod flow_control;
 

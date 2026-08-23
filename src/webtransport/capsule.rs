@@ -8,7 +8,7 @@
 //! (`MaxData::maximum`, `MaxStreams::maximum`, `DataBlocked::maximum`,
 //! `StreamsBlocked::maximum`, `Unknown::payload.len()` 等) は RFC 9000 Section 16 の
 //! VarInt 範囲 (`0..=2^62 - 1`) を超えると `encode` / `encode_as_data_frame` で
-//! panic する。これらの値域検査は後続 issue で Capsule の構築時検査型化を行う際に
+//! panic する。これらの値域検査は現時点では未対応だが Capsule の構築時検査型化を行う際に
 //! 構造的に保証する予定。それまでは利用側で範囲外値を渡さないこと。
 
 use crate::varint::{self, VarInt};

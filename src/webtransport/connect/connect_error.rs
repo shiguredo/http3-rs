@@ -1,4 +1,4 @@
-//! WebTransport CONNECT エラー型 (0125: connect/mod.rs から分離)
+//! WebTransport CONNECT エラー型 connect/mod.rs からの分離
 //!
 //! CONNECT リクエスト/レスポンスのバリデーションエラーと
 //! トランスポート能力の検証エラーを定義する。

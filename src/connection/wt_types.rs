@@ -1,4 +1,4 @@
-//! WebTransport Connection 層の型定義 (0077: connection/mod.rs から分離)
+//! WebTransport Connection 層の型定義 connection/mod.rs からの分離
 //!
 //! `Connection` 内で WebTransport セッションのライフサイクルと
 //! 関連ストリームを追跡するための型を定義する。

@@ -11,6 +11,8 @@
 
 ## develop
 
+- [REFACTOR] ソースコードのコメントに残っていた issue 番号参照を除去し、理由そのもの (仕様節番号・設計意図) に書き換える
+  - @voluntas
 - [CHANGE] MSRV (Minimum Supported Rust Version) を 1.88 から 1.93 に引き上げる
   - @voluntas
 - [CHANGE] `Client::connect` / `ClientWebTransportSession::connect` / `TlsContext::new_client` でサーバー証明書のチェーン検証とホスト名検証を有効にする (従来 `verify_peer=true` は検証なしと同等の挙動だった)。検証に失敗する既存接続は失敗するようになる (RFC 9114 Section 3.1 / RFC 9001 Section 4.4)

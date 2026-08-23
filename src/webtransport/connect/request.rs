@@ -1,4 +1,4 @@
-//! WebTransport CONNECT リクエスト (0125: connect/mod.rs から分離)
+//! WebTransport CONNECT リクエスト connect/mod.rs からの分離
 //!
 //! 拡張 CONNECT リクエストの構築とバリデーションを担う。
 //! (draft-ietf-webtrans-http3-15 Section 3.2, 3.3)

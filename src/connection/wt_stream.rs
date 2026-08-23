@@ -1,4 +1,4 @@
-//! WebTransport ストリーム処理 (0077: connection/mod.rs から分離)
+//! WebTransport ストリーム処理 connection/mod.rs からの分離
 //!
 //! WebTransport の単方向・双方向ストリームとデータグラムの処理を担う
 //! `Connection` メソッド群。
@@ -686,7 +686,7 @@ impl Connection {
         }
     }
 
-    /// WebTransport 単方向ストリームのデータ処理 (0077 Phase 5: 混在関数抽出)
+    /// WebTransport 単方向ストリームのデータ処理 WebTransport 混在関数の抽出
     ///
     /// (draft-ietf-webtrans-http3-15 Section 4.6, 5.4)
     /// Pending セッション中はバッファに追記、Established 後はイベント発火。
@@ -742,7 +742,7 @@ impl Connection {
         Ok(true)
     }
 
-    /// WebTransport 単方向ストリームの FIN 処理 (0077 Phase 5: 混在関数抽出)
+    /// WebTransport 単方向ストリームの FIN 処理 WebTransport 混在関数の抽出
     ///
     /// (draft-ietf-webtrans-http3-15 Section 4.6, 5.6)
     /// Pending セッション中はバッファに記録、Established 後はイベント発火。

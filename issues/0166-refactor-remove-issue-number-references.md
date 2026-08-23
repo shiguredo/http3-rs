@@ -1,7 +1,7 @@
 # ソースコードに残る issue 番号参照を除去する
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-23
 - Branch: feature/refactor-remove-issue-number-references
 - Polished: {YYYY-MM-DD}
 
@@ -38,3 +38,15 @@ shiguredo-issues 規約違反 (ソースコードへの issue 番号参照) を�
 - `src/qpack/encoder.rs` / `wire.rs`
 - `src/webtransport/connect/` 配下と `session/` 配下
 - `src/stream/control.rs` / `src/webtransport/capsule.rs`
+
+### 修正内容
+
+- `src/` 配下のコメント / docstring に残っていた issue 番号参照 (0077 / 0023 / 0048 / 0049 / 0110 / 0117 / 0125 等) をすべて除去し、理由そのものに書き換えた
+  - 「(NNNN: connection/mod.rs から分離)」→ 「(connection/mod.rs からの分離)」
+  - 「(NNNN Phase 5: 混在関数抽出)」→ 「(WebTransport 混在関数の抽出)」
+  - 「// NNNN Phase 5: WT 分岐を xxx のヘルパーに委譲」→ 「// WT 分岐を xxx のヘルパーに委譲」
+  - 「// NNNN: クリティカルストリーム閉鎖検出」→ 「// RESET_STREAM / STOP_SENDING によるクリティカルストリーム閉鎖検出」
+  - 「// NNNN: QPACK ストリームの stream type 書き込みと writable_streams 登録」→ 番号だけ削除
+  - 「本 issue 時点では」→ 「現時点では」
+  - 「後続 issue で …」→ 実装方針そのままを表記する形に修正
+- issue 番号参照はすべて除去済み。残る 4 桁数字は RFC 番号・ビットパターン・定数値のみであることを確認済み

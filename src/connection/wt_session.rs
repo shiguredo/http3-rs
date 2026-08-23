@@ -1,4 +1,4 @@
-//! WebTransport セッション管理 (0077: connection/mod.rs から分離)
+//! WebTransport セッション管理 connection/mod.rs からの分離
 //!
 //! WebTransport の能力ネゴシエーション、セッションライフサイクル管理、
 //! フロー制御判定を担う `Connection` メソッド群。
@@ -75,7 +75,7 @@ impl Connection {
         self.wt_transport_verified
     }
 
-    /// バッファリングされたストリーム/データグラムを配送する (0110: 共通化)
+    /// バッファリングされたストリーム/データグラムを配送する バッファリングの共通化
     ///
     /// `emit_header_events` と `send_response` の重複コードを共通化する。
     /// フロー制御違反があった場合は `true` を返す。
@@ -545,7 +545,7 @@ impl Connection {
             .is_some_and(|s| s.flow_control_enabled)
     }
 
-    /// RESET_STREAM 受信時の WebTransport 伝播処理 (0077 Phase 5: 混在関数抽出)
+    /// RESET_STREAM 受信時の WebTransport 伝播処理 WebTransport 混在関数の抽出
     ///
     /// (draft-ietf-webtrans-http3-16 Section 4.4 / Section 6)
     /// CONNECT stream の RESET_STREAM はセッション終了、データストリームの
@@ -681,7 +681,7 @@ impl Connection {
         false
     }
 
-    /// STOP_SENDING 受信時の WebTransport 伝播処理 (0077 Phase 5: 混在関数抽出)
+    /// STOP_SENDING 受信時の WebTransport 伝播処理 WebTransport 混在関数の抽出
     ///
     /// (draft-ietf-webtrans-http3-15 Section 4.4 / Section 6)
     /// CONNECT stream の STOP_SENDING はセッション終了、データストリームの
@@ -713,7 +713,7 @@ impl Connection {
         false
     }
 
-    /// WebTransport CONNECT リクエストの前提条件検証 (0077 Phase 5: 混在関数抽出)
+    /// WebTransport CONNECT リクエストの前提条件検証 WebTransport 混在関数の抽出
     ///
     /// (draft-ietf-webtrans-http3-15 Section 3.1, 4.6)
     /// クライアントが WT CONNECT を送信する前に peer の WebTransport サポートを確認する。
@@ -769,7 +769,7 @@ impl Connection {
         Ok(())
     }
 
-    /// サーバー側: WebTransport CONNECT リクエストの前提条件検証 (0077 Phase 5: 混在関数抽出)
+    /// サーバー側: WebTransport CONNECT リクエストの前提条件検証 WebTransport 混在関数の抽出
     ///
     /// (draft-ietf-webtrans-http3-15 Section 3.1, 7.1)
     /// 非 WT CONNECT の場合は `Ok(())` を返す。
@@ -856,7 +856,7 @@ impl Connection {
         Ok(())
     }
 
-    /// サーバー側: WebTransport CONNECT セッションの Pending 登録 (0077 Phase 5: 混在関数抽出)
+    /// サーバー側: WebTransport CONNECT セッションの Pending 登録 WebTransport 混在関数の抽出
     ///
     /// (draft-ietf-webtrans-http3-15 Section 3, 3.3, 4.6)
     /// 非 WT CONNECT の場合は何もしない。
@@ -889,7 +889,7 @@ impl Connection {
         }
     }
 
-    /// クライアント側: WebTransport CONNECT の 2xx レスポンス処理 (0077 Phase 5: 混在関数抽出)
+    /// クライアント側: WebTransport CONNECT の 2xx レスポンス処理 WebTransport 混在関数の抽出
     ///
     /// (draft-ietf-webtrans-http3-15 Section 3, 3.3, 5.1, 5.5, 5.6)
     /// WT-Protocol 検証、セッション確立、フロー制御初期化、バッファリング配送を行う。
@@ -995,7 +995,7 @@ impl Connection {
         Ok(())
     }
 
-    /// サーバー側: WebTransport 2xx レスポンスの WT-Protocol 検証 (0077 Phase 5: 混在関数抽出)
+    /// サーバー側: WebTransport 2xx レスポンスの WT-Protocol 検証 WebTransport 混在関数の抽出
     ///
     /// (draft-ietf-webtrans-http3-15 Section 3.3)
     /// 非 WT セッションまたは非 2xx の場合は `Ok(())` を返す。
@@ -1056,7 +1056,7 @@ impl Connection {
     }
 
     /// サーバー側: WebTransport CONNECT に対する 2xx レスポンス送信時のセッション確立
-    /// (0077 Phase 5: 混在関数抽出)
+    /// WebTransport 混在関数の抽出
     ///
     /// (draft-ietf-webtrans-http3-15 Section 3, 5.1, 5.5, 5.6)
     /// 非 WT セッションまたは非 2xx の場合は何もしない。

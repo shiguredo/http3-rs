@@ -1,4 +1,4 @@
-//! WebTransport Capsule 処理 (0077: connection/mod.rs から分離)
+//! WebTransport Capsule 処理 connection/mod.rs からの分離
 //!
 //! WebTransport CONNECT ストリーム上の Capsule デコード・処理を担う
 //! `Connection` メソッド群。
@@ -154,7 +154,7 @@ impl Connection {
         Ok(())
     }
 
-    /// WebTransport CONNECT ストリーム上の DATA フレーム処理 (0077 Phase 5: 混在関数抽出)
+    /// WebTransport CONNECT ストリーム上の DATA フレーム処理 WebTransport 混在関数の抽出
     ///
     /// (draft-ietf-webtrans-http3-15 Section 5.6)
     /// WT セッションの DATA フレームを処理する。非 WT ストリームは `false` を返す。
@@ -231,7 +231,7 @@ impl Connection {
         Ok(true)
     }
 
-    /// WebTransport CONNECT ストリームの StreamEnd 処理 (0077 Phase 5: 混在関数抽出)
+    /// WebTransport CONNECT ストリームの StreamEnd 処理 WebTransport 混在関数の抽出
     ///
     /// (draft-ietf-webtrans-http3-15 Section 5.6, 6)
     /// FIN 到着時に未完成 Capsule が残っていれば malformed。

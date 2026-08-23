@@ -74,7 +74,7 @@ impl ControlStreamSend {
         let payload = SettingsPayload::from_settings(settings);
         let frame = Frame::Settings(payload);
         // SETTINGS の id / value はアプリ層が `Settings` 経由で構築するため、
-        // 本 issue 時点では VarInt 範囲内であることをアプリ層責務として扱う。
+        // 現時点では VarInt 範囲内であることをアプリ層責務として扱う。
         // 将来 `Setting` enum に昇格して型レベルに移す。
         let frame_len =
             frame::encoded_frame_len(&frame).expect("SETTINGS frame fields fit in VarInt");

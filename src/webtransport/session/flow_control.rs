@@ -1,7 +1,7 @@
 //! WebTransport フロー制御 (draft-ietf-webtrans-http3-15 Section 5)
 //!
 //! セッションレベルのフロー制御 (ストリーム数・データ量) を管理する。
-//! 0125: session.rs から分離。
+//! session.rs から分離したモジュール。
 
 use super::super::capsule::MAX_STREAMS_LIMIT;
 

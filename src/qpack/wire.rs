@@ -1,4 +1,4 @@
-//! QPACK ワイヤーフォーマットの共通ヘルパー (0117: Encoder/Decoder 重複解消)
+//! QPACK ワイヤーフォーマットの共通ヘルパー Encoder/Decoder の重複解消
 //!
 //! `Encoder` / `DynamicEncoder` / `Decoder` / `DynamicDecoder` で重複していた
 //! 文字列エンコード/デコードのヘルパー関数を集約する。

@@ -17,7 +17,7 @@ use super::integer;
 use super::table::{STATIC_TABLE, find_static_entry};
 
 /// QPACK エンコーダー
-/// QPACK エンコーダー (0117: DynamicEncoder に統合)
+/// QPACK エンコーダー DynamicEncoder への統合
 ///
 /// 静的テーブルのみを使用するエンコーダー。`DynamicEncoder` の型エイリアス。
 /// `encode` メソッドは Required Insert Count = 0, Delta Base = 0 でエンコードする。

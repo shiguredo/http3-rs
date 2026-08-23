@@ -745,7 +745,7 @@ impl Connection {
                 self.process_decoder_stream()?;
             } else if self.wt_uni_streams.contains_key(&stream_id) {
                 // WebTransport 単方向ストリーム
-                // 0077 Phase 5: WT 分岐を wt_stream.rs のヘルパーに委譲
+                // WT 分岐を wt_stream.rs のヘルパーに委譲
                 self.handle_wt_uni_stream_data(stream_id, data)?;
             } else if self.pending_wt_uni_streams.contains_key(&stream_id) {
                 // セッション ID 未確定の WT 単方向ストリーム
@@ -775,7 +775,7 @@ impl Connection {
             }
 
             // WebTransport 単方向ストリームの FIN
-            // 0077 Phase 5: WT 分岐を wt_stream.rs のヘルパーに委譲
+            // WT 分岐を wt_stream.rs のヘルパーに委譲
             self.handle_wt_uni_stream_fin(stream_id);
 
             // セッション ID 未確定の WT 単方向ストリームの FIN
@@ -1463,7 +1463,7 @@ impl Connection {
                 RawReceivedData::Data(data) => {
                     // WebTransport CONNECT ストリームの場合は Capsule デコードを行う
                     // (draft-ietf-webtrans-http3-15 Section 5.6)
-                    // 0077 Phase 5: WT 分岐を wt_capsule.rs のヘルパーに委譲
+                    // WT 分岐を wt_capsule.rs のヘルパーに委譲
                     if !self.handle_wt_data_frame(stream_id, &data)? {
                         self.events.push_back(Event::Data { stream_id, data });
                     }
@@ -1479,7 +1479,7 @@ impl Connection {
                     }
                     // WebTransport セッション: FIN 到着時に未完成 Capsule が残っていれば malformed
                     // (draft-ietf-webtrans-http3-15 Section 5.6)
-                    // 0077 Phase 5: WT 分岐を wt_capsule.rs のヘルパーに委譲
+                    // WT 分岐を wt_capsule.rs のヘルパーに委譲
                     self.handle_wt_stream_end(stream_id)?;
 
                     // 終了済みセッション (tombstone) の CONNECT ストリームの FIN は
@@ -1513,7 +1513,7 @@ impl Connection {
 
             // サーバー側: WebTransport CONNECT を受信した場合の前提条件チェック
             // (draft-ietf-webtrans-http3-15 Section 3.1, 7.1)
-            // 0077 Phase 5: WT 分岐を wt_session.rs のヘルパーに委譲
+            // WT 分岐を wt_session.rs のヘルパーに委譲
             self.validate_wt_connect_request_server(stream_id, &headers)?;
 
             // サーバー側: peer_settings 未着の WT CONNECT は保留する
@@ -1545,7 +1545,7 @@ impl Connection {
 
             // サーバー側: WebTransport CONNECT を受信した場合、セッションを Pending で登録
             // (draft-ietf-webtrans-http3-15 Section 3)
-            // 0077 Phase 5: WT 分岐を wt_session.rs のヘルパーに委譲
+            // WT 分岐を wt_session.rs のヘルパーに委譲
             self.register_wt_connect_session(stream_id, &headers);
 
             // 通常の CONNECT リクエスト検出 (RFC 9114 Section 4.4)
@@ -1576,7 +1576,7 @@ impl Connection {
 
             // クライアント側: WebTransport CONNECT の 2xx レスポンス受信時に
             // セッションを Established に遷移させる (draft-ietf-webtrans-http3-15 Section 3)
-            // 0077 Phase 5: WT 分岐を wt_session.rs のヘルパーに委譲
+            // WT 分岐を wt_session.rs のヘルパーに委譲
             self.handle_wt_connect_response(stream_id, &headers)?;
         }
 
@@ -1831,7 +1831,7 @@ impl Connection {
 
         // WebTransport CONNECT の場合、peer の WebTransport サポートを確認する
         // (draft-ietf-webtrans-http3-15 Section 3.1, 4.6)
-        // 0077 Phase 5: WT 分岐を wt_session.rs のヘルパーに委譲
+        // WT 分岐を wt_session.rs のヘルパーに委譲
         self.validate_wt_connect_request(headers)?;
 
         // GOAWAY 受信後は指定 ID 以上のストリームを作成できない (RFC 9114 Section 5.2)
@@ -1953,7 +1953,7 @@ impl Connection {
 
         // WebTransport: 2xx レスポンスの WT-Protocol がクライアントの WT-Available-Protocols に
         // 含まれることを検証する (draft-ietf-webtrans-http3-15 Section 3.3)
-        // 0077 Phase 5: WT 分岐を wt_session.rs のヘルパーに委譲
+        // WT 分岐を wt_session.rs のヘルパーに委譲
         self.validate_wt_response_protocol(stream_id, headers)?;
 
         // QPACK エンコード
@@ -2005,7 +2005,7 @@ impl Connection {
 
         // サーバー側: WebTransport CONNECT に対する 2xx レスポンス送信時に
         // セッションを Established に遷移させる (draft-ietf-webtrans-http3-15 Section 3)
-        // 0077 Phase 5: WT 分岐を wt_session.rs のヘルパーに委譲
+        // WT 分岐を wt_session.rs のヘルパーに委譲
         self.establish_wt_session_server(stream_id, headers);
 
         Ok(())
@@ -2350,7 +2350,7 @@ mod tests {
     }
 
     // =========================================================================
-    // 0023: RESET_STREAM / STOP_SENDING によるクリティカルストリーム閉鎖検出
+    // RESET_STREAM / STOP_SENDING によるクリティカルストリーム閉鎖検出
     // (RFC 9114 Section 6.2.1, RFC 9204 Section 4.2)
     // =========================================================================
 
@@ -2471,7 +2471,7 @@ mod tests {
     }
 
     // =========================================================================
-    // 0048/0049: QPACK ストリームの stream type 書き込みと writable_streams 登録
+    // QPACK ストリームの stream type 書き込みと writable_streams 登録
     // (RFC 9114 Section 6.2, RFC 9204 Section 4.2)
     // =========================================================================
 

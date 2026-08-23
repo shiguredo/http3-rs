@@ -1,4 +1,4 @@
-//! WebTransport CONNECT レスポンス (0125: connect/mod.rs から分離)
+//! WebTransport CONNECT レスポンス connect/mod.rs からの分離
 //!
 //! 拡張 CONNECT レスポンスの構築とバリデーションを担う。
 //! (draft-ietf-webtrans-http3-15 Section 3.2)

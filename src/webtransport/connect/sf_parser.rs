@@ -1,7 +1,7 @@
 //! Structured Fields パーサー (RFC 9651 簡易実装)
 //!
 //! WebTransport の `wt-available-protocols` ヘッダーの解析に使用する。
-//! 0125: connect.rs から分離。
+//! connect.rs から分離したモジュール。
 
 /// Structured Fields List 形式 (RFC 9651) から文字列型のアイテムのみを抽出する。
 ///
