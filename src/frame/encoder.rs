@@ -164,6 +164,16 @@ fn encode_max_push_id_frame(buf: &mut [u8], id: VarInt) -> Option<usize> {
 
 fn encode_unknown_frame(buf: &mut [u8], payload: &UnknownFrame) -> Option<usize> {
     let frame_type = payload.frame_type();
+
+    // WT_STREAM (0x41) は長さを持たないフレームであり、HTTP/3 フレームとして送信してはならない
+    // (draft-ietf-webtrans-http3-16 Section 4.3: "Endpoints MUST NOT send WT_STREAM as a frame
+    // type on HTTP/3 streams other than the very first bytes of a request stream")。
+    // コードが表す数値は webtransport ストリームの双方向シグナル値と同じだが、
+    // frame モジュールは webtransport 層よりも下位のレイヤーであるためリテラルで扱う。
+    if frame_type.get() == 0x41 {
+        return None;
+    }
+
     let bytes = payload.payload();
     let payload_len = VarInt::new(bytes.len() as u64).ok()?;
 
@@ -203,5 +213,29 @@ mod tests {
             encode_frame_header(&mut buf, VarInt::from_static(0), VarInt::from_static(0)),
             None
         );
+    }
+
+    #[test]
+    fn test_encode_unknown_frame_wt_stream_is_rejected() {
+        // WT_STREAM (0x41) をフレームとしてエンコードすると None
+        // (draft-ietf-webtrans-http3-16 Section 4.3)
+        let payload = UnknownFrame::new(VarInt::from_static(0x41), vec![0x00, 0x01])
+            .expect("test must succeed");
+        let frame = Frame::Unknown(payload);
+        let mut buf = [0u8; 64];
+        assert_eq!(encode_frame(&mut buf, &frame), None);
+    }
+
+    #[test]
+    fn test_encode_unknown_frame_other_type_is_ok() {
+        // 0x41 以外の Unknown フレームは従来どおりエンコードできる
+        let payload = UnknownFrame::new(VarInt::from_static(0x42), vec![0xaa, 0xbb])
+            .expect("test must succeed");
+        let frame = Frame::Unknown(payload);
+        let mut buf = [0u8; 64];
+        let len = encode_frame(&mut buf, &frame).expect("test must succeed");
+        // 0x42 は 63 を超えるため 2 バイト VarInt としてエンコードされる
+        assert_eq!(len, 5);
+        assert_eq!(&buf[..len], &[0x40, 0x42, 0x02, 0xaa, 0xbb]);
     }
 }

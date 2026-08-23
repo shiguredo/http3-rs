@@ -1,7 +1,7 @@
 # WT_STREAM (0x41) をフレームとしてエンコードできる状態をブロックする
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-23
 - Branch: feature/fix-wt-stream-frame-encode-block
 - Polished: {YYYY-MM-DD}
 
@@ -35,3 +35,9 @@ draft-ietf-webtrans-http3-16 Section 4.3 の MUST「Endpoints MUST NOT send WT_S
 
 - `src/frame/encoder.rs` (`encode_frame` / `encode_unknown_frame`)
 - 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 4.3
+
+### 修正内容
+
+- `src/frame/encoder.rs` の `encode_unknown_frame` で `frame_type == 0x41` を検査し `None` を返すように修正した (draft-ietf-webtrans-http3-16 Section 4.3 の MUST「Endpoints MUST NOT send WT_STREAM as a frame type」)
+- `src/frame/encoder.rs` の `#[cfg(test)]` モジュールに `test_encode_unknown_frame_wt_stream_is_rejected` (0x41 の拒否) と `test_encode_unknown_frame_other_type_is_ok` (0x42 は従来どおり成功) を追加した
+- `UnknownFrame::new` はブロックしない (受信側の 0x41 デコード経路を壊さない方針を維持)
