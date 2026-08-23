@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use multi_conn_client::MultiConnClient;
-use shiguredo_ngtcp2::{Header, Http3Event, TransportParams};
+use shiguredo_ngtcp2::{ConnectionId, Header, Http3Event, TransportParams};
 use tokio::time::timeout;
 use tokio_ngtcp2::{Client, Server};
 
@@ -178,6 +178,90 @@ async fn test_server_two_connections_same_socket() {
                 server.send_response(client.local_addr(), 0, &[]).is_err(),
                 "同一アドレスの複数接続では send_response はエラーになるべき"
             );
+        }
+    }
+}
+
+/// 不正なパケットを送りつけてもサーバーが継続することを確認する
+///
+/// DCID 不一致の Initial・破損した Initial・ヘッダーが途中で切れたパケットなど、
+/// 任意の不正パケットでサーバーが停止しないことと、接続状態が残らないことを
+/// 検証する。不正 Initial の破棄は RFC 9000 Section 11.1 で許可されている。
+///
+/// `run_by_conn_id` のハンドラはコネクション ID を受け取る。コネクション ID の
+/// 対応する接続にリクエストが処理されることを検証する。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_server_run_by_conn_id_handles_two_connections() {
+    let (mut server, server_addr) = bind_server(None).await;
+
+    // 各コネクション ID から見えたイベントを収集する
+    let conn_ids: std::sync::Arc<std::sync::Mutex<Vec<ConnectionId>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen_ids = conn_ids.clone();
+
+    tokio::select! {
+        biased;
+        r = server.run_by_conn_id(move |conn_id, _addr, event| {
+            {
+                let mut ids = seen_ids.lock().expect("test mutex should not be poisoned");
+                if !ids.contains(&conn_id) {
+                    ids.push(conn_id.clone());
+                }
+            }
+            match event {
+                Http3Event::HeadersEnd { .. } => {
+                    Some((vec![Header::status(200)], b"ok".to_vec()))
+                }
+                _ => None,
+            }
+        }) => {
+            panic!("サーバーが停止するべきではない: {:?}", r);
+        }
+        result = timeout(Duration::from_secs(20), async {
+            let mut client = MultiConnClient::new(server_addr)
+                .await
+                .expect("テスト用クライアント作成失敗");
+
+            let conn1 = client.add_connection().expect("接続 1 作成失敗");
+            let conn2 = client.add_connection().expect("接続 2 作成失敗");
+
+            client
+                .handshake(&conn1, Duration::from_secs(10))
+                .await
+                .expect("接続 1 ハンドシェイク失敗");
+            client
+                .handshake(&conn2, Duration::from_secs(10))
+                .await
+                .expect("接続 2 ハンドシェイク失敗");
+
+            client
+                .send_request(&conn1, "GET", "/first")
+                .expect("リクエスト送信失敗");
+            let (status, body) = client
+                .recv_response(&conn1, Duration::from_secs(10))
+                .await
+                .expect("応答受信失敗");
+            assert_eq!(status, 200, "1 接続目のレスポンスステータス");
+            assert_eq!(body, b"ok", "1 接続目のレスポンスボディ");
+
+            client
+                .send_request(&conn2, "GET", "/second")
+                .expect("リクエスト送信失敗");
+            let (status, body) = client
+                .recv_response(&conn2, Duration::from_secs(10))
+                .await
+                .expect("応答受信失敗");
+            assert_eq!(status, 200, "2 接続目のレスポンスステータス");
+            assert_eq!(body, b"ok", "2 接続目のレスポンスボディ");
+
+            client
+        }) => {
+            let _client = result.expect("テストがタイムアウトした");
+
+            // ハンドラに 2 つの異なるコネクション ID が渡されることを検証する
+            let ids = conn_ids.lock().expect("test mutex should not be poisoned");
+            assert_eq!(ids.len(), 2, "2 つのコネクション ID が渡されるべき");
+            assert_ne!(ids[0], ids[1], "各接続のコネクション ID は異なるべき");
         }
     }
 }

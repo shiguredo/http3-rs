@@ -975,6 +975,22 @@ impl ServerWebTransportSession {
     where
         F: FnMut(SocketAddr, SessionId, Http3Event) -> bool,
     {
+        self.run_by_conn_id(move |_conn_id, addr, session_id, event| {
+            handler(addr, session_id, event)
+        })
+        .await
+    }
+
+    /// コネクション ID 付きでサーバーを実行
+    ///
+    /// [`run`](Self::run) と同様だが、ハンドラの第 1 引数にコネクション ID が渡される。
+    /// 同一 `SocketAddr` から複数接続を張る場合に、アプリケーションがイベントを
+    /// 接続ごとに区別するために使用する。渡されるコネクション ID はサーバーが
+    /// 生成した SCID (接続マップのキー) である。
+    pub async fn run_by_conn_id<F>(&mut self, mut handler: F) -> Result<()>
+    where
+        F: FnMut(ConnectionId, SocketAddr, SessionId, Http3Event) -> bool,
+    {
         loop {
             let timer_duration = self.compute_timer_duration();
 
@@ -1027,7 +1043,7 @@ impl ServerWebTransportSession {
     /// エラーは接続単位で処理し、サーバーループは継続する。
     async fn handle_recv<F>(&mut self, data: &[u8], from: SocketAddr, handler: &mut F)
     where
-        F: FnMut(SocketAddr, SessionId, Http3Event) -> bool,
+        F: FnMut(ConnectionId, SocketAddr, SessionId, Http3Event) -> bool,
     {
         // DCID で既存接続を検索
         if let Some(conn_key) = resolve_dcid(&self.cid_map, &self.short_cid_lengths, data) {
@@ -1051,7 +1067,7 @@ impl ServerWebTransportSession {
         from: SocketAddr,
         handler: &mut F,
     ) where
-        F: FnMut(SocketAddr, SessionId, Http3Event) -> bool,
+        F: FnMut(ConnectionId, SocketAddr, SessionId, Http3Event) -> bool,
     {
         let ts = timestamp();
         let pkt_info = PacketInfo::default();
@@ -1103,7 +1119,7 @@ impl ServerWebTransportSession {
             // WebTransport CONNECT リクエストを処理
             if let Http3Event::HeadersEnd { stream_id, .. } = &event {
                 let session_id = *stream_id;
-                if handler(from, session_id, event) {
+                if handler(conn_key.clone(), from, session_id, event) {
                     // セッションを受け入れ
                     let step_result = match self.connections.get_mut(conn_key) {
                         Some(conn) => {
@@ -1134,7 +1150,7 @@ impl ServerWebTransportSession {
             } else if let Some(session_id) =
                 self.connections.get(conn_key).and_then(|c| c.session_id)
             {
-                handler(from, session_id, event);
+                handler(conn_key.clone(), from, session_id, event);
             }
         }
     }
@@ -1519,6 +1535,25 @@ impl ServerWebTransportSession {
     pub async fn recv_once<F>(&mut self, timeout_duration: Duration, handler: &mut F) -> Result<()>
     where
         F: FnMut(SocketAddr, SessionId, Http3Event) -> bool,
+    {
+        self.recv_once_by_conn_id(
+            timeout_duration,
+            &mut |_conn_id, addr, session_id, event| handler(addr, session_id, event),
+        )
+        .await
+    }
+
+    /// コネクション ID 付きでパケットを 1 回受信して処理する
+    ///
+    /// [`recv_once`](Self::recv_once) と同様だが、ハンドラの第 1 引数にコネクション ID
+    /// が渡される。渡されるコネクション ID はサーバーが生成した SCID (接続マップのキー)。
+    pub async fn recv_once_by_conn_id<F>(
+        &mut self,
+        timeout_duration: Duration,
+        handler: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(ConnectionId, SocketAddr, SessionId, Http3Event) -> bool,
     {
         let timer_duration = self.compute_timer_duration().min(timeout_duration);
 

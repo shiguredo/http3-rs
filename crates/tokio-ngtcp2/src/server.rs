@@ -137,6 +137,23 @@ impl Server {
     where
         F: FnMut(SocketAddr, Http3Event) -> Option<(Vec<Header>, Vec<u8>)>,
     {
+        self.run_by_conn_id(move |_conn_id, addr, event| handler(addr, event))
+            .await
+    }
+
+    /// コネクション ID 付きでサーバーを起動し、リクエストを処理する
+    ///
+    /// [`run`](Self::run) と同様だが、ハンドラの第 1 引数にコネクション ID が渡される。
+    /// 同一 `SocketAddr` から複数接続を張る場合に、アプリケーションがイベントを
+    /// 接続ごとに区別するために使用する。渡されるコネクション ID はサーバーが
+    /// 生成した SCID (接続マップのキー) である。
+    ///
+    /// ハンドラの戻り値は [`run`](Self::run) と同じく、レスポンスヘッダーとボディ
+    /// (None で応答しない)。
+    pub async fn run_by_conn_id<F>(&mut self, mut handler: F) -> Result<()>
+    where
+        F: FnMut(ConnectionId, SocketAddr, Http3Event) -> Option<(Vec<Header>, Vec<u8>)>,
+    {
         loop {
             // 次のタイムアウトを計算
             let timer_duration = self.compute_timer_duration();
@@ -196,7 +213,7 @@ impl Server {
     /// エラーは接続単位で処理し、サーバーループは継続する。
     async fn handle_recv<F>(&mut self, data: &[u8], from: SocketAddr, handler: &mut F)
     where
-        F: FnMut(SocketAddr, Http3Event) -> Option<(Vec<Header>, Vec<u8>)>,
+        F: FnMut(ConnectionId, SocketAddr, Http3Event) -> Option<(Vec<Header>, Vec<u8>)>,
     {
         // DCID で既存接続を検索
         if let Some(conn_key) = resolve_dcid(&self.cid_map, &self.short_cid_lengths, data) {
@@ -222,7 +239,7 @@ impl Server {
         from: SocketAddr,
         handler: &mut F,
     ) where
-        F: FnMut(SocketAddr, Http3Event) -> Option<(Vec<Header>, Vec<u8>)>,
+        F: FnMut(ConnectionId, SocketAddr, Http3Event) -> Option<(Vec<Header>, Vec<u8>)>,
     {
         let ts = timestamp();
         let pkt_info = PacketInfo::default();
@@ -276,7 +293,7 @@ impl Server {
                 _ => None,
             };
 
-            if let Some((headers, body)) = handler(from, event)
+            if let Some((headers, body)) = handler(conn_key.clone(), from, event)
                 && let Some(sid) = stream_id
             {
                 let submit_result = match self.connections.get_mut(conn_key) {

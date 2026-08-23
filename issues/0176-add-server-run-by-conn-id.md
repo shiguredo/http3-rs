@@ -1,7 +1,7 @@
 # Server の run / recv_once ハンドラにコネクション ID を渡す API を追加する
 
 - Created: 2026-08-13
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-23
 - Branch: feature/add-server-run-by-conn-id
 - Polished: {YYYY-MM-DD}
 
@@ -38,3 +38,17 @@
 - `crates/tokio-ngtcp2/src/server.rs` (`Server::run` / `run_by_conn_id` / 内部ループの共通化)
 - `crates/tokio-ngtcp2/src/webtransport.rs` (`ServerWebTransportSession::run` / `recv_once` と `_by_conn_id` 版)
 - `crates/tokio-ngtcp2/tests/server_e2e.rs` (新テスト。`tests/helpers/multi_conn_client.rs` を再利用)
+
+### 修正内容
+
+- `crates/tokio-ngtcp2/src/server.rs`
+  - `Server::run_by_conn_id` を追加 (`FnMut(ConnectionId, SocketAddr, Http3Event) -> Option<(Vec<Header>, Vec<u8>)>`)
+  - `Server::run` はコネクション ID を捨てる薄いラッパーに変更 (後方互換維持)
+  - 内部処理 (`handle_recv` / `handle_existing_connection` / イベントループ) のハンドラ型を 3 引数化
+- `crates/tokio-ngtcp2/src/webtransport.rs`
+  - `ServerWebTransportSession::run_by_conn_id` / `recv_once_by_conn_id` を追加 (`FnMut(ConnectionId, SocketAddr, SessionId, Http3Event) -> bool`)
+  - `run` / `recv_once` はコネクション ID を捨てる薄いラッパーに変更 (後方互換維持)
+  - 内部処理のハンドラ型を 4 引数化
+- `.env` (テスト)
+  - `crates/tokio-ngtcp2/tests/server_e2e.rs`: `test_server_run_by_conn_id_handles_two_connections` を追加 (同一 SocketAddr から 2 接続を張り、ハンドラに渡るコネクション ID が 2 つ異なることを検証)
+  - `crates/tokio-ngtcp2/tests/webtransport_server_e2e.rs`: `test_webtransport_recv_once_by_conn_id` を追加 (ハンドラに渡るコネクション ID がサーバーの接続キーと一致することを検証)

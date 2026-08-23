@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use shiguredo_ngtcp2::Http3Event;
+use shiguredo_ngtcp2::{ConnectionId, Http3Event};
 use tokio::time::timeout;
 use tokio_ngtcp2::{ClientWebTransportSession, ServerWebTransportSession};
 
@@ -183,5 +183,98 @@ async fn test_webtransport_server_survives_malformed_packets() {
     assert!(
         session_established,
         "不正パケットの後でも WebTransport セッションが確立するべき"
+    );
+}
+
+/// `recv_once_by_conn_id` のハンドラでコネクション ID を受け取れることを確認する
+///
+/// コネクション ID はサーバーが生成した SCID (接続マップのキー) であり、
+/// `get_established_conn_ids` が返す値と一致する。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_webtransport_recv_once_by_conn_id() {
+    let (cert_path, key_path) = generate_test_certs();
+
+    let mut server = ServerWebTransportSession::bind(
+        "127.0.0.1:0".parse().expect("test must succeed"),
+        &cert_path,
+        &key_path,
+    )
+    .await
+    .expect("サーバー作成失敗");
+
+    let server_addr = server.local_addr();
+
+    // クライアントタスク: WebTransport セッションを確立する
+    let client_task = tokio::spawn(async move {
+        timeout(Duration::from_secs(10), async {
+            let mut session =
+                ClientWebTransportSession::connect_insecure(server_addr, "localhost", "/wt")
+                    .await
+                    .expect("クライアント作成失敗");
+
+            session.handshake().await.expect("ハンドシェイク失敗");
+
+            session
+                .open_session(&format!("localhost:{}", server_addr.port()), "/wt")
+                .await
+                .expect("セッション確立失敗");
+        })
+        .await
+    });
+
+    // サーバーを手動駆動: ハンドラでコネクション ID を収集する
+    let seen_conn_ids: std::sync::Arc<std::sync::Mutex<Vec<ConnectionId>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen_ids = seen_conn_ids.clone();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let mut handler = |conn_id: ConnectionId,
+                           _addr: std::net::SocketAddr,
+                           _session_id: i64,
+                           event: Http3Event|
+         -> bool {
+            {
+                let mut ids = seen_ids.lock().expect("test mutex should not be poisoned");
+                if !ids.contains(&conn_id) {
+                    ids.push(conn_id.clone());
+                }
+            }
+            matches!(&event, Http3Event::HeadersEnd { .. })
+        };
+
+        server
+            .recv_once_by_conn_id(Duration::from_millis(100), &mut handler)
+            .await
+            .expect("recv_once_by_conn_id 失敗");
+
+        if client_task.is_finished()
+            && !seen_conn_ids
+                .lock()
+                .expect("test mutex should not be poisoned")
+                .is_empty()
+        {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+    }
+
+    client_task
+        .await
+        .expect("クライアントタスク失敗")
+        .expect("クライアントがタイムアウトした");
+
+    // ハンドラにコネクション ID が渡り、サーバー内部の接続キーと一致することを検証する
+    let ids = seen_conn_ids
+        .lock()
+        .expect("test mutex should not be poisoned");
+    assert!(!ids.is_empty(), "コネクション ID がハンドラに渡されるべき");
+    let server_ids = server.get_established_conn_ids();
+    assert!(
+        server_ids.contains(&ids[0]),
+        "ハンドラに渡されたコネクション ID がサーバーの接続キーと一致するべき: {:?}",
+        ids[0]
     );
 }

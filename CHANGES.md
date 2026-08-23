@@ -11,10 +11,8 @@
 
 ## develop
 
-- [REFACTOR] ソースコードのコメントに残っていた issue 番号参照を除去し、理由そのもの (仕様節番号・設計意図) に書き換える
-- [TEST] interop テストの空振り (assert なし・全分岐パス) を修正する: レスポンスボディの厳密検証、WT セッション確立の成功のみパス (draft バージョン不一致を想定内にしない)
-- [REFACTOR] 死にコードと未使用の公開 API を削除する: QPACK ストリームゲッター 8 本、`writable_streams` / `peer_goaway_received` フィールド、`ControlStreamRecv::peer_settings` の二重管理、`Event::ConnectionError` バリアント、到達不能な Post-Base エンコード分岐、未使用エラーバリアント群
 - [TEST] `tokio-s2n-quic` に `connection_state.rs` のユニットテストを追加する (QPACK ストリーム初期化 / SETTINGS 受信 / リクエスト・レスポンス送信 / エラー透過)
+- [ADD] `Server::run_by_conn_id` / `ServerWebTransportSession::run_by_conn_id` / `ServerWebTransportSession::recv_once_by_conn_id` を追加し、ハンドラでコネクション ID (サーバー生成 SCID) を受け取れるようにする (同一 SocketAddr からの複数接続のイベント区別用。既存 `run` / `recv_once` は後方互換維持)
   - @voluntas
 - [CHANGE] MSRV (Minimum Supported Rust Version) を 1.88 から 1.93 に引き上げる
   - @voluntas
