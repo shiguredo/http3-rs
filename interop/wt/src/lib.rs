@@ -98,7 +98,7 @@ pub fn encode_wt_bidi_header(session_id: u64) -> Vec<u8> {
 pub fn decode_wt_bidi_header(data: &[u8]) -> Option<(u64, usize)> {
     let (header, consumed) =
         shiguredo_http3::webtransport::StreamHeader::decode_bidirectional(data)?;
-    Some((header.session_id, consumed))
+    Some((header.session_id(), consumed))
 }
 
 /// WebTransport 単方向ストリームヘッダーをエンコードする
@@ -119,7 +119,7 @@ pub fn encode_wt_uni_header(session_id: u64) -> Vec<u8> {
 pub fn decode_wt_uni_header(data: &[u8]) -> Option<(u64, usize)> {
     let (header, consumed) =
         shiguredo_http3::webtransport::StreamHeader::decode_unidirectional(data)?;
-    Some((header.session_id, consumed))
+    Some((header.session_id(), consumed))
 }
 
 // --- quinn + h3-webtransport ヘルパー ---

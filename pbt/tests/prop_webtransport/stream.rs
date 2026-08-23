@@ -54,7 +54,7 @@ fn prop_unidirectional_header_roundtrip() -> noprop::TestResult {
         let (decoded, consumed) =
             StreamHeader::decode_unidirectional(&buf).expect("valid encoded header");
         assert_eq!(consumed, buf.len());
-        assert_eq!(decoded.session_id, session_id);
+        assert_eq!(decoded.session_id(), session_id);
         Ok(())
     })?;
     Ok(())
@@ -75,7 +75,7 @@ fn prop_bidirectional_header_roundtrip() -> noprop::TestResult {
         let (decoded, consumed) =
             StreamHeader::decode_bidirectional(&buf).expect("valid encoded header");
         assert_eq!(consumed, buf.len());
-        assert_eq!(decoded.session_id, session_id);
+        assert_eq!(decoded.session_id(), session_id);
         Ok(())
     })?;
     Ok(())

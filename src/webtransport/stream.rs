@@ -32,10 +32,18 @@ fn session_id_to_varint(session_id: u64) -> VarInt {
 /// ストリームヘッダー
 ///
 /// WebTransport ストリームの先頭に付加されるヘッダー。
+/// session_id は private であり、構築は検証済みの [`StreamHeader::new`] 経由のみに制限される
+/// (値域を逸脱した session_id で encode するパニック経路を構造的に排除するため)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StreamHeader {
-    /// セッション ID (CONNECT ストリーム ID)
-    pub session_id: u64,
+    session_id: u64,
+}
+
+impl StreamHeader {
+    /// セッション ID を取得
+    pub fn session_id(&self) -> u64 {
+        self.session_id
+    }
 }
 
 /// ストリームヘッダーデコードエラー
@@ -412,6 +420,13 @@ mod tests {
             StreamHeader::new(too_large),
             Err(StreamHeaderDecodeError::SessionIdOutOfRange)
         );
+    }
+
+    #[test]
+    fn test_stream_header_session_id_getter() {
+        // new 経由のヘッダーは検証済みの session_id を返す
+        let header = StreamHeader::new(8).expect("test must succeed");
+        assert_eq!(header.session_id(), 8);
     }
 
     #[test]

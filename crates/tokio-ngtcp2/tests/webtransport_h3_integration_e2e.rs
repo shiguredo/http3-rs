@@ -543,7 +543,8 @@ async fn test_h3_stream_header_bidi_over_ngtcp2() {
 
             assert_eq!(consumed, header_len, "消費バイト数が一致するべき");
             assert_eq!(
-                decoded_header.session_id, session_id as u64,
+                decoded_header.session_id(),
+                session_id as u64,
                 "デコードした session_id が実セッション ID と一致するべき"
             );
 
@@ -675,7 +676,8 @@ async fn test_h3_stream_header_uni_over_ngtcp2() {
 
             assert_eq!(consumed, header_len, "消費バイト数が一致するべき");
             assert_eq!(
-                decoded_header.session_id, session_id as u64,
+                decoded_header.session_id(),
+                session_id as u64,
                 "デコードした session_id が実セッション ID と一致するべき"
             );
 

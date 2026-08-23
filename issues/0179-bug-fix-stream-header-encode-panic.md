@@ -1,7 +1,7 @@
 # StreamHeader を公開フィールドで直接構築すると encode がパニックする
 
 - Created: 2026-08-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-23
 - Branch: feature/fix-stream-header-encode-panic
 - Polished: {YYYY-MM-DD}
 
@@ -32,3 +32,9 @@
 ### 関連ファイル
 
 - `src/webtransport/stream.rs` (`StreamHeader.session_id` フィールド / `encode_unidirectional` / `encode_bidirectional`)
+
+### 修正内容
+
+- `src/webtransport/stream.rs` の `StreamHeader.session_id` を private 化し、構築を検証済みの `StreamHeader::new` 経由のみに制限した (値域違反の session_id で encode するとパニックする経路の構造的排除)
+- `session_id()` アクセサを追加した
+- `src/webtransport/stream.rs` の `tests` モジュールに `test_stream_header_session_id_getter` を追加した
