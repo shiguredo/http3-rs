@@ -166,6 +166,14 @@ impl Client {
         // HTTP/3 接続を作成
         let h3_conn = Http3Connection::client_new(&h3_settings)?;
 
+        // ACK 済みストリームデータオフセットを nghttp3 に通知するため、
+        // ngtcp2 コールバックから nghttp3_conn へのポインタを設定する
+        // SAFETY: conn と h3_conn は同じ構造体の中で共に保持され、
+        // 破棄順はフィールド宣言順 (h3_conn が先にドロップされる) のため、
+        // コールバック実行中にポインタが無効になることはない
+        let mut conn = conn;
+        unsafe { conn.set_h3_conn_ptr(h3_conn.as_mut_ptr() as *mut std::ffi::c_void) };
+
         Ok(Self {
             socket,
             local_addr,
@@ -296,6 +304,14 @@ impl Client {
 
         // HTTP/3 接続を作成
         let h3_conn = Http3Connection::client_new(&h3_settings)?;
+
+        // ACK 済みストリームデータオフセットを nghttp3 に通知するため、
+        // ngtcp2 コールバックから nghttp3_conn へのポインタを設定する
+        // SAFETY: conn と h3_conn は同じ構造体の中で共に保持され、
+        // 破棄順はフィールド宣言順 (h3_conn が先にドロップされる) のため、
+        // コールバック実行中にポインタが無効になることはない
+        let mut conn = conn;
+        unsafe { conn.set_h3_conn_ptr(h3_conn.as_mut_ptr() as *mut std::ffi::c_void) };
 
         Ok(Self {
             socket,

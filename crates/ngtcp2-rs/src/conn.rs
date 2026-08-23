@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::ptr;
 
 use libc::c_int;
+use nghttp3_sys::{nghttp3_conn, nghttp3_conn_add_ack_offset};
 use ngtcp2_sys::*;
 
 use crate::crypto::TlsSession;
@@ -49,6 +50,11 @@ struct ConnectionUserData {
     // サーバー実装はピアが DCID として使用する可能性のある CID を
     // ルーティングテーブルに登録するために使用する (RFC 9000 Section 5.1.1)。
     issued_cids: Vec<ConnectionId>,
+    // nghttp3_conn へのポインタ
+    //
+    // acked_stream_data_offset コールバックから ACK 済みデータ量を通知するために使用する。
+    // Http3Connection が無効になった場合に呼び出す set_h3_conn_null でクリアされる。
+    h3_conn_ptr: *mut c_void,
 }
 
 /// ngtcp2_crypto_conn_ref のラッパー
@@ -126,6 +132,7 @@ impl Connection {
             stream_data_queue: VecDeque::new(),
             datagram_queue: VecDeque::new(),
             issued_cids: Vec::new(),
+            h3_conn_ptr: ptr::null_mut(),
         });
 
         Ok(Self {
@@ -200,6 +207,7 @@ impl Connection {
             stream_data_queue: VecDeque::new(),
             datagram_queue: VecDeque::new(),
             issued_cids: Vec::new(),
+            h3_conn_ptr: ptr::null_mut(),
         });
 
         Ok(Self {
@@ -254,6 +262,7 @@ impl Connection {
             stream_data_queue: VecDeque::new(),
             datagram_queue: VecDeque::new(),
             issued_cids: Vec::new(),
+            h3_conn_ptr: ptr::null_mut(),
         });
         let user_data_ptr = &mut *user_data_box as *mut ConnectionUserData as *mut c_void;
 
@@ -380,6 +389,7 @@ impl Connection {
             stream_data_queue: VecDeque::new(),
             datagram_queue: VecDeque::new(),
             issued_cids: Vec::new(),
+            h3_conn_ptr: ptr::null_mut(),
         });
         let user_data_ptr = &mut *user_data_box as *mut ConnectionUserData as *mut c_void;
 
@@ -996,6 +1006,30 @@ impl Connection {
     pub fn as_ptr(&self) -> *mut ngtcp2_conn {
         self.inner
     }
+
+    /// nghttp3_conn へのポインタをユーザーデータに設定する
+    ///
+    /// `acked_stream_data_offset` コールバック (ピアに ACK されたストリームデータの
+    /// 範囲通知) から [`Http3Connection`](crate::Http3Connection) の
+    /// `nghttp3_conn_add_ack_offset` を呼び出すために使用する。
+    ///
+    /// # Safety
+    ///
+    /// `ptr` は [`Http3Connection`](crate::Http3Connection) を所有しており、
+    /// `set_h3_conn_null` を呼ぶか `Connection` が破棄されるまで有効でなければならない。
+    /// ポインタの行き先は同期ロックを一切持たないため、`Connection` の全メソッドは
+    /// 単一スレッドから呼び出されること。
+    pub unsafe fn set_h3_conn_ptr(&mut self, ptr: *mut c_void) {
+        self.user_data.h3_conn_ptr = ptr;
+    }
+
+    /// nghttp3_conn へのポインタをクリアする
+    ///
+    /// [`Http3Connection`](crate::Http3Connection) が破棄された場合に呼び、以後の
+    /// コールバックから nghttp3_conn にアクセスしないようにする。
+    pub fn set_h3_conn_null(&mut self) {
+        self.user_data.h3_conn_ptr = ptr::null_mut();
+    }
 }
 
 impl Drop for Connection {
@@ -1068,6 +1102,9 @@ fn create_client_callbacks() -> ngtcp2_callbacks {
     // ストリームデータ受信コールバック
     callbacks.recv_stream_data = Some(recv_stream_data_callback);
 
+    // ACK 済みストリームデータオフセットコールバック
+    callbacks.acked_stream_data_offset = Some(acked_stream_data_offset_callback);
+
     // DATAGRAM 受信コールバック
     callbacks.recv_datagram = Some(recv_datagram_callback);
 
@@ -1096,6 +1133,9 @@ fn create_server_callbacks() -> ngtcp2_callbacks {
 
     // ストリームデータ受信コールバック
     callbacks.recv_stream_data = Some(recv_stream_data_callback);
+
+    // ACK 済みストリームデータオフセットコールバック
+    callbacks.acked_stream_data_offset = Some(acked_stream_data_offset_callback);
 
     // DATAGRAM 受信コールバック
     callbacks.recv_datagram = Some(recv_datagram_callback);
@@ -1168,6 +1208,44 @@ unsafe extern "C" fn conn_ref_get_conn_callback(
 ///
 /// QUIC ストリームでデータを受信したときに呼び出される。
 /// 受信したデータを user_data のキューに追加する。
+/// ACK 済みストリームデータオフセットのコールバック
+///
+/// ピアに ACK されたストリームデータの範囲を通知する (RFC 9000 Section 19.3)。
+/// nghttp3 は ACK されたデータサイズを `nghttp3_conn_add_ack_offset` で通知されることで
+/// 送信バッファ内の ACK 済みデータ (要求されていない可能性のある) を
+/// 資源解放できる (RFC 9204 Section 2.4 / nghttp3 の動作仕様)。
+///
+/// user_data には `ConnectionUserData` が渡され、`set_h3_conn_ptr` で設定された
+/// nghttp3_conn ポインタを使って通知する。nghttp3_conn が未設定 (null) の場合は
+/// 何もしない (Http3Connection が破棄済み)。
+unsafe extern "C" fn acked_stream_data_offset_callback(
+    _conn: *mut ngtcp2_conn,
+    stream_id: i64,
+    offset: u64,
+    datalen: u64,
+    user_data: *mut c_void,
+    _stream_user_data: *mut c_void,
+) -> c_int {
+    if user_data.is_null() {
+        return 0;
+    }
+
+    unsafe {
+        let conn_user_data = &mut *(user_data as *mut ConnectionUserData);
+        let h3_conn_ptr = conn_user_data.h3_conn_ptr;
+        if h3_conn_ptr.is_null() {
+            return 0;
+        }
+        nghttp3_conn_add_ack_offset(
+            h3_conn_ptr as *mut nghttp3_conn,
+            stream_id,
+            offset + datalen,
+        );
+    }
+
+    0
+}
+
 unsafe extern "C" fn recv_stream_data_callback(
     _conn: *mut ngtcp2_conn,
     _flags: u32,
@@ -1204,6 +1282,10 @@ unsafe extern "C" fn recv_stream_data_callback(
     0
 }
 
+/// DATAGRAM 受信コールバック
+///
+/// QUIC DATAGRAM フレームを受信したときに呼び出される。
+/// 受信したデータを user_data のキューに追加する。
 /// DATAGRAM 受信コールバック
 ///
 /// QUIC DATAGRAM フレームを受信したときに呼び出される。

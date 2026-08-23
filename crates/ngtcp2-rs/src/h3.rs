@@ -56,6 +56,14 @@ unsafe impl Send for Http3Connection {}
 unsafe impl Sync for Http3Connection {}
 
 impl Http3Connection {
+    /// HTTP/3 接続の生ポインタを取得
+    ///
+    /// ngtcp2 のコールバックから nghttp3_conn の API (`nghttp3_conn_add_ack_offset` 等)
+    /// を呼び出すために使用する。ポインタは本オブジェクトの有効期間中のみ有効。
+    pub fn as_mut_ptr(&self) -> *mut nghttp3_conn {
+        self.inner
+    }
+
     /// クライアント接続を作成
     pub fn client_new(settings: &nghttp3_settings) -> Result<Self> {
         let mut events = Box::new(VecDeque::new());

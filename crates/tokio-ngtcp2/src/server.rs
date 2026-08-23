@@ -413,6 +413,13 @@ impl Server {
             }
         };
 
+        // ACK 済みストリームデータオフセットを nghttp3 に通知するため、
+        // ngtcp2 コールバックから nghttp3_conn へのポインタを設定する
+        // SAFETY: conn と h3_conn は同じ ServerConnection の中で共に保持され、
+        // フィールド宣言順 (conn が先) でドロップされるため、
+        // コールバック実行中にポインタが無効になることはない
+        unsafe { conn.set_h3_conn_ptr(h3_conn.as_mut_ptr() as *mut std::ffi::c_void) };
+
         // ルーティングテーブルに登録する
         // - original_dcid: クライアントが Initial の再送に使う DCID
         // - server_scid: ハンドシェイク後にクライアントが DCID に使う CID

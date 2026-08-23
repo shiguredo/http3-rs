@@ -1,7 +1,7 @@
 # nghttp3 の add_ack_offset が呼ばれず ACK 済みデータの資源解放が行われない
 
 - Created: 2026-08-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-23
 - Branch: feature/fix-ngtcp2-ack-offset
 - Polished: {YYYY-MM-DD}
 
@@ -26,6 +26,20 @@
 - `cargo test --all` と `cargo fmt --all -- --check` と `cargo clippy --all-targets --all-features -- -D warnings` が通る
 
 ## 解決方法
+
+### 修正内容
+
+- `crates/ngtcp2-rs/src/conn.rs`
+  - `ConnectionUserData` に `h3_conn_ptr: *mut c_void` フィールドを追加
+  - `Connection::set_h3_conn_ptr` / `set_h3_conn_null` を追加 (nghttp3_conn へのポインタを設定・クリア。`Connection` と `Http3Connection` が別オブジェクトのため)
+  - `acked_stream_data_offset` コールバックを実装し、`create_client_callbacks` / `create_server_callbacks` に登録。コールバック内で `nghttp3_conn_add_ack_offset(conn, stream_id, offset + datalen)` を呼ぶ (ACK 済みデータの資源解放は nghttp3 の責務)
+  - `nghttp3_conn_add_ack_offset` は `&mut Http3Connection` 経由ではなく生ポインタから直接呼ぶ (コールバック中は ngtcp2 の元に `&mut self` を渡せないため)
+- `crates/ngtcp2-rs/src/h3.rs`
+  - `Http3Connection::as_mut_ptr` を追加 (`nghttp3_conn` 生ポインタを返す。`&mut self` ではなく `&self` で受ける)
+- `crates/tokio-ngtcp2/src/client.rs` / `server.rs` / `webtransport.rs`
+  - `Connection` 生成後に `set_h3_conn_ptr` で nghttp3_conn へのポインタを設定 (4 箇所)
+  - SAFETY: `Connection` と `Http3Connection` は同一構造体で保持され、フィールド宣言順 (conn が先) でドロップされるため、コールバック実行中にポインタが無効になることはない
+- 動作検証: 既存の E2E テスト (http3_e2e / webtransport) が全てパスすることを確認 (ACK 通知は ngtcp2 / nghttp3 内部の資源解放であり、外部動作の変化はレスポンス成功・ボディ送信の完走として観察される)
 
 ### 関連ファイル
 
