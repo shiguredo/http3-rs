@@ -6085,6 +6085,32 @@ mod tests {
     }
 
     #[test]
+    fn test_wt_enabled_greater_than_one_returns_settings_error() {
+        // SETTINGS_WT_ENABLED > 1 を受信したクライアントは H3_SETTINGS_ERROR で接続を閉じる
+        // (draft-ietf-webtrans-http3-16 Section 3.1 の MUST)
+        let mut conn = Connection::client(Settings::default());
+        conn.set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+
+        let wt = crate::webtransport::Settings::new().wt_enabled(vi(2));
+        let mut settings = crate::settings::Settings::new();
+        settings.wt_settings = Some(wt);
+        let payload = crate::frame::SettingsPayload::from_settings(&settings);
+        let mut buf = vec![0u8; 256];
+        let len = crate::frame::encode_frame(&mut buf, &crate::frame::Frame::Settings(payload))
+            .expect("テスト用の SETTINGS フレームエンコードに成功すること");
+        buf.truncate(len);
+
+        let mut stream_data = vec![0x00]; // ストリームタイプ (制御ストリーム)
+        stream_data.extend_from_slice(&buf);
+        let err = conn.feed_stream(3, &stream_data, false).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ConnectionError(ErrorCode::SettingsError)
+        ));
+    }
+
+    #[test]
     fn test_previous_wt_settings_decrease_bidi_returns_settings_error() {
         let mut conn = Connection::client(Settings::default());
         conn.set_control_stream_id(2)

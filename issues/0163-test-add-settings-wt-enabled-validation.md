@@ -1,7 +1,7 @@
 # SETTINGS_WT_ENABLED > 1 の検証 (draft-16 Section 3.1) にテストがない
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-23
 - Branch: feature/test-add-settings-wt-enabled-validation
 - Polished: {YYYY-MM-DD}
 
@@ -32,3 +32,7 @@ draft-ietf-webtrans-http3-16 追従で追加された「クライアントが `S
 - `src/connection/mod.rs` (SETTINGS 処理 / `ErrorCode::SettingsError`)
 - `src/webtransport/settings.rs` (`Settings::wt_enabled`)
 - 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 3.1
+
+### 修正内容
+
+- `src/connection/mod.rs` の inline テストモジュールに `test_wt_enabled_greater_than_one_returns_settings_error` を追加した。`wt_enabled(VarInt::from_static(2))` を設定持つサーバーの制御ストリームを `feed_stream` し、`Error::ConnectionError(ErrorCode::SettingsError)` を検証する
