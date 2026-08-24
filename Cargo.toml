@@ -1,6 +1,6 @@
 [package]
 name = "shiguredo_http3"
-version = "2026.1.0-canary.7"
+version = "2026.1.0-canary.8"
 edition.workspace = true
 rust-version.workspace = true
 description = "Sans I/O HTTP/3 Library"
