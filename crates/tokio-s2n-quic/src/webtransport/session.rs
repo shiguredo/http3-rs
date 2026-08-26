@@ -15,7 +15,7 @@ pub struct WtSession {
     bidi_acceptor: BidirectionalStreamAcceptor,
     /// 接続ハンドル
     handle: s2n_quic::connection::Handle,
-    /// CONNECT ストリームの送信端 (CLOSE_WEBTRANSPORT_SESSION 送信用)
+    /// CONNECT ストリームの送信端 (WT_CLOSE_SESSION 送信 + FIN 送出用)
     connect_send: SendStream,
     /// WT 単方向ストリーム受信チャネル
     uni_rx: mpsc::Receiver<WtRecvStream>,
@@ -147,19 +147,25 @@ impl WtSession {
 
     /// セッションをクローズする
     ///
-    /// CLOSE_WEBTRANSPORT_SESSION カプセルを CONNECT ストリームに送信する
-    /// (draft-ietf-webtrans-http3-15 Section 5.6)
+    /// WT_CLOSE_SESSION カプセルを H3 DATA フレームに包んで CONNECT ストリームに送信し、
+    /// 直後に FIN を送出する
+    /// (draft-ietf-webtrans-http3-16 Section 6: WT_CLOSE_SESSION を送信したエンドポイントは
+    /// CONNECT ストリームに即座に FIN を送らなければならない)
     pub async fn close(&mut self, code: u32, reason: &str) -> crate::Result<()> {
         let capsule = Capsule::CloseSession {
             error_code: code,
             message: reason.to_string(),
         };
+        // CONNECT ストリーム上のカプセルは HTTP/3 DATA フレーム (0x00 + varint 長 + ペイロード)
+        // として送出する必要がある (RFC 9297 Section 3.1 / RFC 9114 Section 7.2.1)。
         let mut buf = Vec::new();
-        capsule.encode(&mut buf);
+        capsule.encode_as_data_frame(&mut buf);
         self.connect_send
             .send(Bytes::from(buf))
             .await
-            .map_err(crate::Error::transport)
+            .map_err(crate::Error::transport)?;
+        // FIN 送出
+        self.connect_send.finish().map_err(crate::Error::transport)
     }
 }
 

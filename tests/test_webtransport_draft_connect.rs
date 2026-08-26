@@ -1130,3 +1130,133 @@ mod pending_data_frame {
         assert!(matches!(err, Error::StreamError(ErrorCode::MessageError)));
     }
 }
+
+// =========================================================================
+// CONNECT ストリーム上の WT_CLOSE_SESSION カプセルの H3 DATA フレーム包装
+// =========================================================================
+
+/// CONNECT ストリーム上の WT_CLOSE_SESSION が H3 DATA フレームに
+/// 包まれているときのみ受信側で処理されることを検証する回帰テスト。
+///
+/// RFC 9297 Section 3.1 / RFC 9114 Section 7.2.1 / draft-ietf-webtrans-http3-16 Section 6
+/// により、CONNECT ストリーム上のカプセルは HTTP/3 の DATA フレーム
+/// (0x00 + varint 長 + ペイロード) として送出する必要があり、WT_CLOSE_SESSION も
+/// DATA フレームに包まなければならない。包まずに raw カプセルバイトのみを送ると、
+/// 先頭 varint (0x2843) が H3 フレームタイプとして解釈され、未知フレームとして
+/// 無視されるためセッション終了通知に到達しない。
+///
+/// テストは既存の draft-15 セットアップヘルパーを流用する。
+/// WT_CLOSE_SESSION の DATA フレーム包装要件と `SessionClosed` イベント発火経路は
+/// draft-15 と draft-16 で同一のため妥当。
+mod close_session_capsule_framing {
+    use super::*;
+
+    /// draft-15 で CONNECT ストリームを確立し、セッション ID を返す
+    fn establish_draft15_session(server: &mut ServerConnection) -> u64 {
+        let client_ctrl = build_draft15_client_ctrl_with_ecp();
+        feed_client_settings(server, &client_ctrl);
+
+        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let frame = build_headers_frame(&headers);
+        server
+            .feed_stream(0, &frame, false)
+            .expect("テスト用の CONNECT ヘッダー送信に成功すること");
+
+        let response = vec![
+            Header::new(b":status", b"200").expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b"wt-protocol", b"test").expect("テスト用のヘッダー作成に成功すること"),
+        ];
+        server
+            .send_response(0, &response, false)
+            .expect("テスト用のレスポンス送信に成功すること");
+
+        // SessionEstablished イベントを消費
+        loop {
+            match server
+                .poll_event()
+                .expect("SessionEstablished 待機中のイベント取得に成功すること")
+            {
+                Some(Event::WebTransport(WebTransportEvent::SessionEstablished {
+                    session_id,
+                    ..
+                })) => return session_id,
+                Some(_) => {}
+                None => panic!("SessionEstablished イベントが発火していない"),
+            }
+        }
+    }
+
+    #[test]
+    fn wt_close_session_wrapped_in_data_frame_is_processed() {
+        // WT_CLOSE_SESSION を H3 DATA フレームに包んで送信すると
+        // SessionClosed イベントとして処理される (正しい経路)
+        let mut server = setup_server(true);
+        let session_id = establish_draft15_session(&mut server);
+
+        let close_session = webtransport::Capsule::CloseSession {
+            error_code: 42,
+            message: String::from("bye"),
+        };
+        let mut framed = Vec::new();
+        close_session.encode_as_data_frame(&mut framed);
+        server
+            .feed_stream(session_id, &framed, false)
+            .expect("DATA フレームに包んだ WT_CLOSE_SESSION 送信に成功すること");
+
+        // SessionClosed イベントが発火し、カプセルの値が伝播する
+        let events = server
+            .drain_events()
+            .expect("テスト用のイベント取得に成功すること");
+        let closed = events.iter().find_map(|e| match e {
+            Event::WebTransport(WebTransportEvent::SessionClosed {
+                session_id: sid,
+                close_error_code,
+                close_message,
+                ..
+            }) if *sid == session_id => Some((*close_error_code, close_message.clone())),
+            _ => None,
+        });
+        let (close_error_code, close_message) =
+            closed.expect("DATA フレーム包装済み WT_CLOSE_SESSION で SessionClosed が発火すること");
+        assert_eq!(
+            close_error_code, 42,
+            "SessionClosed の close_error_code がカプセルの値と一致すること"
+        );
+        assert_eq!(
+            close_message, "bye",
+            "SessionClosed の close_message がカプセルの値と一致すること"
+        );
+    }
+
+    #[test]
+    fn wt_close_session_raw_capsule_bytes_are_not_processed() {
+        // WT_CLOSE_SESSION の raw カプセルバイト (DATA フレームで包まない) を送信すると
+        // 先頭 varint 0x2843 が H3 フレームタイプとして解釈され、未知フレームとして
+        // 無音で破棄されるため、SessionClosed イベントは発火せず、他のイベントも発火しない
+        let mut server = setup_server(true);
+        let session_id = establish_draft15_session(&mut server);
+
+        let close_session = webtransport::Capsule::CloseSession {
+            error_code: 42,
+            message: String::from("bye"),
+        };
+        let mut raw = Vec::new();
+        close_session.encode(&mut raw);
+        // 未知フレームなのでエラーにならず、そのまま受理される (フレームボディはスキップされる)
+        server
+            .feed_stream(session_id, &raw, false)
+            .expect("raw カプセルバイト送信が未知フレームとして受理されること");
+
+        let events = server
+            .drain_events()
+            .expect("テスト用のイベント取得に成功すること");
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::SessionClosed { session_id: sid, .. })
+                    if *sid == session_id
+            )),
+            "raw カプセルバイトからは SessionClosed が発火しないこと: {events:?}"
+        );
+    }
+}
