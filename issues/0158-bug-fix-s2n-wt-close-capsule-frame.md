@@ -1,7 +1,7 @@
 # tokio-s2n-quic の WtSession::close がカプセルを H3 DATA フレームで包まず送信する
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-27
 - Branch: feature/fix-s2n-wt-close-capsule-frame
 - Polished: 2026-08-26
 
@@ -34,9 +34,29 @@
 
 ## 解決方法
 
-### 関連ファイル
+### 変更内容
 
-- `crates/tokio-s2n-quic/src/webtransport/session.rs` (`WtSession::close` / `connect_send`。`Capsule::encode_as_data_frame` の利用と `finish()` の追加。ついでに `close()` / `connect_send` の doc コメントのカプセル名 (CLOSE_WEBTRANSPORT_SESSION → WT_CLOSE_SESSION) とドラフト版参照 (15 → 16) を修正する)
-- リポジトリルートの `examples/wt_server` の `WtSession::close` も同一バグを持つが、本 issue の対象外とする (呼び出し元が存在せず、影響が限定的なため)
-- 0156 と同一ファイルを変更するが、本 issue を先に実装する (0156 の完了条件テストが本 issue の修正を前提としているため)
-- 一次資料: `refs/webtrans/rfc9297.txt` Section 3 (Capsule Protocol)、`refs/h3/rfc9114.txt` Section 9、`refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 6、`docs/SAFARI_WT.md`
+- `crates/tokio-s2n-quic/src/webtransport/session.rs` の `WtSession::close`:
+  - `Capsule::encode` の raw カプセルバイトを送っていた実装を `Capsule::encode_as_data_frame` に切り替え、WT_CLOSE_SESSION を H3 DATA フレーム (0x00 + varint 長 + ペイロード) として送出するようにした
+  - カプセル送信直後に `SendStream::finish()` を呼び、CONNECT ストリームに FIN を送出するようにした (draft-16 Section 6 の MUST)
+  - `connect_send` フィールドおよび `close()` メソッドの doc コメントを実態に合わせて更新した (旧名 `CLOSE_WEBTRANSPORT_SESSION` を `WT_CLOSE_SESSION` に、参照 draft を 15 から 16 に置き換え、FIN 送出用途を明記)
+- 実装コメントに RFC 9297 Section 3.1 / RFC 9114 Section 7.2.1 の DATA フレーム根拠と draft-16 Section 6 の FIN MUST 根拠を記載した
+- `tests/test_webtransport_draft_connect.rs` に `close_session_capsule_framing` モジュールを追加し、以下の 2 テストで回帰を防ぐようにした:
+  - `wt_close_session_wrapped_in_data_frame_is_processed`: `encode_as_data_frame` の出力を `feed_stream` に注入すると `SessionClosed` イベントが発火し、`close_error_code` / `close_message` がカプセルの値と一致する
+  - `wt_close_session_raw_capsule_bytes_are_not_processed`: `encode` の raw カプセルバイトを `feed_stream` に注入すると先頭 varint (0x2843) が未知 H3 フレームタイプとして無音破棄され `SessionClosed` が発火しない
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した
+
+### 対象外
+
+- リポジトリルートの `examples/wt_server` の `WtSession::close` も同一バグを持つが、本 issue の対象外 (呼び出し元が存在せず、影響が限定的)
+- application error message の 1024 バイト制限 (draft-16 Section 6) の検証は本 issue の対象外
+- `close()` の二重呼び出し保護 (`&mut self` のまま idempotent 化しない) は本 issue の対象外
+- `crates/tokio-s2n-quic/src/webtransport/server.rs` の同クレート内フィールドコメントに残る旧名 `CLOSE_WEBTRANSPORT_SESSION` は本 issue の対象外 (`close()` / `connect_send` の doc に限定した設計方針のため)
+- `close()` の実 QUIC 経由結合テスト (CONNECT ストリームの FIN 到達と `SessionClosed` の実接続経路) は 0156 の統合テストで実施する前提
+
+### 一次資料
+
+- `refs/webtrans/rfc9297.txt` Section 3.1 (HTTP Data Streams)
+- `refs/h3/rfc9114.txt` Section 7.2.1 (DATA Frame)
+- `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 6 (Session Termination)
+- `docs/SAFARI_WT.md`
