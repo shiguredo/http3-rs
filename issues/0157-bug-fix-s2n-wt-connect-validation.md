@@ -3,7 +3,7 @@
 - Created: 2026-08-08
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-s2n-wt-connect-validation
-- Polished: 2026-08-16
+- Polished: 2026-08-26
 
 ## 目的
 
@@ -17,7 +17,7 @@ CONNECT レスポンスの `:status` と、CONNECT リクエストの `:method` 
 
 ## 設計方針
 
-- クライアント: CONNECT レスポンスの `:status` が 2xx のときのみセッション確立とする。sans-I/O 層は 2xx 時のみ `Event::WebTransport(WebTransportEvent::SessionEstablished)` を発行済み (`handle_wt_connect_response`) のため、このイベントを確立判定に使う (`:status` を直接検証しない。目的の「`:status` の検証」はこの委譲で満たされる)。非 2xx の場合は `crate::Error::ConnectionClosed` を返す (ステータスコード付きの新エラー variant は追加しない)。ただし、サーバーが fin なしで非 2xx を返した場合に `SessionEstablished` 待ちでハングしないよう、`:status` ヘッダーを監視して非 2xx を検出したら早期に `Err` を返す
+- クライアント: CONNECT レスポンスの `:status` が 2xx のときのみセッション確立とする。sans-I/O 層は 2xx 時のみ `Event::WebTransport(WebTransportEvent::SessionEstablished)` を発行済み (`handle_wt_connect_response`) のため、このイベントを確立判定に使う (`:status` を直接検証しない。目的の「`:status` の検証」はこの委譲で満たされる)。非 2xx の場合は `crate::Error::ConnectionClosed` を返す (ステータスコード付きの新エラー variant は追加しない)。ただし、サーバーが fin なしで非 2xx を返した場合に `SessionEstablished` 待ちでハングしないよう、`:status` ヘッダーを監視して最終レスポンスの非 2xx を検出したら早期に `Err` を返す。1xx 中間レスポンス (例: 103 Early Hints。RFC 9114 Section 4.1) は失敗扱いせずスキップする (sans-I/O 層の `is_informational_status` と同様の区別)
 - サーバー: `from_connection` で `:method` / `:protocol` を検証する。検証は既存の `ConnectRequest::from_headers` (examples で使用実績あり) を利用する。検証失敗時の応答は 2 経路に分かれる:
   - GET 等の非 WebTransport リクエスト (from_headers の `:method` / `:protocol` 検証失敗): ピアに 405 を返してから `Err` を返す (draft-16 Section 3.2 は非対応リソースへの応答を 405 SHOULD とする。0135 で 404 → 405 に変更済み)。405 送信は `reject()` が `self` を消費するため、`from_connection` 内では送信ロジックを共通ヘルパーとして抽出して使う
   - `:scheme` 不正等の WebTransport 形式のリクエスト: sans-I/O 層の `validate_wt_connect_request_server` が `Err` を返し、既存の `reset_stream_on_stream_error` 経路で RESET_STREAM になる (本 issue での追加対応は不要)
