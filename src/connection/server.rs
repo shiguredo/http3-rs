@@ -162,13 +162,19 @@ impl ServerConnection {
         self.inner.send_datagram(session_id, payload)
     }
 
-    /// ローカル開始の WebTransport 双方向ストリームを登録する
+    /// ローカル開始の WebTransport ストリームを登録する
     ///
-    /// サーバーが自ら開いた双方向ストリーム (ストリーム ID の下位 2 ビットが
-    /// 0x01。RFC 9000 Section 2.1) をセッションに関連付ける。登録後は
-    /// `feed_stream` に渡した受信データが WebTransport ストリームとして処理され、
-    /// `BidiStreamData` / `BidiStreamEnd` イベントが発火する
-    /// (draft-ietf-webtrans-http3-16 Section 4.3)。
+    /// サーバーが自ら開いた WebTransport ストリームをセッションに関連付ける。
+    /// 対象は下記の 2 種類:
+    ///
+    /// - **双方向 (bidi)**: ストリーム ID の下位 2 ビットが 0x01 (RFC 9000 Section 2.1)。
+    ///   登録後は `feed_stream` に渡した受信データが WebTransport ストリームとして
+    ///   処理され、`BidiStreamData` / `BidiStreamEnd` イベントが発火する
+    ///   (draft-ietf-webtrans-http3-16 Section 4.3)
+    /// - **単方向 (uni)**: ストリーム ID の下位 2 ビットが 0x03。ローカル uni は
+    ///   送信専用でピアからは STOP_SENDING のみ届く。登録することで
+    ///   `WebTransportEvent::StreamStopSending` (セッション ID 付き) として通知される
+    ///   (draft-ietf-webtrans-http3-16 Section 4.4)
     ///
     /// ストリームを開いた直後に呼び出すこと。
     pub fn register_local_wt_stream(

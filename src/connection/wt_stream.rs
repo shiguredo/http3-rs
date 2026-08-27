@@ -153,37 +153,47 @@ impl Connection {
         Ok(buf)
     }
 
-    /// ローカル開始の WebTransport 双方向ストリームを登録する
+    /// ローカル開始の WebTransport ストリームを登録する
     ///
-    /// アプリが自ら開いた双方向ストリーム (クライアント側は 0x00、サーバー側は
-    /// 0x01 の下位 2 ビットを持つストリーム ID。RFC 9000 Section 2.1) を
-    /// セッションに関連付ける。登録後は `feed_stream` に渡した受信データが
-    /// HTTP/3 リクエストではなく WebTransport ストリームとして処理され、
-    /// `BidiStreamData` / `BidiStreamEnd` イベントが発火する。
+    /// アプリが自ら開いたストリームをセッションに関連付ける。対象は下記の 2 種類:
+    ///
+    /// - **双方向 (bidi)**: クライアント側は 0x00、サーバー側は 0x01 の下位 2 ビット
+    ///   を持つストリーム ID (RFC 9000 Section 2.1)。登録後は `feed_stream` に渡した
+    ///   受信データが HTTP/3 リクエストではなく WebTransport ストリームとして処理され、
+    ///   `BidiStreamData` / `BidiStreamEnd` イベントが発火する
+    /// - **単方向 (uni)**: クライアント側は 0x02、サーバー側は 0x03 の下位 2 ビット
+    ///   を持つストリーム ID。ローカル開始 uni はローカルにとって送信専用のため
+    ///   受信データは存在しない。登録することでピアからの STOP_SENDING を
+    ///   `StreamStopSending` イベントとしてセッション ID 付きで通知できる
+    ///   (draft-ietf-webtrans-http3-16 Section 4.4)。
+    ///   ローカル開始 uni に対する STREAM (受信データ) / FIN / RESET_STREAM の到着は
+    ///   QUIC 層で STREAM_STATE_ERROR となり sans-I/O へは到達しない
+    ///   (RFC 9000 Section 19.4 / 19.8) ため、sans-I/O 層に防御コードは持たない。
     ///
     /// 受信データにはストリームヘッダー (signal value + session ID) が含まれない。
     /// ヘッダーは開始側がストリーム先頭で 1 回だけ送信する
     /// (draft-ietf-webtrans-http3-16 Section 4.3)。
     ///
-    /// セッション終了時の RESET 対象に含めるため、セッションにも関連付けを行う。
+    /// 登録はセッション終了時まで維持され、`wt_stream_header_len` はヘッダー長を返し続ける。
+    /// 自側が送信したヘッダーを含む RESET_STREAM_AT の reliable size 計算に必要なため
+    /// (draft-ietf-webtrans-http3-16 Section 4.4)。セッション終了時、登録された bidi / uni は
+    /// `WebTransportEvent::SessionClosed { reset_streams }` に stream_id と reliable_size 付きで
+    /// 含まれ、統合層は RESET_STREAM_AT を送出する。
     ///
-    /// FIN 受信後も登録はセッション終了時まで維持され、`wt_stream_header_len` は
-    /// ヘッダー長を返し続ける。自側が送信したヘッダーを含む RESET_STREAM_AT の
-    /// reliable size 計算に必要なため (draft-ietf-webtrans-http3-16 Section 4.4)。
-    /// また FIN で WT_MAX_STREAMS クレジットは返却されない
-    /// (WT_MAX_STREAMS はピアが開くストリーム数の制限。Section 5.3)。
+    /// bidi の FIN で WT_MAX_STREAMS クレジットは返却されない (WT_MAX_STREAMS はピアが
+    /// 開くストリーム数の制限。Section 5.3)。
     ///
-    /// 登録 API はストリームを開いた直後に呼び出すこと。登録前に受信データが
-    /// 到着すると HTTP/3 リクエストとして誤処理される可能性がある。
+    /// 登録 API はストリームを開いた直後に呼び出すこと (bidi の場合、登録前に受信データが
+    /// 到着すると HTTP/3 リクエストとして誤処理される可能性がある)。
     ///
     /// エラーになる条件:
-    /// - ストリーム ID が単方向 (0x02 / 0x03) またはローカル開始でない
+    /// - ストリーム ID がローカル開始でない (ピア開始 bidi・ピア開始 uni)
     /// - セッション ID が `wt_sessions` に存在しない、または Established でない
     ///   (Pending セッションへの登録は拒否する。仮に登録すると受信データが
     ///   Section 4.6 のバッファリング経路に乗り、セッション確立時に受信
     ///   ストリームとして誤カウントされるため。draft-ietf-webtrans-http3-16
     ///   Section 4.6)
-    /// - 同一ストリーム ID の二重登録
+    /// - 同一ストリーム ID の二重登録 (bidi / uni 両方の登録先を確認する)
     /// - 既に HTTP/3 ストリームとして作成済み (`streams` に存在)
     ///
     /// 本 API はドラフト仕様 (draft-ietf-webtrans-http3-16) に基づくため、
@@ -195,16 +205,21 @@ impl Connection {
     ) -> Result<(), Error> {
         let kind = crate::stream::StreamKind::from_stream_id(stream_id);
 
-        // 単方向ストリームは開始者のみが送信する (RFC 9000 Section 2.1) ため、
-        // ローカル開始ストリームの受信データは存在しない。登録対象外。
-        // 双方向ストリームでもローカル開始でない (ピア開始) 場合は、
-        // ヘッダーが付くピア開始ストリームとして `feed_stream` が処理する。
-        if kind.is_unidirectional() || !self.is_local_initiated_bidi(kind) {
+        // 双方向 / 単方向のいずれもローカル開始でない場合 (ピア開始) は登録対象外。
+        // 双方向のピア開始ストリームはヘッダーが付くリクエストストリームとして
+        // `feed_stream` が処理する。単方向のピア開始ストリームはピアが送信するので
+        // 受信データを持ち登録の対象になるが、これは `resolve_wt_uni_stream_session_id`
+        // が扱う。
+        let is_local_bidi = self.is_local_initiated_bidi(kind);
+        let is_local_uni = self.is_local_initiated_uni(kind);
+        if !is_local_bidi && !is_local_uni {
             return Err(Error::ConnectionError(ErrorCode::IdError));
         }
 
-        // 二重登録を拒否する
-        if self.wt_bidi_streams.contains_key(&stream_id) {
+        // 二重登録を拒否する (bidi / uni 両方の登録先を確認する)
+        if self.wt_bidi_streams.contains_key(&stream_id)
+            || self.wt_uni_streams.contains_key(&stream_id)
+        {
             return Err(Error::ConnectionError(ErrorCode::StreamCreationError));
         }
 
@@ -225,7 +240,16 @@ impl Connection {
 
         // セッション終了時の RESET 対象 (reliable size 計算を含む) に含める
         session.associate_stream(stream_id);
-        self.wt_bidi_streams.insert(stream_id, session_id);
+        if is_local_bidi {
+            self.wt_bidi_streams.insert(stream_id, session_id);
+        } else {
+            // ローカル開始の単方向 WT ストリーム。ピアは受信専用となるため、
+            // ピアからは STOP_SENDING のみ届く (RFC 9000 Section 3.5)。
+            // ここに登録することで `handle_wt_stop_sending` が
+            // `WebTransportEvent::StreamStopSending` をセッション ID 付きで発火する
+            // (draft-ietf-webtrans-http3-16 Section 4.4)。
+            self.wt_uni_streams.insert(stream_id, session_id);
+        }
         Ok(())
     }
 
@@ -238,6 +262,17 @@ impl Connection {
         match self.role {
             Role::Client => kind == crate::stream::StreamKind::ClientBidi,
             Role::Server => kind == crate::stream::StreamKind::ServerBidi,
+        }
+    }
+
+    /// ストリーム種別がローカル開始の単方向ストリームかどうかを判定する
+    ///
+    /// クライアント側はクライアント開始 uni (0x02)、サーバー側はサーバー開始 uni (0x03)
+    /// がローカル開始になる (RFC 9000 Section 2.1)。
+    pub(crate) fn is_local_initiated_uni(&self, kind: crate::stream::StreamKind) -> bool {
+        match self.role {
+            Role::Client => kind == crate::stream::StreamKind::ClientUni,
+            Role::Server => kind == crate::stream::StreamKind::ServerUni,
         }
     }
 
