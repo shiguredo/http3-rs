@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use bytes::Bytes;
 use s2n_quic::connection::BidirectionalStreamAcceptor;
-use shiguredo_http3::webtransport::ConnectResponse;
 use shiguredo_http3::webtransport::error::ErrorCode as WtErrorCode;
+use shiguredo_http3::webtransport::{ConnectError, ConnectRequest, ConnectResponse};
 use shiguredo_http3::{Event, WebTransportEvent};
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
@@ -227,42 +227,29 @@ impl WtSessionRequest {
         // QPACK エンコーダーストリームが先に到着してブロック解除される場合に備え、
         // recv_stream.receive() と unblock_notify.notified() を select! で待つ。
         //
+        // 全ヘッダーを収集し、HeadersEnd で `ConnectRequest::from_headers` により
+        // `:method = CONNECT` / `:protocol = webtransport-h3 | webtransport` を検証する
+        // (draft-ietf-webtrans-http3-16 Section 3.2)。
+        //
         // ハンドシェイク中に到着した WebTransport イベント (楽観的な WT_CLOSE_SESSION 等) は
         // 破棄せず `pending_wt_events` に貯めて受信タスクへ引き継ぐ。
-        let mut path = Vec::new();
-        let mut authority = Vec::new();
+        let mut collected_headers: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         let mut headers_complete = false;
         let mut pending_wt_events: Vec<WebTransportEvent> = Vec::new();
 
         while !headers_complete {
-            // QPACK エンコーダーストリームのデータが先に処理されて
-            // notify_one() が取りこぼされる場合に備え、毎回 drain_events を確認する
-            {
-                let events = {
-                    let mut s = state.lock().expect("mutex should not be poisoned");
-                    s.drain_events()?
-                };
-                for event in events {
-                    match event {
-                        Event::Header { name, value, .. } => {
-                            if name == b":path" {
-                                path = value;
-                            } else if name == b":authority" {
-                                authority = value;
-                            }
-                        }
-                        Event::HeadersEnd { .. } => {
-                            headers_complete = true;
-                        }
-                        Event::WebTransport(wt) if is_forwardable_wt_event(&wt) => {
-                            pending_wt_events.push(wt);
-                        }
-                        _ => {}
-                    }
-                }
-                if headers_complete {
-                    break;
-                }
+            let events = state
+                .lock()
+                .expect("mutex should not be poisoned")
+                .drain_events()?;
+            collect_request_events(
+                events,
+                &mut collected_headers,
+                &mut headers_complete,
+                &mut pending_wt_events,
+            );
+            if headers_complete {
+                break;
             }
 
             tokio::select! {
@@ -273,43 +260,32 @@ impl WtSessionRequest {
                         Err(e) => return Err(crate::Error::transport(e)),
                     };
 
-                    let events = {
-                        let mut s = state.lock().expect("mutex should not be poisoned");
-                        match s.process_stream_data(connect_stream_id, &data, fin) {
-                            Ok(events) => events,
-                            Err(e) => {
-                                // ストリームレベルのエラーは RESET_STREAM でピアに伝える
-                                // (接続は維持する: RFC 9114 Section 8)
-                                crate::internal::reset_stream_on_stream_error(
-                                    &mut send_stream,
-                                    &e,
-                                );
-                                return Err(e);
-                            }
+                    let events = match state
+                        .lock()
+                        .expect("mutex should not be poisoned")
+                        .process_stream_data(connect_stream_id, &data, fin)
+                    {
+                        Ok(events) => events,
+                        Err(e) => {
+                            // ストリームレベルのエラーは RESET_STREAM でピアに伝える
+                            // (接続は維持する: RFC 9114 Section 8)
+                            crate::internal::reset_stream_on_stream_error(
+                                &mut send_stream,
+                                &e,
+                            );
+                            return Err(e);
                         }
                     };
+                    collect_request_events(
+                        events,
+                        &mut collected_headers,
+                        &mut headers_complete,
+                        &mut pending_wt_events,
+                    );
 
-                    for event in events {
-                        match event {
-                            Event::Header { name, value, .. } => {
-                                if name == b":path" {
-                                    path = value;
-                                } else if name == b":authority" {
-                                    authority = value;
-                                }
-                            }
-                            Event::HeadersEnd { .. } => {
-                                headers_complete = true;
-                            }
-                            Event::WebTransport(wt) if is_forwardable_wt_event(&wt) => {
-                                pending_wt_events.push(wt);
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    if fin {
-                        break;
+                    if fin && !headers_complete {
+                        // ピア側で FIN のみ送信 (拒否・切断) されて CONNECT ヘッダーが揃わなかった
+                        return Err(crate::Error::ConnectionClosed);
                     }
                 }
                 _ = unblock_notify.notified() => {
@@ -321,9 +297,35 @@ impl WtSessionRequest {
             }
         }
 
+        // 収集したヘッダーを `ConnectRequest::from_headers` で検証する。
+        // `:method` / `:protocol` が不正な場合 (通常の GET 等) はピアに 405 を返してから Err にする
+        // (draft-ietf-webtrans-http3-16 Section 3.2: 非対応リソースへの応答は 405 SHOULD)。
+        //
+        // それ以外の `ConnectError` は原則 sans-I/O 層の `validate_wt_connect_request_server` が
+        // 先に弾くが、`InvalidEncoding` はエッジケースで到達し得る (例: `origin` /
+        // `wt-available-protocols` 値の非 UTF-8。sans-I/O 側の `is_valid_field_value` は
+        // obs-text `0x80..=0xFF` を許容するため通過する)。到達時は Internal エラーで
+        // ハンドシェイクを中断する (RESET_STREAM 送出は行わない)。
+        let header_refs: Vec<(&[u8], &[u8])> = collected_headers
+            .iter()
+            .map(|(n, v)| (n.as_slice(), v.as_slice()))
+            .collect();
+        let connect_request = match ConnectRequest::from_headers(&header_refs) {
+            Ok(req) => req,
+            Err(ConnectError::InvalidMethod | ConnectError::InvalidProtocol) => {
+                send_reject_response(&mut send_stream, &state, connect_stream_id, 405).await?;
+                return Err(crate::Error::ConnectionClosed);
+            }
+            Err(e) => {
+                return Err(crate::Error::Internal(format!(
+                    "invalid CONNECT request: {e}"
+                )));
+            }
+        };
+
         Ok(Self {
-            path,
-            authority,
+            path: connect_request.path.into_bytes(),
+            authority: connect_request.authority.into_bytes(),
             stream_id: connect_stream_id,
             state,
             send_stream,
@@ -445,42 +447,79 @@ impl WtSessionRequest {
                 "reject status must be 4xx or 5xx, got {status}"
             )));
         }
-
-        let response_headers = ConnectResponse::new(status).to_headers()?;
-
-        let (data, fin) = {
-            let mut s = self.state.lock().expect("mutex should not be poisoned");
-            s.h3_conn
-                .send_response(self.stream_id, &response_headers, true)?;
-
-            // エンコード済みデータを取得 (FIN 交付までループする)
-            // FIN (送信方向クローズ) はデータ全消費後の追加呼び出しで交付される。
-            // 送信方向クローズがメッセージ終端を表すことは RFC 9114 Section 4.1 が定める
-            let mut buf = Vec::new();
-            let mut fin = false;
-            while let Some((chunk, f)) = s.get_stream_data(self.stream_id) {
-                buf.extend_from_slice(&chunk);
-                fin = f;
-                if fin {
-                    break;
-                }
-            }
-            (buf, fin)
-        };
-
         let mut send_stream = self.send_stream;
-        send_stream
-            .send(Bytes::from(data))
-            .await
-            .map_err(crate::Error::transport)?;
-
-        // FIN 交付を受領した場合のみ finish() する
-        if fin {
-            send_stream.finish().map_err(crate::Error::transport)?;
-        }
-
-        Ok(())
+        send_reject_response(&mut send_stream, &self.state, self.stream_id, status).await
     }
+}
+
+/// CONNECT ハンドシェイクループのイベント処理を切り出したヘルパー
+///
+/// - `Event::Header`: 全ヘッダーを `collected_headers` に収集する (`ConnectRequest::from_headers` 用)
+/// - `Event::HeadersEnd`: ヘッダー受信完了
+/// - 転送対象の WebTransport イベント: `pending_wt_events` にバッファ
+/// - その他: 破棄
+fn collect_request_events(
+    events: Vec<Event>,
+    collected_headers: &mut Vec<(Vec<u8>, Vec<u8>)>,
+    headers_complete: &mut bool,
+    pending_wt_events: &mut Vec<WebTransportEvent>,
+) {
+    for event in events {
+        match event {
+            Event::Header { name, value, .. } => {
+                collected_headers.push((name, value));
+            }
+            Event::HeadersEnd { .. } => {
+                *headers_complete = true;
+            }
+            Event::WebTransport(wt) if is_forwardable_wt_event(&wt) => {
+                pending_wt_events.push(wt);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// CONNECT リクエスト拒否レスポンス (4xx/5xx) を送信する共通ヘルパー
+///
+/// `from_connection` (405 送信) と `WtSessionRequest::reject` の共通実装。
+/// `self` を消費せず `send_stream` / `state` を借用する形にすることで、
+/// `WtSessionRequest` が確定していない `from_connection` 内からも利用できる。
+async fn send_reject_response(
+    send_stream: &mut s2n_quic::stream::SendStream,
+    state: &Arc<StdMutex<ServerConnectionState>>,
+    stream_id: u64,
+    status: u16,
+) -> crate::Result<()> {
+    let response_headers = ConnectResponse::new(status).to_headers()?;
+
+    let (data, fin) = {
+        let mut s = state.lock().expect("mutex should not be poisoned");
+        s.h3_conn
+            .send_response(stream_id, &response_headers, true)?;
+        // FIN 交付までデータをドレインする (send_response の fin=true 指定に対応)
+        let mut buf = Vec::new();
+        let mut fin = false;
+        while let Some((chunk, f)) = s.get_stream_data(stream_id) {
+            buf.extend_from_slice(&chunk);
+            fin = f;
+            if fin {
+                break;
+            }
+        }
+        (buf, fin)
+    };
+
+    send_stream
+        .send(Bytes::from(data))
+        .await
+        .map_err(crate::Error::transport)?;
+
+    if fin {
+        send_stream.finish().map_err(crate::Error::transport)?;
+    }
+
+    Ok(())
 }
 
 async fn run_server_connect_recv_task(

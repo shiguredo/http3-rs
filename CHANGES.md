@@ -24,6 +24,8 @@
   - @voluntas
 - [FIX] `tokio-s2n-quic` の CONNECT ストリーム受信端が `WtSession` に引き渡されずドロップされて STOP_SENDING でカプセルチャネルが断絶する問題を修正する (受信タスクを追加し WT_CLOSE_SESSION / FIN / RESET_STREAM を `WebTransportEvent::SessionClosed` として `WtSession::recv_event` に届ける。RFC 9000 Section 3.5 / draft-ietf-webtrans-http3-16 Section 6)
   - @voluntas
+- [FIX] `tokio-s2n-quic` の WebTransport CONNECT 検証が欠落し不正な CONNECT を通していた問題を修正する (クライアントは `WebTransportEvent::SessionEstablished` を確立判定に使い非 2xx レスポンスを `Error::ConnectionClosed` として扱う。1xx 中間レスポンスはスキップ。サーバーは `ConnectRequest::from_headers` で `:method` / `:protocol` を検証し、通常の GET 等の非 WebTransport リクエストには 405 を返してから拒否する。draft-ietf-webtrans-http3-16 Section 3.2)
+  - @voluntas
 - [CHANGE] MSRV (Minimum Supported Rust Version) を 1.88 から 1.93 に引き上げる
   - @voluntas
 - [CHANGE] `Client::connect` / `ClientWebTransportSession::connect` / `TlsContext::new_client` でサーバー証明書のチェーン検証とホスト名検証を有効にする (従来 `verify_peer=true` は検証なしと同等の挙動だった)。検証に失敗する既存接続は失敗するようになる (RFC 9114 Section 3.1 / RFC 9001 Section 4.4)
