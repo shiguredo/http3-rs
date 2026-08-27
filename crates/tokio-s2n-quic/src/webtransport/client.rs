@@ -4,12 +4,15 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use bytes::Bytes;
 use s2n_quic::client::Connect;
-use shiguredo_http3::Event;
 use shiguredo_http3::webtransport::ConnectRequest;
+use shiguredo_http3::webtransport::error::ErrorCode as WtErrorCode;
+use shiguredo_http3::{Event, WebTransportEvent};
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 
-use super::session::{WtRecvStream, WtSession};
+use super::session::{
+    WtRecvStream, WtSession, is_forwardable_wt_event, synthesized_session_closed,
+};
 use crate::config::ClientConfig;
 use crate::internal::connection_state::ClientConnectionState;
 
@@ -173,7 +176,12 @@ impl WtClient {
         //
         // QPACK エンコーダーストリームが先に到着してブロック解除される場合に備え、
         // recv_stream.receive() と unblock_notify.notified() を select! で待つ。
+        //
+        // ハンドシェイク中に到着した WebTransport イベント (200 レスポンスと同一 receive で
+        // 到着した終端カプセル等) は破棄せず `pending_wt_events` に貯めて受信タスクへ
+        // 引き継ぐ (取りこぼしを防ぐため)。
         let mut session_established = false;
+        let mut pending_wt_events: Vec<WebTransportEvent> = Vec::new();
         while !session_established {
             // QPACK エンコーダーストリームのデータが先に処理されて
             // notify_one() が取りこぼされる場合に備え、毎回 drain_events を確認する
@@ -183,8 +191,12 @@ impl WtClient {
                     s.drain_events()?
                 };
                 for event in events {
-                    if let Event::HeadersEnd { .. } = event {
-                        session_established = true;
+                    match event {
+                        Event::HeadersEnd { .. } => session_established = true,
+                        Event::WebTransport(wt) if is_forwardable_wt_event(&wt) => {
+                            pending_wt_events.push(wt);
+                        }
+                        _ => {}
                     }
                 }
                 if session_established {
@@ -217,8 +229,12 @@ impl WtClient {
                     };
 
                     for event in events {
-                        if let Event::HeadersEnd { .. } = event {
-                            session_established = true;
+                        match event {
+                            Event::HeadersEnd { .. } => session_established = true,
+                            Event::WebTransport(wt) if is_forwardable_wt_event(&wt) => {
+                                pending_wt_events.push(wt);
+                            }
+                            _ => {}
                         }
                     }
 
@@ -239,13 +255,143 @@ impl WtClient {
             return Err(crate::Error::ConnectionClosed);
         }
 
+        // CONNECT ストリームの受信タスクを起動する。
+        //
+        // 受信データを sans-I/O 層へ流し、WT_CLOSE_SESSION カプセルの検知 /
+        // CONNECT ストリームの FIN / RESET_STREAM を `WebTransportEvent::SessionClosed`
+        // として `event_rx` に届ける (draft-ietf-webtrans-http3-16 Section 6)。
+        //
+        // event_rx の容量 64: 現状 CONNECT ストリーム経由で発火し得るのは接続あたり
+        // ごく少数の `SessionClosed` / `SessionDraining` / `BufferedStreamRejected` のみ。
+        // 将来 `StreamReset` / `Datagram` を wire したときのバースト吸収も見込んで 64 を確保する。
+        //
+        // クライアントは `send_response` 相当のステップがないため、`pending_wt_events` に
+        // 対する追加ドレインは不要 (サーバー側の `accept()` は追加ドレインを行う)。
+        let (event_tx, event_rx) = mpsc::channel::<WebTransportEvent>(64);
+        let recv_task = tokio::spawn(run_client_connect_recv_task(
+            connect_stream_id,
+            recv_stream,
+            Arc::clone(&state),
+            event_tx,
+            pending_wt_events,
+        ));
+
         Ok(WtSession::new(
             connect_stream_id,
             bidi_acceptor,
             handle,
             send_stream,
             uni_rx,
+            event_rx,
+            recv_task,
         ))
+    }
+}
+
+async fn run_client_connect_recv_task(
+    session_id: u64,
+    mut recv_stream: s2n_quic::stream::ReceiveStream,
+    state: Arc<StdMutex<ClientConnectionState>>,
+    event_tx: mpsc::Sender<WebTransportEvent>,
+    pending_wt_events: Vec<WebTransportEvent>,
+) {
+    // ハンドシェイク中に到着していた WebTransport イベントを先に流す。
+    // SessionClosed が既にキューに乗っていた場合はここでタスクを終了する。
+    for event in pending_wt_events {
+        let is_terminal = matches!(event, WebTransportEvent::SessionClosed { .. });
+        if event_tx.send(event).await.is_err() {
+            return;
+        }
+        if is_terminal {
+            return;
+        }
+    }
+
+    loop {
+        let received = recv_stream.receive().await;
+        // MutexGuard は await を跨げないため、ブロックで囲って先にドロップする。
+        let (result, terminated) = match received {
+            Ok(Some(data)) => {
+                let r = state
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .process_stream_data(session_id, &data, false);
+                (r, false)
+            }
+            Ok(None) => {
+                // クリーンな FIN 受信: sans-I/O 層に通知して SessionClosed を生成させる
+                // (draft-16 Section 6: FIN のみの終了は error_code=0 / empty message として扱う)
+                let r = state
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .process_stream_data(session_id, &[], true);
+                (r, true)
+            }
+            Err(_) => {
+                // アブラプトクローズ (RESET_STREAM 等): connect_stream_reset を呼んで
+                // sans-I/O 層に SessionClosed を生成させる (RFC 9000 Section 3.5)。
+                let r = state
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .connect_stream_reset(session_id, WtErrorCode::SessionGone as u64);
+                (r, true)
+            }
+        };
+        let events = match result {
+            Ok(events) => events,
+            Err(_) => {
+                // sans-I/O 層が Err を返しても、既に event queue に push 済みの
+                // `SessionClosed` (WT_CLOSE_SESSION 受信済みのケース等) が沈殿している
+                // 可能性があるため、まず drain_events を試みる。
+                //
+                // 取り出せた `SessionClosed` を優先的に届け、それも無い場合のみ
+                // 合成イベントで終端を通知する。真の H3_MESSAGE_ERROR RESET_STREAM
+                // 送出は別対応とする (draft-ietf-webtrans-http3-16 Section 6 の MUST)。
+                let residual = state
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .drain_events()
+                    .unwrap_or_default();
+                let mut delivered = false;
+                for event in residual {
+                    if let Event::WebTransport(wt) = event
+                        && is_forwardable_wt_event(&wt)
+                    {
+                        let is_terminal = matches!(wt, WebTransportEvent::SessionClosed { .. });
+                        if event_tx.send(wt).await.is_err() {
+                            return;
+                        }
+                        if is_terminal {
+                            delivered = true;
+                            break;
+                        }
+                    }
+                }
+                if !delivered {
+                    let _ = event_tx.send(synthesized_session_closed(session_id)).await;
+                }
+                return;
+            }
+        };
+
+        let mut session_closed = false;
+        for event in events {
+            if let Event::WebTransport(wt) = event
+                && is_forwardable_wt_event(&wt)
+            {
+                let is_terminal = matches!(wt, WebTransportEvent::SessionClosed { .. });
+                if event_tx.send(wt).await.is_err() {
+                    return;
+                }
+                if is_terminal {
+                    session_closed = true;
+                }
+            }
+        }
+
+        if terminated || session_closed {
+            return;
+        }
     }
 }
 

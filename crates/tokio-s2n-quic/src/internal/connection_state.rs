@@ -107,6 +107,21 @@ impl ServerConnectionState {
     pub(crate) fn get_stream_data(&mut self, stream_id: u64) -> Option<(Vec<u8>, bool)> {
         self.h3_conn.take_stream_data(stream_id)
     }
+
+    /// WebTransport CONNECT ストリームのリセット (RESET_STREAM 受信) を通知しイベントを返す
+    ///
+    /// s2n-quic の `stream::Error` は Final Size を公開しないため常に 0 を渡す。
+    /// sans-I/O 層は CONNECT ストリームのリセットで `terminate_wt_session` を呼び
+    /// `SessionClosed` イベントを発火するのみで `final_size` は使用しない
+    /// (draft-ietf-webtrans-http3-16 Section 6)。
+    pub(crate) fn connect_stream_reset(
+        &mut self,
+        stream_id: u64,
+        error_code: u64,
+    ) -> crate::Result<Vec<Event>> {
+        self.h3_conn.stream_reset(stream_id, error_code, 0)?;
+        Ok(self.h3_conn.drain_events()?)
+    }
 }
 
 /// クライアント側 HTTP/3 接続状態
@@ -203,6 +218,21 @@ impl ClientConnectionState {
     /// ストリームの送信データを取得する
     pub(crate) fn get_stream_data(&mut self, stream_id: u64) -> Option<(Vec<u8>, bool)> {
         self.h3_conn.take_stream_data(stream_id)
+    }
+
+    /// WebTransport CONNECT ストリームのリセット (RESET_STREAM 受信) を通知しイベントを返す
+    ///
+    /// s2n-quic の `stream::Error` は Final Size を公開しないため常に 0 を渡す。
+    /// sans-I/O 層は CONNECT ストリームのリセットで `terminate_wt_session` を呼び
+    /// `SessionClosed` イベントを発火するのみで `final_size` は使用しない
+    /// (draft-ietf-webtrans-http3-16 Section 6)。
+    pub(crate) fn connect_stream_reset(
+        &mut self,
+        stream_id: u64,
+        error_code: u64,
+    ) -> crate::Result<Vec<Event>> {
+        self.h3_conn.stream_reset(stream_id, error_code, 0)?;
+        Ok(self.h3_conn.drain_events()?)
     }
 }
 
