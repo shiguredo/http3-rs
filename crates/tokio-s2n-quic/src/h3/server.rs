@@ -7,6 +7,7 @@ use bytes::Bytes;
 use s2n_quic::connection::BidirectionalStreamAcceptor;
 use s2n_quic::stream::SendStream;
 use shiguredo_http3::{Event, Header};
+use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -72,6 +73,13 @@ pub struct H3ServerConnection {
     _handle: s2n_quic::connection::Handle,
     /// QPACK データ送信チャンネル
     qpack_tx: mpsc::UnboundedSender<(u64, Vec<u8>)>,
+    /// QPACK ブロック解除通知
+    ///
+    /// uni タスクが QPACK エンコーダーストリームの更新を `feed_stream_only` した後に
+    /// 発火する。リクエスト受信ループはこの Notify を待ってから `drain_events` を回し、
+    /// ブロック解除で生成されたヘッダー・ボディ・StreamEnd イベントを取り出す
+    /// (RFC 9204 Section 2.2.1)。
+    qpack_unblock_notify: Arc<Notify>,
     /// 制御ストリームタスク
     _control_task: JoinHandle<()>,
     /// 単方向ストリーム処理タスク
@@ -147,32 +155,36 @@ impl H3ServerConnection {
             std::future::pending::<()>().await;
         });
 
+        // QPACK ブロック解除通知は `qpack_unblock_notify` フィールドの doc を参照。
+        let qpack_unblock_notify = Arc::new(Notify::new());
+
         // 単方向ストリーム受信タスク (ピアの制御ストリーム等)
         let state_for_uni = Arc::clone(&state);
         let qpack_tx_for_uni = qpack_tx.clone();
+        let notify_for_uni = Arc::clone(&qpack_unblock_notify);
         let uni_task = tokio::spawn(async move {
             while let Ok(Some(mut recv_stream)) = uni_acceptor.accept_receive_stream().await {
                 let state = Arc::clone(&state_for_uni);
                 let qpack_tx = qpack_tx_for_uni.clone();
+                let notify = Arc::clone(&notify_for_uni);
                 let stream_id: u64 = recv_stream.id();
                 tokio::spawn(async move {
-                    let mut buf = Vec::new();
                     while let Ok(Some(data)) = recv_stream.receive().await {
-                        buf.extend_from_slice(&data);
-                        let _ = {
-                            let mut s = state.lock().expect("mutex should not be poisoned");
-                            s.process_stream_data(stream_id, &buf, false).ok()
-                        };
+                        let _ = state
+                            .lock()
+                            .expect("mutex should not be poisoned")
+                            .feed_stream_only(stream_id, &data, false);
                         // SETTINGS 受信後に Set Capacity が生成される可能性がある
                         flush_qpack(&state, &qpack_tx);
-                        buf.clear();
+                        // ブロック解除された可能性があるためリクエスト受信ループを起こす
+                        notify.notify_one();
                     }
-                    // FIN
                     let _ = state
                         .lock()
                         .expect("mutex should not be poisoned")
-                        .process_stream_data(stream_id, &[], true);
+                        .feed_stream_only(stream_id, &[], true);
                     flush_qpack(&state, &qpack_tx);
+                    notify.notify_one();
                 });
             }
         });
@@ -182,6 +194,7 @@ impl H3ServerConnection {
             bidi_acceptor,
             _handle: handle,
             qpack_tx,
+            qpack_unblock_notify,
             _control_task: control_task,
             _uni_task: uni_task,
             _qpack_task: qpack_task,
@@ -189,6 +202,15 @@ impl H3ServerConnection {
     }
 
     /// リクエストを受け付ける
+    ///
+    /// 現状の実装は「1 接続 1 リクエスト逐次処理」を前提とする (`&mut self`)。
+    /// 呼び出し側は `H3Request` を保持したまま次を accept してはならない。
+    ///
+    /// ピア側にも「同時に 1 本のリクエストストリームしか開かない」ことを暗黙に要求する。
+    /// ピアが並行して 2 本目のリクエストストリームを開いた場合、本メソッドが接続共有
+    /// イベントキューを排他的にドレインする構造上、他ストリームの `Event::Header` /
+    /// `Event::HeadersEnd` / `Event::Data` / `Event::StreamEnd` は `_ => {}` で捨てられ、
+    /// そのストリームは復旧できない。並行リクエスト対応は別 issue で扱う。
     pub async fn accept_request(&mut self) -> crate::Result<H3Request> {
         let stream: s2n_quic::stream::BidirectionalStream = self
             .bidi_acceptor
@@ -207,99 +229,94 @@ impl H3ServerConnection {
         }
 
         // リクエストデータを受信して Sans I/O に feed する
+        //
+        // QPACK エンコーダーストリームの更新が uni タスク側で後追いに到着してブロック解除される
+        // 場合に備え、`recv_stream.receive()` / `self.qpack_unblock_notify.notified()` / 10ms タイマーを
+        // `tokio::select!` で待つ。ループ先頭の `drain_events` で QPACK ブロック解除で
+        // 生成されたイベント (ヘッダー・ボディ・StreamEnd 等) を毎回取り出す
+        // (RFC 9204 Section 2.2.1: Required Insert Count が Insert Count 以下になった時点で解除)。
+        //
+        // 受信ブランチも `feed_stream_only` で feed のみ実施し、イベントの取り出しはループ先頭に
+        // 一本化する。`process_stream_data` (feed + drain) を使うと戻り値の `Vec<Event>` を
+        // 受信ブランチ内で破棄することになり、ヘッダー・ボディ・StreamEnd が失われる。
         let mut headers: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         let mut body = Vec::new();
         let mut headers_complete = false;
         let mut stream_ended = false;
+        // ピア送信端が閉じたか (s2n-quic の `ReceiveStream::receive` は `DataRead` 状態で
+        // 常に即 `Ok(None)` を返すため、FIN 受信後は `select!` の receive ブランチを
+        // 停止して QPACK ブロック解除通知のみを待つ)。
+        let mut peer_fin = false;
 
-        loop {
-            let received: Result<Option<Bytes>, _> = recv_stream.receive().await;
-            let (data, fin) = match received {
-                Ok(Some(data)) => (data.to_vec(), false),
-                Ok(None) => (vec![], true),
-                Err(e) => return Err(crate::Error::transport(e)),
-            };
-
-            let events = {
-                let mut s = self.state.lock().expect("mutex should not be poisoned");
-                match s.process_stream_data(stream_id, &data, fin) {
-                    Ok(events) => events,
-                    Err(e) => {
-                        // ストリームレベルのエラーは RESET_STREAM でピアに伝える
-                        // (接続は維持する: RFC 9114 Section 8)
-                        crate::internal::reset_stream_on_stream_error(&mut send_stream, &e);
-                        return Err(e);
-                    }
-                }
-            };
-
-            // ヘッダーデコード後に Section Ack が生成される可能性がある
-            flush_qpack(&self.state, &self.qpack_tx);
-
+        while !(headers_complete && stream_ended) {
+            let events = self
+                .state
+                .lock()
+                .expect("mutex should not be poisoned")
+                .drain_events()?;
             for event in events {
                 match event {
-                    Event::Header { name, value, .. } => {
+                    Event::Header {
+                        name,
+                        value,
+                        stream_id: sid,
+                    } if sid == stream_id => {
                         headers.push((name, value));
                     }
-                    Event::HeadersEnd { .. } => {
+                    Event::HeadersEnd { stream_id: sid } if sid == stream_id => {
                         headers_complete = true;
                     }
-                    Event::Data { data: d, .. } => {
+                    Event::Data {
+                        data: d,
+                        stream_id: sid,
+                    } if sid == stream_id => {
                         body.extend_from_slice(&d);
                     }
-                    Event::StreamEnd { .. } => {
+                    Event::StreamEnd { stream_id: sid } if sid == stream_id => {
                         stream_ended = true;
                     }
                     _ => {}
                 }
             }
-
-            if headers_complete || fin {
+            // ヘッダーデコード後に Section Ack が生成される可能性がある
+            flush_qpack(&self.state, &self.qpack_tx);
+            if headers_complete && stream_ended {
                 break;
             }
-        }
 
-        // ヘッダー完了後にボディの残りを読む
-        if headers_complete && !stream_ended {
-            loop {
-                let received: Result<Option<Bytes>, _> = recv_stream.receive().await;
-                let (data, fin) = match received {
-                    Ok(Some(data)) => (data.to_vec(), false),
-                    Ok(None) => (vec![], true),
-                    Err(_) => break,
-                };
-
-                let events = {
-                    let mut s = self.state.lock().expect("mutex should not be poisoned");
-                    match s.process_stream_data(stream_id, &data, fin) {
-                        Ok(events) => events,
-                        Err(e) => {
-                            // ストリームレベルのエラーは RESET_STREAM でピアに伝える
-                            // (接続は維持する: RFC 9114 Section 8)
-                            crate::internal::reset_stream_on_stream_error(&mut send_stream, &e);
-                            return Err(e);
-                        }
+            tokio::select! {
+                received = recv_stream.receive(), if !peer_fin => {
+                    let (data, fin) = match received {
+                        Ok(Some(data)) => (data.to_vec(), false),
+                        Ok(None) => (vec![], true),
+                        Err(e) => return Err(crate::Error::transport(e)),
+                    };
+                    if let Err(e) = self
+                        .state
+                        .lock()
+                        .expect("mutex should not be poisoned")
+                        .feed_stream_only(stream_id, &data, fin)
+                    {
+                        // ストリームレベルのエラーは RESET_STREAM でピアに伝える
+                        // (接続は維持する: RFC 9114 Section 8)。
+                        crate::internal::reset_stream_on_stream_error(&mut send_stream, &e);
+                        return Err(e);
                     }
-                };
-
-                // QPACK データのドレイン
-                flush_qpack(&self.state, &self.qpack_tx);
-
-                for event in events {
-                    match event {
-                        Event::Data { data: d, .. } => {
-                            body.extend_from_slice(&d);
-                        }
-                        Event::StreamEnd { .. } => {
-                            stream_ended = true;
-                        }
-                        _ => {}
+                    flush_qpack(&self.state, &self.qpack_tx);
+                    if fin {
+                        peer_fin = true;
                     }
                 }
-
-                if stream_ended || fin {
-                    break;
+                _ = self.qpack_unblock_notify.notified() => {
+                    // uni タスクがエンコーダーストリーム更新を feed した。
+                    // ループ先頭の drain_events で処理する。
                 }
+                // 10ms のフォールバックポーリング。`Notify` は permit を最大 1 つしか保持しないため
+                // 複数回の notify_one() は 1 permit に潰れるが、本ループは起床のたびに
+                // `drain_events` で全イベントを取り出すため取りこぼしにはならない。このタイマーは
+                // uni タスクの停止・フィード遅延など Notify が発火しない想定外経路で drain_events が
+                // 回らない状況を検知するためのフォールバック。
+                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
             }
         }
 

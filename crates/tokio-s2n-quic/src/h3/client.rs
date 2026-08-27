@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use bytes::Bytes;
 use s2n_quic::client::Connect;
 use shiguredo_http3::{Event, Header};
+use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -19,6 +20,13 @@ pub struct H3Client {
     handle: s2n_quic::connection::Handle,
     /// QPACK データ送信チャンネル
     qpack_tx: mpsc::UnboundedSender<(u64, Vec<u8>)>,
+    /// QPACK ブロック解除通知
+    ///
+    /// uni タスクが QPACK エンコーダーストリームの更新を `feed_stream_only` した後に
+    /// 発火する。リクエスト受信ループはこの Notify を待ってから `drain_events` を回し、
+    /// ブロック解除で生成されたヘッダー・ボディ・StreamEnd イベントを取り出す
+    /// (RFC 9204 Section 2.2.1)。
+    qpack_unblock_notify: Arc<Notify>,
     /// 制御ストリームタスク
     _control_task: JoinHandle<()>,
     /// 単方向ストリーム処理タスク
@@ -120,28 +128,36 @@ impl H3Client {
             std::future::pending::<()>().await;
         });
 
+        // QPACK ブロック解除通知は `qpack_unblock_notify` フィールドの doc を参照。
+        let qpack_unblock_notify = Arc::new(Notify::new());
+
         // 単方向ストリーム受信タスク
         let state_for_uni = Arc::clone(&state);
         let qpack_tx_for_uni = qpack_tx.clone();
+        let notify_for_uni = Arc::clone(&qpack_unblock_notify);
         let uni_task = tokio::spawn(async move {
             while let Ok(Some(mut recv_stream)) = uni_acceptor.accept_receive_stream().await {
                 let state = Arc::clone(&state_for_uni);
                 let qpack_tx = qpack_tx_for_uni.clone();
+                let notify = Arc::clone(&notify_for_uni);
                 let stream_id: u64 = recv_stream.id();
                 tokio::spawn(async move {
                     while let Ok(Some(data)) = recv_stream.receive().await {
                         let _ = state
                             .lock()
                             .expect("mutex should not be poisoned")
-                            .process_stream_data(stream_id, &data, false);
-                        // QPACK データをドレインして送信タスクに転送
+                            .feed_stream_only(stream_id, &data, false);
+                        // エンコーダーストリーム更新で生成された QPACK データを送信キューへ
                         flush_qpack(&state, &qpack_tx);
+                        // ブロック解除された可能性があるためリクエスト受信ループを起こす
+                        notify.notify_one();
                     }
                     let _ = state
                         .lock()
                         .expect("mutex should not be poisoned")
-                        .process_stream_data(stream_id, &[], true);
+                        .feed_stream_only(stream_id, &[], true);
                     flush_qpack(&state, &qpack_tx);
+                    notify.notify_one();
                 });
             }
         });
@@ -150,6 +166,7 @@ impl H3Client {
             state,
             handle,
             qpack_tx,
+            qpack_unblock_notify,
             _control_task: control_task,
             _uni_task: uni_task,
             _qpack_task: qpack_task,
@@ -218,23 +235,71 @@ impl H3Client {
         }
 
         // レスポンス受信
+        //
+        // QPACK エンコーダーストリームの更新が uni タスク側で後追いに到着してブロック解除される
+        // 場合に備え、`recv_stream.receive()` / `self.qpack_unblock_notify.notified()` / 10ms タイマーを
+        // `tokio::select!` で待つ。ループ先頭の `drain_events` で QPACK ブロック解除で
+        // 生成されたイベント (ヘッダー・ボディ・StreamEnd 等) を毎回取り出す
+        // (RFC 9204 Section 2.2.1: Required Insert Count が Insert Count 以下になった時点で解除)。
+        //
+        // 受信ブランチも `feed_stream_only` で feed のみ実施し、イベントの取り出しはループ先頭に
+        // 一本化する。`process_stream_data` (feed + drain) を使うと戻り値の `Vec<Event>` を
+        // 受信ブランチ内で破棄することになり、ヘッダー・ボディ・StreamEnd が失われる。
         let mut response_headers: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         let mut response_body = Vec::new();
         let mut finished = false;
+        // ピア送信端が閉じたか (s2n-quic の `ReceiveStream::receive` は `DataRead` 状態で
+        // 常に即 `Ok(None)` を返すため、FIN 受信後は `select!` の receive ブランチを
+        // 停止して QPACK ブロック解除通知のみを待つ)。
+        let mut peer_fin = false;
 
         while !finished {
-            let received: Result<Option<Bytes>, _> = recv_stream.receive().await;
-            let (data, fin) = match received {
-                Ok(Some(data)) => (data.to_vec(), false),
-                Ok(None) => (vec![], true),
-                Err(e) => return Err(crate::Error::transport(e)),
-            };
+            // 毎ループ、既に生成済みのイベントを取り出す
+            let events = self
+                .state
+                .lock()
+                .expect("mutex should not be poisoned")
+                .drain_events()?;
+            for event in events {
+                match event {
+                    Event::Header {
+                        name,
+                        value,
+                        stream_id: sid,
+                    } if sid == stream_id => {
+                        response_headers.push((name, value));
+                    }
+                    Event::Data {
+                        data: d,
+                        stream_id: sid,
+                    } if sid == stream_id => {
+                        response_body.extend_from_slice(&d);
+                    }
+                    Event::StreamEnd { stream_id: sid } if sid == stream_id => {
+                        finished = true;
+                    }
+                    _ => {}
+                }
+            }
+            // ヘッダーデコード後に Section Ack が生成される可能性がある
+            flush_qpack(&self.state, &self.qpack_tx);
+            if finished {
+                break;
+            }
 
-            let events = {
-                let mut s = self.state.lock().expect("mutex should not be poisoned");
-                match s.process_stream_data(stream_id, &data, fin) {
-                    Ok(events) => events,
-                    Err(e) => {
+            tokio::select! {
+                received = recv_stream.receive(), if !peer_fin => {
+                    let (data, fin) = match received {
+                        Ok(Some(data)) => (data.to_vec(), false),
+                        Ok(None) => (vec![], true),
+                        Err(e) => return Err(crate::Error::transport(e)),
+                    };
+                    if let Err(e) = self
+                        .state
+                        .lock()
+                        .expect("mutex should not be poisoned")
+                        .feed_stream_only(stream_id, &data, fin)
+                    {
                         // ストリームレベルのエラーは RESET_STREAM でピアに伝える
                         // (接続は維持する: RFC 9114 Section 8)。
                         // リクエスト送信は常に FIN 交付済みのため、s2n-quic が
@@ -242,29 +307,21 @@ impl H3Client {
                         crate::internal::reset_stream_on_stream_error(&mut send_stream, &e);
                         return Err(e);
                     }
+                    flush_qpack(&self.state, &self.qpack_tx);
+                    if fin {
+                        peer_fin = true;
+                    }
                 }
-            };
-
-            // ヘッダーデコード後に Section Ack が生成される可能性がある
-            flush_qpack(&self.state, &self.qpack_tx);
-
-            for event in events {
-                match event {
-                    Event::Header { name, value, .. } => {
-                        response_headers.push((name, value));
-                    }
-                    Event::Data { data: d, .. } => {
-                        response_body.extend_from_slice(&d);
-                    }
-                    Event::StreamEnd { .. } => {
-                        finished = true;
-                    }
-                    _ => {}
+                _ = self.qpack_unblock_notify.notified() => {
+                    // uni タスクがエンコーダーストリーム更新を feed した。
+                    // ループ先頭の drain_events で処理する。
                 }
-            }
-
-            if fin {
-                break;
+                // 10ms のフォールバックポーリング。`Notify` は permit を最大 1 つしか保持しないため
+                // 複数回の notify_one() は 1 permit に潰れるが、本ループは起床のたびに
+                // `drain_events` で全イベントを取り出すため取りこぼしにはならない。このタイマーは
+                // uni タスクの停止・フィード遅延など Notify が発火しない想定外経路で drain_events が
+                // 回らない状況を検知するためのフォールバック。
+                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
             }
         }
 
