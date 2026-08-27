@@ -1,7 +1,7 @@
 # ローカル開始の WT uni ストリームでピアの STOP_SENDING が通知されない
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-27
 - Branch: feature/fix-local-initiated-wt-uni-stream-events
 - Polished: 2026-08-26
 
@@ -33,12 +33,28 @@
 
 ## 解決方法
 
-### 関連ファイル
+### 変更内容
 
-- `src/connection/wt_session.rs` (`Connection::handle_wt_stop_sending`)
-- `src/connection/wt_stream.rs` (`Connection::register_local_wt_stream` の uni 対応)
-- `src/connection/mod.rs` (`wt_uni_streams` / 登録 API / テスト)
-- 関連 issue: 0144 (ローカル開始 WT bidi ストリームの登録 API。本 issue は uni 側の拡張。0144 の「uni ストリームの RESET / FIN 伝播は 0170 で対応」という言及は、RESET_STREAM / FIN が send-only ストリームでは STREAM_STATE_ERROR の接続エラーになるため、本 issue の対象外に変更される)
-- 一次資料: `refs/quic/rfc9000.txt` Section 2.1 / 3.5 / 19.4 / 19.8、`refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 4.2 / 4.4
+- `src/connection/wt_stream.rs`:
+  - `is_local_initiated_uni(kind)` メソッドを追加した (`is_local_initiated_bidi` と対称的、`Role::Client` → `ClientUni` / `Role::Server` → `ServerUni` を判定)
+  - `register_local_wt_stream` を bidi / uni の両方を受理するように拡張した。二重登録チェックは `wt_bidi_streams` / `wt_uni_streams` の両方を対象化した。uni の場合は `wt_uni_streams` に登録する
+  - doc コメントを bidi / uni 両対応に書き換え、SessionClosed.reset_streams への波及と、ローカル uni への STREAM / FIN / RESET_STREAM 受信は QUIC 層で STREAM_STATE_ERROR となり sans-I/O に到達しない前提を明記した (RFC 9000 Section 19.4 / 19.8)
+- `src/connection/{client,server}.rs`:
+  - 公開 API `register_local_wt_stream` の doc コメントを bidi / uni 両対応に更新した
+- `src/connection/mod.rs`:
+  - 既存 `test_register_local_wt_stream_rejects_uni_stream_id` を `test_register_local_wt_stream_accepts_local_uni_and_rejects_peer_uni` に置き換えた (server / client × local / peer uni の 4 パターンを検証)
+  - `test_stop_sending_propagates_to_local_wt_uni_data_stream_server` / `_client` を追加した (登録済み uni への STOP_SENDING が `WebTransportEvent::StreamStopSending` (session_id 付き) として通知されることを Role::Server / Role::Client 両方で検証)
+  - `test_stop_sending_falls_through_for_unregistered_uni_stream` を追加した (未登録 uni は汎用 `Event::StopSending` にフォールスルーする)
+  - `test_wt_session_closed_event_carries_reliable_size_for_local_uni` を追加した (登録された uni が `SessionClosed.reset_streams` に reliable_size 付きで含まれる)
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した
 
-(実装時に追記)
+### 対象外
+
+- ローカル開始 uni ストリームへの RESET_STREAM / FIN 到着の sans-I/O 側防御コード追加は不要 (QUIC 層で STREAM_STATE_ERROR の接続エラーとなり sans-I/O へは到達しないため。RFC 9000 Section 19.4 / 19.8)
+- `handle_wt_stream_reset` がローカル開始 uni について常に `local_initiated=false` と判定する既存の別バグ (仮に QUIC 層をバイパスして RESET が sans-I/O へ渡ると `on_remote_stream_closed` がピアの uni クレジットを不正回復する) は本 issue のスコープ外とし、別 issue で対応する
+- `register_local_wt_stream` の critical stream (`control_send` / QPACK encoder / decoder) との衝突検出、event.rs 側 `SessionClosed` doc コメントの更新も別 issue で扱う
+
+### 一次資料
+
+- `refs/quic/rfc9000.txt` Section 2.1 (ストリーム種別) / Section 3.5 (STOP_SENDING) / Section 19.4 (RESET_STREAM) / Section 19.8 (STREAM)
+- `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 4.2 (WT ストリーム) / Section 4.4 (STOP_SENDING 伝播)
