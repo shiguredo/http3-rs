@@ -60,6 +60,7 @@ use crate::settings::Settings;
 use crate::stream::request::{RawReceivedData, RequestStream};
 use crate::stream::{ControlStreamRecv, ControlStreamSend, StreamKind, StreamState};
 use crate::varint::VarInt;
+use crate::webtransport::error::ErrorCode as WtErrorCode;
 
 pub use client::ClientConnection;
 pub use server::ServerConnection;
@@ -257,6 +258,46 @@ pub struct Connection {
     /// 即時拒否せずに保留し、SETTINGS 受信後に検証する。
     /// (draft-ietf-webtrans-http3-16 Section 3.1 / 4.6 / 7.1)
     deferred_wt_connects: HashMap<u64, Vec<Header>>,
+    /// WT ネゴシエーション完了前に到着した WT bidi (先頭 varint = 0x41) ストリームの保留バッファ
+    ///
+    /// サーバー側でクライアントの SETTINGS 未受信の間に到着した先頭 0x41 の bidi ストリームは、
+    /// WT_STREAM が length を持たないため (draft-16 Section 4.3) リクエストストリームとして
+    /// 処理すると 2 番目の varint (session_id) が length として誤解釈されて接続が壊れる。
+    /// 未ネゴシエーション時は本バッファにストリームデータ (バイト列 + FIN フラグ) を保留し、
+    /// SETTINGS 受信時に `process_pending_wt_bidi_pre_negotiation` で再ディスパッチする。
+    ///
+    /// 類似の pending 系フィールドとの区別:
+    /// - `pending_bidi_dispatch`: 先頭 varint (signal value) が複数チャンクにまたがる場合の
+    ///   バッファ (varint 判定前)。
+    /// - `pending_wt_bidi_streams`: signal value = 0x41 と判定済みだが session_id varint が
+    ///   未確定の場合のバッファ (ネゴシエーション完了後の状態)。
+    /// - `pending_wt_bidi_pre_negotiation`: signal value = 0x41 と判定済みで SETTINGS 未受信の
+    ///   場合のバッファ (本フィールド。ネゴシエーション完了待ち)。
+    ///
+    /// (draft-ietf-webtrans-http3-16 Section 4.6: WebTransport endpoints SHOULD buffer streams
+    ///  and datagrams until they can be associated with an established session)
+    pending_wt_bidi_pre_negotiation: HashMap<u64, PendingWtBidiPreNegotiation>,
+    /// 保留を拒否した WT bidi ストリーム ID (後続チャンクを破棄する)
+    ///
+    /// 以下のいずれかで stream_id を記録する:
+    /// - `buffer_pre_negotiation_wt_bidi` で保留上限を超過した
+    /// - `process_pending_wt_bidi_pre_negotiation` で WT 非対応 SETTINGS を受信して破棄した
+    /// - `handle_wt_stream_reset` で保留エントリを破棄した
+    ///
+    /// SETTINGS 受信後もクリアせず接続終了まで保持する。統合層が RESET_STREAM / STOP_SENDING
+    /// を送出する前にピアから届いた後続チャンクが `dispatch_client_bidi_stream` に流入して
+    /// 中間バイトを新規 varint として誤解釈するのを防ぐため (`ignored_uni_streams` と同じ
+    /// パターン)。
+    ignored_pre_negotiation_wt_bidi: HashSet<u64>,
+}
+
+/// WT ネゴシエーション完了前に到着した WT bidi ストリームの保留エントリ
+#[derive(Debug)]
+struct PendingWtBidiPreNegotiation {
+    /// 受信済みバイト列 (先頭 varint = 0x41 を含む)
+    data: Vec<u8>,
+    /// FIN 受信済みかどうか
+    fin: bool,
 }
 
 impl Connection {
@@ -374,6 +415,8 @@ impl Connection {
             deferred_section_acks: Vec::new(),
             deferred_stream_cancellations: Vec::new(),
             deferred_wt_connects: HashMap::new(),
+            pending_wt_bidi_pre_negotiation: HashMap::new(),
+            ignored_pre_negotiation_wt_bidi: HashSet::new(),
         }
     }
 
@@ -639,13 +682,27 @@ impl Connection {
                 return self.dispatch_client_bidi_stream(stream_id, data, fin);
             }
 
+            // 保留を拒否済みの WT bidi ストリームは後続チャンクを破棄する
+            // (`ignored_uni_streams` と同じパターン。上限拒否後の再入で誤解釈されるのを防ぐ)
+            if self.ignored_pre_negotiation_wt_bidi.contains(&stream_id) {
+                return Ok(());
+            }
+
+            // ネゴシエーション完了前に到着した 0x41 bidi の保留に後続データが到着した場合
+            if self
+                .pending_wt_bidi_pre_negotiation
+                .contains_key(&stream_id)
+            {
+                return self.buffer_pre_negotiation_wt_bidi(stream_id, data, fin);
+            }
+
             // サーバー側: クライアント開始の新規 bidi stream は先頭 varint で
-            // WT bidi (0x41) かリクエストストリームかを判定する
-            // ネゴシエーション完了を確認し、未完了の場合はリクエストストリームとして処理する
-            // (draft-ietf-webtrans-http3-15 Section 3.1, 4.3)
+            // WT bidi (0x41) かリクエストストリームかを判定する。ネゴシエーション未完了時
+            // (`is_wt_fully_negotiated() == false`) でも判定を行い、0x41 なら保留、
+            // それ以外はリクエストストリームとして処理する
+            // (draft-ietf-webtrans-http3-16 Section 3.1 / 4.3 / 4.6)
             if self.role == Role::Server
                 && kind.is_client_initiated()
-                && self.is_wt_fully_negotiated()
                 && !self.streams.contains_key(&stream_id)
             {
                 return self.dispatch_client_bidi_stream(stream_id, data, fin);
@@ -953,8 +1010,29 @@ impl Connection {
             Ok((value, _)) => {
                 self.pending_bidi_dispatch.remove(&stream_id);
                 if value.get() == crate::webtransport::stream::BIDIRECTIONAL_SIGNAL_VALUE {
-                    // WT_STREAM (0x41): WT bidi ストリームとして処理
-                    self.handle_wt_bidi_stream(stream_id, &buf, fin)?;
+                    // WT_STREAM (0x41)
+                    if self.is_wt_fully_negotiated() {
+                        // ネゴシエーション完了済み: WT bidi ストリームとして即時処理
+                        self.handle_wt_bidi_stream(stream_id, &buf, fin)?;
+                    } else if self.peer_settings.is_some() {
+                        // SETTINGS 受信済みだが WT 非対応で確定した状態: 保留せず即拒否する。
+                        // (保留マップに滞留させても再ディスパッチ先が無いため意味がなく、
+                        //  むしろ post-SETTINGS で送り続けられた際に上限が意図せず埋まる)
+                        // 拒否した stream_id を `ignored_pre_negotiation_wt_bidi` に記録し
+                        // 統合層向けに `BufferedStreamRejected` を発火する
+                        // (draft-ietf-webtrans-http3-16 Section 4.6)
+                        self.ignored_pre_negotiation_wt_bidi.insert(stream_id);
+                        self.events.push_back(Event::WebTransport(
+                            WebTransportEvent::BufferedStreamRejected {
+                                stream_id,
+                                error_code: WtErrorCode::BufferedStreamRejected as u64,
+                            },
+                        ));
+                    } else {
+                        // ネゴシエーション未完了 (SETTINGS 未受信): SETTINGS 受信まで保留する
+                        // (draft-ietf-webtrans-http3-16 Section 4.6)
+                        self.buffer_pre_negotiation_wt_bidi(stream_id, &buf, fin)?;
+                    }
                 } else {
                     // 0x41 以外: リクエストストリームとして処理
                     self.handle_bidirectional_stream(stream_id, &buf, fin)?;
@@ -972,6 +1050,105 @@ impl Connection {
                 Ok(())
             }
         }
+    }
+
+    /// WT ネゴシエーション完了前の 0x41 bidi ストリームを保留バッファに追加する
+    ///
+    /// 上限 (ストリーム数・データ量) を超えた場合は `WT_BUFFERED_STREAM_REJECTED` を
+    /// 通知して破棄する (draft-ietf-webtrans-http3-16 Section 4.6)。
+    /// 拒否した stream_id は `ignored_pre_negotiation_wt_bidi` に記録し、後続チャンクの
+    /// 再入を防ぐ。
+    fn buffer_pre_negotiation_wt_bidi(
+        &mut self,
+        stream_id: u64,
+        data: &[u8],
+        fin: bool,
+    ) -> Result<(), Error> {
+        // 上限は既存の pre-association buffering
+        // (`webtransport::session::MAX_BUFFERED_STREAMS` = 100、
+        //  `wt_types::WT_MAX_BUFFERED_STREAM_BYTES` = 64 KiB) と同じ値を用いる。
+        // ネゴシエーション完了後の pre-association buffering と同じく draft-16 Section 4.6 の
+        // "MUST limit the number of buffered streams" に基づく DoS 対策。
+        //
+        // 新規保留の場合、ストリーム数上限を確認する。既存 stream_id への追記 (is_new == false)
+        // ではストリーム数上限を再チェックしない (バイト数上限のみで守る)。
+        let is_new = !self
+            .pending_wt_bidi_pre_negotiation
+            .contains_key(&stream_id);
+        if is_new
+            && self.pending_wt_bidi_pre_negotiation.len()
+                >= crate::webtransport::session::MAX_BUFFERED_STREAMS
+        {
+            self.ignored_pre_negotiation_wt_bidi.insert(stream_id);
+            self.events.push_back(Event::WebTransport(
+                WebTransportEvent::BufferedStreamRejected {
+                    stream_id,
+                    error_code: WtErrorCode::BufferedStreamRejected as u64,
+                },
+            ));
+            return Ok(());
+        }
+
+        let entry = self
+            .pending_wt_bidi_pre_negotiation
+            .entry(stream_id)
+            .or_insert_with(|| PendingWtBidiPreNegotiation {
+                data: Vec::new(),
+                fin: false,
+            });
+
+        // 1 ストリームあたりのデータ量上限を確認する
+        if entry.data.len().saturating_add(data.len()) > wt_types::WT_MAX_BUFFERED_STREAM_BYTES {
+            self.pending_wt_bidi_pre_negotiation.remove(&stream_id);
+            self.ignored_pre_negotiation_wt_bidi.insert(stream_id);
+            self.events.push_back(Event::WebTransport(
+                WebTransportEvent::BufferedStreamRejected {
+                    stream_id,
+                    error_code: WtErrorCode::BufferedStreamRejected as u64,
+                },
+            ));
+            return Ok(());
+        }
+
+        entry.data.extend_from_slice(data);
+        if fin {
+            entry.fin = true;
+        }
+        Ok(())
+    }
+
+    /// SETTINGS 受信時に保留された 0x41 bidi ストリームを再ディスパッチする
+    ///
+    /// ネゴシエーションが完了 (`is_wt_fully_negotiated()` が true) している場合は
+    /// WT 経路 (`handle_wt_bidi_stream`) に流す。false のまま (WT 非対応の SETTINGS 等) は
+    /// 保留した 0x41 を length 前置の HTTP/3 フレームとして解釈できないため破棄し、
+    /// 統合層が RESET_STREAM / STOP_SENDING でピア側ストリームを閉じられるよう
+    /// `BufferedStreamRejected` イベントを発火する。
+    /// (draft-ietf-webtrans-http3-16 Section 4.6)
+    fn process_pending_wt_bidi_pre_negotiation(&mut self) -> Result<(), Error> {
+        let entries: Vec<_> = self.pending_wt_bidi_pre_negotiation.drain().collect();
+        let negotiated = self.is_wt_fully_negotiated();
+        // 個別ストリームでの接続エラーは即座に返して以降の再ディスパッチを打ち切るが、
+        // それ以外の分岐 (BufferedStreamRejected イベント発火等) は個別ストリーム単位で
+        // 完結するため、途中で return せず全エントリを処理する。
+        for (stream_id, entry) in entries {
+            if negotiated {
+                self.handle_wt_bidi_stream(stream_id, &entry.data, entry.fin)?;
+            } else {
+                // 拒否した stream_id を破棄対象として記録する。統合層が RESET_STREAM /
+                // STOP_SENDING を送出する前にピアから後続チャンクが届いても、
+                // `feed_stream` の `ignored_pre_negotiation_wt_bidi` チェックで
+                // 破棄されて `dispatch_client_bidi_stream` への再入を防ぐ
+                self.ignored_pre_negotiation_wt_bidi.insert(stream_id);
+                self.events.push_back(Event::WebTransport(
+                    WebTransportEvent::BufferedStreamRejected {
+                        stream_id,
+                        error_code: WtErrorCode::BufferedStreamRejected as u64,
+                    },
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// QPACK エンコーダーストリームを処理
@@ -1194,6 +1371,9 @@ impl Connection {
                     // SETTINGS 受信前に保留した WT CONNECT を処理する
                     // (draft-ietf-webtrans-http3-16 Section 3.1 / 4.6 / 7.1)
                     self.process_deferred_wt_connects()?;
+                    // SETTINGS 受信前に保留した 0x41 の WT bidi ストリームを再ディスパッチする
+                    // (draft-ietf-webtrans-http3-16 Section 4.6)
+                    self.process_pending_wt_bidi_pre_negotiation()?;
                 }
                 crate::frame::Frame::Goaway(payload) => {
                     let goaway_id = payload.id();
@@ -2049,6 +2229,11 @@ impl Connection {
                 let state = stream.state_mut();
                 state.reset();
             }
+            // 先頭 varint 未確定でバッファ済みの client-initiated bidi ストリームの
+            // RESET はエントリを破棄する (RFC 9000 Section 4.4: RESET_STREAM 受信時は
+            // ストリームの状態を破棄する)。ゲート除去で SETTINGS 未受信中でも本経路に
+            // 流入するようになったため清掃が必要
+            self.pending_bidi_dispatch.remove(&stream_id);
             // QPACK ブロック状態をクリアする
             self.clear_qpack_blocked(stream_id);
             // QPACK Stream Cancellation を送信 (RFC 9204 Section 2.2.2.2)
@@ -6483,5 +6668,695 @@ mod tests {
             .wt_initial_max_data(vi(1_048_576));
         process_wt_settings(&mut conn, &wt)
             .expect("サーバーは 0-RTT 検証を行わないため成功すること");
+    }
+
+    // =========================================================================
+    // WT ネゴシエーション完了前の 0x41 bidi ストリーム保留
+    // (draft-ietf-webtrans-http3-16 Section 4.6)
+    // =========================================================================
+
+    /// テスト用: WT 有効サーバーを構築する (SETTINGS 未受信)
+    fn make_wt_enabled_server_without_peer_settings() -> Connection {
+        let mut server = Connection::server(wt_enabled_settings());
+        server.set_control_stream_id(3).expect("test must succeed");
+        server
+            .set_webtransport_transport_verified(true, true)
+            .expect("test must succeed");
+        server
+    }
+
+    #[test]
+    fn test_pre_negotiation_wt_bidi_stream_dispatched_after_settings() {
+        // SETTINGS 受信後、保留された 0x41 bidi ストリームが `handle_wt_bidi_stream` に
+        // 再ディスパッチされ、`resolve_wt_bidi_stream_header` を経由して WT 経路で
+        // 処理されることを検証する (draft-16 Section 4.6)。
+        //
+        // サーバー側 `associate_or_buffer_stream` は未登録の session_id に対して
+        // Pending セッションを自動生成してバッファリングするため、
+        // WT 経路が動作すれば `wt_sessions` に session_id=4 のエントリが登録され、
+        // `wt_bidi_streams` に stream_id=8 が session_id=4 として登録される。
+        // これらの登録を「WT 経路で処理された」ことの証拠として使う。
+        // 単に「保留マップから消えた」だけでは破棄経路と区別できないため。
+        let mut server = make_wt_enabled_server_without_peer_settings();
+
+        // 未ネゴシエーション時に 0x41 + session_id=4 (存在しないセッション) の bidi を保留
+        // 0x40 0x41 = varint(0x41)、0x04 = session_id 4
+        server
+            .feed_stream(8, &[0x40, 0x41, 0x04], false)
+            .expect("test must succeed");
+        assert!(
+            server.pending_wt_bidi_pre_negotiation.contains_key(&8),
+            "SETTINGS 受信前は保留されていること"
+        );
+        assert!(
+            !server.wt_bidi_streams.contains_key(&8),
+            "SETTINGS 受信前は WT 経路に登録されていないこと"
+        );
+        assert!(
+            !server.wt_sessions.contains_key(&4),
+            "SETTINGS 受信前は Pending セッションも作成されていないこと"
+        );
+
+        // WT 有効なクライアント SETTINGS を送信する
+        let mut client = Connection::client(wt_enabled_settings());
+        client.set_control_stream_id(2).expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+
+        // SETTINGS 受信後、保留バッファから消えている (再ディスパッチ完了)
+        assert!(
+            !server.pending_wt_bidi_pre_negotiation.contains_key(&8),
+            "SETTINGS 受信で保留バッファから除去されること"
+        );
+
+        // is_wt_fully_negotiated が true になっている
+        assert!(
+            server.is_wt_fully_negotiated(),
+            "SETTINGS 受信で WT ネゴシエーション完了となること"
+        );
+
+        // WT 経路で処理された証拠として、`wt_bidi_streams` と `wt_sessions` の登録を確認
+        assert_eq!(
+            server.wt_bidi_streams.get(&8).copied(),
+            Some(4),
+            "SETTINGS 受信後に WT 経路 (`handle_wt_bidi_stream`) を経由し、\
+             stream_id=8 が session_id=4 として `wt_bidi_streams` に登録されること"
+        );
+        assert!(
+            server.wt_sessions.contains_key(&4),
+            "サーバー側で未登録 session_id 向けストリームに対して \
+             Pending セッションが自動生成されること (draft-16 Section 4.6)"
+        );
+    }
+
+    #[test]
+    fn test_pre_negotiation_wt_bidi_stream_dropped_when_wt_disabled_settings() {
+        // ピアの SETTINGS が WT 非対応の場合、保留された 0x41 bidi ストリームは
+        // WT 経路に流せないため破棄され、統合層向けに `BufferedStreamRejected` を
+        // 発火する (draft-16 Section 4.6)。接続そのものは破壊されない。
+        let mut server = make_wt_enabled_server_without_peer_settings();
+
+        // 未ネゴシエーション時に 0x41 + session_id=0 の bidi を保留
+        server
+            .feed_stream(4, &[0x40, 0x41, 0x00], false)
+            .expect("test must succeed");
+        assert!(
+            server.pending_wt_bidi_pre_negotiation.contains_key(&4),
+            "SETTINGS 受信前は保留されていること"
+        );
+
+        // WT 非対応のクライアント SETTINGS を送信する
+        let mut client = Connection::client(Settings::default());
+        client.set_control_stream_id(2).expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+
+        // SETTINGS 受信で WT ネゴシエーションは失敗しているため保留は破棄される
+        assert!(
+            !server.pending_wt_bidi_pre_negotiation.contains_key(&4),
+            "WT 非対応 SETTINGS 受信で保留バッファから除去されること"
+        );
+        assert!(
+            !server.is_wt_fully_negotiated(),
+            "ピアが WT 非対応の場合は WT ネゴシエーションが完了しないこと"
+        );
+
+        // BufferedStreamRejected イベントが発火する (統合層が RESET_STREAM/STOP_SENDING を送出)
+        let mut found_reject = false;
+        while let Some(event) = server.poll_event().expect("test must succeed") {
+            if let Event::WebTransport(WebTransportEvent::BufferedStreamRejected {
+                stream_id,
+                error_code,
+            }) = event
+                && stream_id == 4
+            {
+                assert_eq!(
+                    error_code,
+                    WtErrorCode::BufferedStreamRejected as u64,
+                    "破棄時は WT_BUFFERED_STREAM_REJECTED で拒否されること"
+                );
+                found_reject = true;
+            }
+        }
+        assert!(
+            found_reject,
+            "WT 非対応 SETTINGS 受信で保留ストリームが BufferedStreamRejected として通知されること"
+        );
+    }
+
+    #[test]
+    fn test_pre_negotiation_wt_bidi_stream_is_buffered_not_error() {
+        // WT ネゴシエーション未完了時に到着した先頭 0x41 の bidi ストリームは
+        // 保留バッファに格納され、接続エラーにならない (draft-16 Section 4.6)。
+        let mut server = make_wt_enabled_server_without_peer_settings();
+
+        // WT_STREAM (0x41) + session_id=0 の varint + データ
+        // 0x40 0x41 = 2 バイト varint (値 0x41)、続く 0x00 = session_id 0
+        let wt_stream_data = [0x40, 0x41, 0x00, b'h', b'i'];
+        let result = server.feed_stream(4, &wt_stream_data, false);
+        assert!(
+            result.is_ok(),
+            "未ネゴシエーション時の 0x41 bidi 到着で接続エラーにならないこと: {result:?}"
+        );
+
+        // 保留バッファに格納されている
+        assert!(
+            server.pending_wt_bidi_pre_negotiation.contains_key(&4),
+            "0x41 bidi ストリームが pending_wt_bidi_pre_negotiation に保留されていること"
+        );
+
+        // BufferedStreamRejected イベントが発火していない (上限内)
+        let mut has_reject = false;
+        while let Some(event) = server.poll_event().expect("test must succeed") {
+            if matches!(
+                event,
+                Event::WebTransport(WebTransportEvent::BufferedStreamRejected { .. })
+            ) {
+                has_reject = true;
+            }
+        }
+        assert!(
+            !has_reject,
+            "上限内なので BufferedStreamRejected は発火しないこと"
+        );
+    }
+
+    #[test]
+    fn test_pre_negotiation_wt_bidi_stream_exceeds_stream_limit() {
+        // 保留可能なストリーム数の上限 (`MAX_BUFFERED_STREAMS` = 100) を超えると
+        // BufferedStreamRejected で拒否される (draft-16 Section 4.6)。
+        let mut server = make_wt_enabled_server_without_peer_settings();
+        let wt_stream_data = [0x40, 0x41, 0x00];
+        let limit = crate::webtransport::session::MAX_BUFFERED_STREAMS;
+
+        // 上限本数まで異なる client-initiated bidi (下位 2 ビット 0x00) を保留
+        for i in 0..limit {
+            let stream_id = (i as u64) * 4;
+            server
+                .feed_stream(stream_id, &wt_stream_data, false)
+                .expect("test must succeed");
+        }
+        assert_eq!(
+            server.pending_wt_bidi_pre_negotiation.len(),
+            limit,
+            "上限まで保留できること"
+        );
+
+        // 上限 + 1 個目は BufferedStreamRejected で拒否される
+        let over_limit_stream_id = (limit as u64) * 4;
+        server
+            .feed_stream(over_limit_stream_id, &wt_stream_data, false)
+            .expect("test must succeed");
+        assert!(
+            !server
+                .pending_wt_bidi_pre_negotiation
+                .contains_key(&over_limit_stream_id),
+            "上限超過ストリームは保留されないこと"
+        );
+        assert!(
+            server
+                .ignored_pre_negotiation_wt_bidi
+                .contains(&over_limit_stream_id),
+            "上限超過ストリームは以降破棄対象として記録されること"
+        );
+
+        // BufferedStreamRejected が発火する
+        let mut found_reject = false;
+        while let Some(event) = server.poll_event().expect("test must succeed") {
+            if let Event::WebTransport(WebTransportEvent::BufferedStreamRejected {
+                stream_id,
+                error_code,
+            }) = event
+                && stream_id == over_limit_stream_id
+            {
+                assert_eq!(
+                    error_code,
+                    WtErrorCode::BufferedStreamRejected as u64,
+                    "WT_BUFFERED_STREAM_REJECTED エラーコードで拒否されること"
+                );
+                found_reject = true;
+            }
+        }
+        assert!(
+            found_reject,
+            "上限超過時に BufferedStreamRejected イベントが発火すること"
+        );
+    }
+
+    #[test]
+    fn test_pre_negotiation_wt_bidi_stream_exceeds_data_limit() {
+        // 1 ストリームあたりのデータ量上限 (`WT_MAX_BUFFERED_STREAM_BYTES` = 64 KiB) を
+        // 超えると BufferedStreamRejected で拒否され、保留バッファから除去される
+        let mut server = make_wt_enabled_server_without_peer_settings();
+
+        // 先頭 0x41 + session_id=0 + 上限超過データを feed する
+        let limit = wt_types::WT_MAX_BUFFERED_STREAM_BYTES;
+        let mut wt_stream_data = vec![0x40, 0x41, 0x00];
+        wt_stream_data.extend(vec![b'x'; limit + 1]);
+        server
+            .feed_stream(4, &wt_stream_data, false)
+            .expect("test must succeed");
+
+        assert!(
+            !server.pending_wt_bidi_pre_negotiation.contains_key(&4),
+            "上限超過ストリームは保留バッファから除去されること"
+        );
+        assert!(
+            server.ignored_pre_negotiation_wt_bidi.contains(&4),
+            "上限超過ストリームは以降破棄対象として記録されること"
+        );
+
+        // BufferedStreamRejected が発火する
+        let mut found_reject = false;
+        while let Some(event) = server.poll_event().expect("test must succeed") {
+            if let Event::WebTransport(WebTransportEvent::BufferedStreamRejected {
+                stream_id,
+                error_code,
+            }) = event
+                && stream_id == 4
+            {
+                assert_eq!(
+                    error_code,
+                    WtErrorCode::BufferedStreamRejected as u64,
+                    "WT_BUFFERED_STREAM_REJECTED エラーコードで拒否されること"
+                );
+                found_reject = true;
+            }
+        }
+        assert!(
+            found_reject,
+            "データ量超過時に BufferedStreamRejected イベントが発火すること"
+        );
+    }
+
+    #[test]
+    fn test_pre_negotiation_wt_bidi_rejected_subsequent_chunks_are_ignored() {
+        // 上限超過で拒否された bidi ストリームに続くチャンクは、`feed_stream` の
+        // `ignored_pre_negotiation_wt_bidi` チェックで先に破棄され、再度保留経路や
+        // リクエストストリーム経路には流れ込まないこと。
+        let mut server = make_wt_enabled_server_without_peer_settings();
+
+        // データ量上限超過で拒否させる
+        let limit = wt_types::WT_MAX_BUFFERED_STREAM_BYTES;
+        let mut wt_stream_data = vec![0x40, 0x41, 0x00];
+        wt_stream_data.extend(vec![b'x'; limit + 1]);
+        server
+            .feed_stream(4, &wt_stream_data, false)
+            .expect("test must succeed");
+        assert!(
+            server.ignored_pre_negotiation_wt_bidi.contains(&4),
+            "拒否後は以降破棄対象になっていること"
+        );
+
+        // 拒否時の BufferedStreamRejected イベントをドレインする
+        while let Some(_event) = server.poll_event().expect("test must succeed") {}
+
+        // 拒否後に到着した追加チャンクを feed する
+        // (varint 前置が破損したように見える任意バイト列でも接続エラーになってはならない)
+        server
+            .feed_stream(4, &[b'y'; 100], true)
+            .expect("test must succeed");
+
+        // 保留マップにも通常のリクエストストリーム経路にも進んでいない
+        assert!(
+            !server.pending_wt_bidi_pre_negotiation.contains_key(&4),
+            "拒否後の後続チャンクで保留バッファに再入しないこと"
+        );
+        assert!(
+            !server.streams.contains_key(&4),
+            "拒否後の後続チャンクをリクエストストリームとして扱わないこと"
+        );
+
+        // 同じ stream_id で BufferedStreamRejected が重複発火していない
+        let mut extra_reject = false;
+        while let Some(event) = server.poll_event().expect("test must succeed") {
+            if let Event::WebTransport(WebTransportEvent::BufferedStreamRejected {
+                stream_id, ..
+            }) = event
+                && stream_id == 4
+            {
+                extra_reject = true;
+            }
+        }
+        assert!(
+            !extra_reject,
+            "拒否後の後続チャンクで BufferedStreamRejected が重複発火しないこと"
+        );
+    }
+
+    #[test]
+    fn test_pre_negotiation_wt_bidi_stream_multi_chunk_dispatched_after_settings() {
+        // 複数チャンクに分割された 0x41 bidi ストリームを保留した場合、
+        // SETTINGS 受信後に連結されたバイト列で `handle_wt_bidi_stream` に再ディスパッチ
+        // され、正しく WT 経路で処理されることを検証する (draft-16 Section 4.6)。
+        let mut server = make_wt_enabled_server_without_peer_settings();
+
+        // 1 チャンク目: signal value varint の先頭のみ [0x40] を feed
+        // 1 バイトなので `varint_prefix == 0x01` (2 バイト varint)、
+        // `pending_bidi_dispatch` に格納される。
+        server
+            .feed_stream(8, &[0x40], false)
+            .expect("test must succeed");
+        assert!(
+            server.pending_bidi_dispatch.contains_key(&8),
+            "1 バイトのみでは varint 判定できず pending_bidi_dispatch に格納されること"
+        );
+
+        // 2 チャンク目: 残りの signal value [0x41] + session_id [0x04] + payload [b'h']
+        // varint 完成で 0x41 と判定され、pending_wt_bidi_pre_negotiation に移る
+        server
+            .feed_stream(8, &[0x41, 0x04, b'h'], false)
+            .expect("test must succeed");
+        assert!(
+            !server.pending_bidi_dispatch.contains_key(&8),
+            "varint 判定完了で pending_bidi_dispatch から除去されること"
+        );
+        assert!(
+            server.pending_wt_bidi_pre_negotiation.contains_key(&8),
+            "0x41 判定で pending_wt_bidi_pre_negotiation に格納されること"
+        );
+
+        // 3 チャンク目: payload の続き [b'i'] を保留エントリに追記
+        server
+            .feed_stream(8, b"i", false)
+            .expect("test must succeed");
+        // pending_wt_bidi_pre_negotiation エントリのバイト列が連結されているか確認する
+        let pending_len = server
+            .pending_wt_bidi_pre_negotiation
+            .get(&8)
+            .map(|e| e.data.len())
+            .expect("test must succeed");
+        assert_eq!(
+            pending_len, 5,
+            "保留エントリに [0x40, 0x41, 0x04, b'h', b'i'] の 5 バイトが連結されていること"
+        );
+
+        // WT 有効なクライアント SETTINGS を送信する
+        let mut client = Connection::client(wt_enabled_settings());
+        client.set_control_stream_id(2).expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+
+        // 再ディスパッチで WT 経路に登録される
+        assert_eq!(
+            server.wt_bidi_streams.get(&8).copied(),
+            Some(4),
+            "連結したバイト列から session_id=4 が正しくパースされ、WT 経路に登録されること"
+        );
+        assert!(
+            server.wt_sessions.contains_key(&4),
+            "Pending セッションが自動生成されること"
+        );
+    }
+
+    #[test]
+    fn test_pre_negotiation_wt_bidi_stream_fin_dispatched_after_settings() {
+        // 保留エントリの FIN が SETTINGS 受信後の再ディスパッチで伝播することを検証する。
+        // FIN は `WtSession::mark_buffered_stream_fin` に到達し、セッション確立後に
+        // `BidiStreamEnd` イベントとしてアプリ層に届く (draft-16 Section 4.6 / 4.4)。
+        let mut server = make_wt_enabled_server_without_peer_settings();
+
+        // 0x40 0x41 = signal (0x41)、0x04 = session_id 4、FIN 付きで feed
+        server
+            .feed_stream(8, &[0x40, 0x41, 0x04], true)
+            .expect("test must succeed");
+        assert!(
+            server
+                .pending_wt_bidi_pre_negotiation
+                .get(&8)
+                .map(|e| e.fin)
+                .unwrap_or(false),
+            "保留エントリの fin フラグが true になっていること"
+        );
+
+        // WT 有効なクライアント SETTINGS を送信する
+        let mut client = Connection::client(wt_enabled_settings());
+        client.set_control_stream_id(2).expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+
+        // 再ディスパッチで WT 経路に流れ、FIN が session の buffered stream に伝わる
+        // (Pending セッションの buffered stream エントリで fin フラグが立つ)
+        let session = server
+            .wt_sessions
+            .get(&4)
+            .expect("Pending WT セッションが自動生成されること");
+        let fin_marked = session
+            .buffered_stream_entries
+            .get(&8)
+            .map(|entry| entry.fin)
+            .unwrap_or(false);
+        assert!(
+            fin_marked,
+            "SETTINGS 受信後、FIN が Pending セッションの buffered stream に伝播すること"
+        );
+    }
+
+    #[test]
+    fn test_pre_negotiation_wt_bidi_dropped_settings_subsequent_chunks_ignored() {
+        // WT 非対応 SETTINGS で保留破棄した stream_id は
+        // `ignored_pre_negotiation_wt_bidi` に記録され、後続チャンクが到着しても
+        // `dispatch_client_bidi_stream` や `streams` に流入しないことを検証する。
+        let mut server = make_wt_enabled_server_without_peer_settings();
+
+        // 保留させる
+        server
+            .feed_stream(4, &[0x40, 0x41, 0x00, b'h'], false)
+            .expect("test must succeed");
+        assert!(server.pending_wt_bidi_pre_negotiation.contains_key(&4));
+
+        // WT 非対応 SETTINGS で破棄
+        let mut client = Connection::client(Settings::default());
+        client.set_control_stream_id(2).expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+        assert!(
+            server.ignored_pre_negotiation_wt_bidi.contains(&4),
+            "WT 非対応 SETTINGS で破棄した stream_id が ignored に記録されること"
+        );
+
+        // ドレインしておく
+        while let Some(_event) = server.poll_event().expect("test must succeed") {}
+
+        // 拒否後の後続チャンクを feed する
+        server
+            .feed_stream(4, b"ij", true)
+            .expect("test must succeed");
+
+        // どこにも流入していない
+        assert!(
+            !server.streams.contains_key(&4),
+            "後続チャンクをリクエストストリームとして扱わないこと"
+        );
+        assert!(
+            !server.pending_bidi_dispatch.contains_key(&4),
+            "後続チャンクを pending_bidi_dispatch に流さないこと"
+        );
+        assert!(
+            !server.pending_wt_bidi_pre_negotiation.contains_key(&4),
+            "後続チャンクを pending_wt_bidi_pre_negotiation に再入させないこと"
+        );
+
+        // イベントも重複発火していない
+        let mut extra_event = false;
+        while let Some(_event) = server.poll_event().expect("test must succeed") {
+            extra_event = true;
+        }
+        assert!(!extra_event, "後続チャンクで追加イベントが発火しないこと");
+    }
+
+    #[test]
+    fn test_pre_negotiation_wt_bidi_stream_reset_cleans_pending() {
+        // SETTINGS 未受信の間に保留された 0x41 bidi ストリームに RESET_STREAM が届いた場合、
+        // 保留エントリを破棄し、SETTINGS 受信後の再ディスパッチで BidiStreamOpen が
+        // 発火しないことを検証する (RFC 9000 Section 4.4 / draft-16 Section 4.6)。
+        let mut server = make_wt_enabled_server_without_peer_settings();
+
+        // 保留させる
+        server
+            .feed_stream(8, &[0x40, 0x41, 0x04], false)
+            .expect("test must succeed");
+        assert!(server.pending_wt_bidi_pre_negotiation.contains_key(&8));
+
+        // RESET_STREAM 通知 (第 3 引数は final_size、任意値)
+        server.stream_reset(8, 0, 3).expect("test must succeed");
+
+        // 保留エントリが除去され ignored に記録される
+        assert!(
+            !server.pending_wt_bidi_pre_negotiation.contains_key(&8),
+            "RESET_STREAM で保留エントリが除去されること"
+        );
+        assert!(
+            server.ignored_pre_negotiation_wt_bidi.contains(&8),
+            "RESET_STREAM 後は ignored に記録されて後続チャンクを破棄すること"
+        );
+
+        // WT 有効なクライアント SETTINGS を送信する
+        let mut client = Connection::client(wt_enabled_settings());
+        client.set_control_stream_id(2).expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+
+        // WT 経路に登録されず、BidiStreamOpen が発火しない
+        assert!(
+            !server.wt_bidi_streams.contains_key(&8),
+            "RESET 済みストリームが SETTINGS 受信後に WT 経路へ登録されないこと"
+        );
+        let mut found_open = false;
+        while let Some(event) = server.poll_event().expect("test must succeed") {
+            if matches!(
+                event,
+                Event::WebTransport(WebTransportEvent::BidiStreamOpen { .. })
+            ) {
+                found_open = true;
+            }
+        }
+        assert!(
+            !found_open,
+            "RESET 済みストリームに対して BidiStreamOpen が発火しないこと"
+        );
+    }
+
+    #[test]
+    fn test_pre_negotiation_wt_bidi_stream_post_settings_wt_disabled_rejected_immediately() {
+        // SETTINGS 受信済みで WT 非対応と確定した後に到着した新規 0x41 bidi ストリームは
+        // 保留マップに滞留させず、即座に BufferedStreamRejected で拒否して
+        // `ignored_pre_negotiation_wt_bidi` に記録する (draft-16 Section 4.6)。
+        // post-SETTINGS の状態で継続的に届く 0x41 に対して pending マップの上限が
+        // 意図せず消費されるのを防ぐため。
+        let mut server = make_wt_enabled_server_without_peer_settings();
+
+        // WT 非対応 SETTINGS を先に受信する (保留エントリなし)
+        let mut client = Connection::client(Settings::default());
+        client.set_control_stream_id(2).expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+        assert!(
+            !server.is_wt_fully_negotiated(),
+            "WT 非対応 SETTINGS 受信で WT ネゴシエーションが完了しないこと"
+        );
+
+        // 事前イベントをドレイン
+        while let Some(_event) = server.poll_event().expect("test must succeed") {}
+
+        // post-SETTINGS で新規 0x41 bidi を feed する
+        server
+            .feed_stream(4, &[0x40, 0x41, 0x00, b'h'], false)
+            .expect("test must succeed");
+
+        // 保留マップには入らず、ignored に記録される
+        assert!(
+            !server.pending_wt_bidi_pre_negotiation.contains_key(&4),
+            "post-SETTINGS + WT 非対応時は pending に入らないこと"
+        );
+        assert!(
+            server.ignored_pre_negotiation_wt_bidi.contains(&4),
+            "post-SETTINGS + WT 非対応時は ignored に記録されること"
+        );
+
+        // BufferedStreamRejected が発火する
+        let mut found_reject = false;
+        while let Some(event) = server.poll_event().expect("test must succeed") {
+            if let Event::WebTransport(WebTransportEvent::BufferedStreamRejected {
+                stream_id,
+                error_code,
+            }) = event
+                && stream_id == 4
+            {
+                assert_eq!(
+                    error_code,
+                    WtErrorCode::BufferedStreamRejected as u64,
+                    "WT_BUFFERED_STREAM_REJECTED エラーコードで拒否されること"
+                );
+                found_reject = true;
+            }
+        }
+        assert!(
+            found_reject,
+            "post-SETTINGS + WT 非対応時に BufferedStreamRejected イベントが発火すること"
+        );
+    }
+
+    #[test]
+    fn test_pre_negotiation_bidi_dispatch_cleared_on_stream_reset() {
+        // 先頭 varint 未確定の状態 (`pending_bidi_dispatch` に格納中) で RESET_STREAM を
+        // 受信した場合、`pending_bidi_dispatch` からエントリが除去されること
+        // (RFC 9000 Section 4.4 のストリーム状態破棄)。
+        // ゲート除去で SETTINGS 未受信中も本経路に流入するようになったため清掃が必要。
+        let mut server = make_wt_enabled_server_without_peer_settings();
+
+        // 1 バイトのみ feed (varint 判定できず pending_bidi_dispatch に格納される)
+        server
+            .feed_stream(4, &[0x40], false)
+            .expect("test must succeed");
+        assert!(
+            server.pending_bidi_dispatch.contains_key(&4),
+            "1 バイトでは varint 判定できず pending_bidi_dispatch に格納されること"
+        );
+
+        // RESET_STREAM 通知
+        server.stream_reset(4, 0, 1).expect("test must succeed");
+
+        // pending_bidi_dispatch から除去されている
+        assert!(
+            !server.pending_bidi_dispatch.contains_key(&4),
+            "RESET_STREAM で pending_bidi_dispatch からエントリが除去されること"
+        );
+    }
+
+    #[test]
+    fn test_pre_negotiation_wt_bidi_stop_sending_absorbed_silently() {
+        // SETTINGS 未着で保留中の 0x41 bidi、および ignored 済みの 0x41 bidi に対する
+        // STOP_SENDING は静かに吸収され、汎用 `Event::StopSending` は発火しない
+        // (`handle_wt_stop_sending` が true を返すため)。
+        let mut server = make_wt_enabled_server_without_peer_settings();
+
+        // 保留させる (stream_id 8)
+        server
+            .feed_stream(8, &[0x40, 0x41, 0x04], false)
+            .expect("test must succeed");
+        assert!(server.pending_wt_bidi_pre_negotiation.contains_key(&8));
+
+        // データ量上限超過で拒否させる (stream_id 12)
+        let mut wt_stream_data = vec![0x40, 0x41, 0x00];
+        wt_stream_data.extend(vec![b'x'; wt_types::WT_MAX_BUFFERED_STREAM_BYTES + 1]);
+        server
+            .feed_stream(12, &wt_stream_data, false)
+            .expect("test must succeed");
+        assert!(server.ignored_pre_negotiation_wt_bidi.contains(&12));
+
+        // 事前イベントをドレインする
+        while let Some(_event) = server.poll_event().expect("test must succeed") {}
+
+        // STOP_SENDING 通知 (保留中と ignored の両方)
+        server.stop_sending(8, 0).expect("test must succeed");
+        server.stop_sending(12, 0).expect("test must succeed");
+
+        // 汎用 Event::StopSending / WebTransportEvent::StreamStopSending は発火しない
+        while let Some(event) = server.poll_event().expect("test must succeed") {
+            match event {
+                Event::StopSending { .. } => panic!(
+                    "保留中 / ignored の 0x41 bidi への STOP_SENDING で汎用 Event::StopSending が発火してはならない"
+                ),
+                Event::WebTransport(WebTransportEvent::StreamStopSending { .. }) => panic!(
+                    "保留中 / ignored の 0x41 bidi への STOP_SENDING で StreamStopSending が発火してはならない"
+                ),
+                _ => {}
+            }
+        }
     }
 }

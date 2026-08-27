@@ -549,7 +549,10 @@ impl Connection {
     ///
     /// (draft-ietf-webtrans-http3-16 Section 4.4 / Section 6)
     /// CONNECT stream の RESET_STREAM はセッション終了、データストリームの
-    /// RESET_STREAM はセッションに通知する。非 WT ストリームは `false` を返す。
+    /// RESET_STREAM はセッションに通知する。SETTINGS 未着で保留中の 0x41 bidi は
+    /// 保留エントリを破棄して `ignored_pre_negotiation_wt_bidi` に記録し `true` を返す。
+    /// 既に拒否済みで `ignored_pre_negotiation_wt_bidi` に登録済みの 0x41 bidi は
+    /// 静かに吸収して `true` を返す。非 WT ストリームは `false` を返す。
     pub(crate) fn handle_wt_stream_reset(
         &mut self,
         stream_id: u64,
@@ -569,6 +572,24 @@ impl Connection {
 
         // SETTINGS 未着の WT CONNECT ストリームの RESET は保留エントリを破棄する
         if self.deferred_wt_connects.remove(&stream_id).is_some() {
+            return true;
+        }
+
+        // SETTINGS 未着の 0x41 bidi ストリームの RESET は保留エントリを破棄する。
+        // 保留を破棄したあと SETTINGS 受信時の `process_pending_wt_bidi_pre_negotiation`
+        // で再ディスパッチされないようにし、`ignored_pre_negotiation_wt_bidi` に記録して
+        // 後続チャンクも破棄する
+        if self
+            .pending_wt_bidi_pre_negotiation
+            .remove(&stream_id)
+            .is_some()
+        {
+            self.ignored_pre_negotiation_wt_bidi.insert(stream_id);
+            return true;
+        }
+        // 既に上限拒否等で ignored 化されているストリームの RESET も静かに吸収する
+        // (RFC 9000 Section 4.4)
+        if self.ignored_pre_negotiation_wt_bidi.contains(&stream_id) {
             return true;
         }
 
@@ -683,9 +704,11 @@ impl Connection {
 
     /// STOP_SENDING 受信時の WebTransport 伝播処理 WebTransport 混在関数の抽出
     ///
-    /// (draft-ietf-webtrans-http3-15 Section 4.4 / Section 6)
+    /// (draft-ietf-webtrans-http3-16 Section 4.4 / Section 6)
     /// CONNECT stream の STOP_SENDING はセッション終了、データストリームの
-    /// STOP_SENDING はセッションに通知する。非 WT ストリームは `false` を返す。
+    /// STOP_SENDING はセッションに通知する。SETTINGS 未着で保留中の 0x41 bidi、
+    /// および既に拒否済みの 0x41 bidi ストリームは静かに `true` を返して吸収する。
+    /// 非 WT ストリームは `false` を返す。
     pub(crate) fn handle_wt_stop_sending(&mut self, stream_id: u64, error_code: u64) -> bool {
         if self.wt_sessions.contains_key(&stream_id) {
             self.terminate_wt_session(stream_id);
@@ -694,6 +717,16 @@ impl Connection {
         // 終了済みセッションの CONNECT ストリームへの STOP_SENDING は静かに無視する
         // (draft-ietf-webtrans-http3-16 Section 6)
         if self.closed_wt_sessions.contains(&stream_id) {
+            return true;
+        }
+        // SETTINGS 未着で保留中の 0x41 bidi、または上限拒否等で既に ignored 化された
+        // 0x41 bidi ストリームへの STOP_SENDING は静かに吸収する (上位層に見えていない
+        // ストリームへの STOP_SENDING を汎用イベントで通知しないため)
+        if self
+            .pending_wt_bidi_pre_negotiation
+            .contains_key(&stream_id)
+            || self.ignored_pre_negotiation_wt_bidi.contains(&stream_id)
+        {
             return true;
         }
         if let Some(session_id) = self
