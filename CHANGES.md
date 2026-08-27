@@ -28,6 +28,8 @@
   - @voluntas
 - [FIX] `tokio-s2n-quic` の H3 uni ストリームタスクが `process_stream_data` (feed + drain) で取り出したイベントを破棄していたため QPACK ブロック解除で生成されたヘッダー・ボディ・StreamEnd イベントが欠落してレスポンスが空になる問題を修正する。uni タスクを `feed_stream_only` + `Notify` 通知方式に変更し、リクエスト受信ループが `tokio::select!` でブロック解除を待って `drain_events` を回すよう再構成する (RFC 9204 Section 2.2.1)
   - @voluntas
+- [FIX] `Connection::register_local_wt_stream` がローカル開始 WebTransport 単方向ストリームを拒否していたためピアからの STOP_SENDING が汎用 `Event::StopSending` にフォールスルーして `WebTransportEvent::StreamStopSending` (セッション ID 付き) として通知されない問題を修正する。登録された uni ストリームは `handle_wt_stop_sending` が WT イベントに変換する。またセッション終了時の `WebTransportEvent::SessionClosed { reset_streams }` に登録済みの uni が reliable_size 付きで含まれるようになり、統合層は RESET_STREAM_AT を送出できる (RFC 9000 Section 3.5 / draft-ietf-webtrans-http3-16 Section 4.4)
+  - @voluntas
 - [CHANGE] MSRV (Minimum Supported Rust Version) を 1.88 から 1.93 に引き上げる
   - @voluntas
 - [CHANGE] `Client::connect` / `ClientWebTransportSession::connect` / `TlsContext::new_client` でサーバー証明書のチェーン検証とホスト名検証を有効にする (従来 `verify_peer=true` は検証なしと同等の挙動だった)。検証に失敗する既存接続は失敗するようになる (RFC 9114 Section 3.1 / RFC 9001 Section 4.4)

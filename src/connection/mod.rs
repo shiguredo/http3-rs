@@ -3520,17 +3520,37 @@ mod tests {
     }
 
     #[test]
-    fn test_register_local_wt_stream_rejects_uni_stream_id() {
-        // 単方向ストリーム ID は拒否 (RFC 9000 Section 2.1:
-        //  単方向ストリームは開始者のみが送信するため受信データが存在しない)
-        let mut conn = make_server_with_established_wt_session(0);
+    fn test_register_local_wt_stream_accepts_local_uni_and_rejects_peer_uni() {
+        // ローカル開始 uni は受理される (RFC 9000 Section 2.1: ローカルにとって送信専用で
+        // ピアから STOP_SENDING のみ届く。draft-ietf-webtrans-http3-16 Section 4.4)。
+        // ピア開始 uni は拒否される (受信データは resolve_wt_uni_stream_session_id が扱う)。
+        //
+        // stream_id の選択: サーバー側の receive-only 制御ストリーム (peer control_recv) は
+        // stream_id=6 だが、`register_local_wt_stream` は kind check で先に IdError を
+        // 返すため到達しない。以下の各ケースは kind + role の分岐のみを検証する。
 
-        // 0x02: client-initiated unidirectional
-        let err = conn.register_local_wt_stream(0, 2).unwrap_err();
+        // サーバー側: サーバー開始 uni (0x03) は受理される
+        let mut server = make_server_with_established_wt_session(0);
+        server
+            .register_local_wt_stream(0, 7)
+            .expect("サーバー側のローカル uni は受理されること");
+        assert_eq!(server.wt_uni_streams.get(&7).copied(), Some(0));
+
+        // サーバー側: クライアント開始 uni (0x02) はピア開始で拒否される
+        let mut server = make_server_with_established_wt_session(0);
+        let err = server.register_local_wt_stream(0, 6).unwrap_err();
         assert!(matches!(err, Error::ConnectionError(ErrorCode::IdError)));
 
-        // 0x03: server-initiated unidirectional
-        let err = conn.register_local_wt_stream(0, 3).unwrap_err();
+        // クライアント側: クライアント開始 uni (0x02) は受理される
+        let mut client = wt_negotiated_client_with_session(0);
+        client
+            .register_local_wt_stream(0, 6)
+            .expect("クライアント側のローカル uni は受理されること");
+        assert_eq!(client.wt_uni_streams.get(&6).copied(), Some(0));
+
+        // クライアント側: サーバー開始 uni (0x03) はピア開始で拒否される
+        let mut client = wt_negotiated_client_with_session(0);
+        let err = client.register_local_wt_stream(0, 7).unwrap_err();
         assert!(matches!(err, Error::ConnectionError(ErrorCode::IdError)));
     }
 
@@ -4624,6 +4644,112 @@ mod tests {
     }
 
     #[test]
+    fn test_stop_sending_propagates_to_local_wt_uni_data_stream_server() {
+        // サーバー側: ローカル開始 uni ストリームに `register_local_wt_stream` で登録した後、
+        // ピアからの STOP_SENDING が WebTransportEvent::StreamStopSending (セッション ID 付き)
+        // として通知される (draft-ietf-webtrans-http3-16 Section 4.4)。
+        //
+        // stream_id=7 はサーバー開始 uni (下位 2 ビット 0x03) で、
+        // クリティカルストリーム (control = 3) とは衝突しない。
+        let mut server = make_server_with_established_wt_session(0);
+        server
+            .register_local_wt_stream(0, 7)
+            .expect("ローカル uni の登録に成功すること");
+
+        // ピアから STOP_SENDING を受信
+        server
+            .stop_sending(7, 0x99)
+            .expect("STOP_SENDING の処理に成功すること");
+
+        let event = server
+            .poll_event()
+            .expect("イベント取得に成功すること")
+            .expect("StreamStopSending イベントが存在すること");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::StreamStopSending {
+                session_id: 0,
+                stream_id: 7,
+                error_code: 0x99,
+            })
+        ));
+        // セッションは終了せず Established のまま
+        assert!(matches!(
+            server
+                .wt_sessions
+                .get(&0)
+                .expect("セッションが残っていること")
+                .state,
+            WtSessionState::Established
+        ));
+    }
+
+    #[test]
+    fn test_stop_sending_propagates_to_local_wt_uni_data_stream_client() {
+        // クライアント側: ローカル開始 uni ストリームに `register_local_wt_stream` で登録した後、
+        // ピアからの STOP_SENDING が WebTransportEvent::StreamStopSending (セッション ID 付き)
+        // として通知される (Role::Client 経路の検証)。
+        //
+        // stream_id=6 はクライアント開始 uni (下位 2 ビット 0x02) で、
+        // クライアント側の control ストリーム (2) とは衝突しない。
+        let mut client = wt_negotiated_client_with_session(0);
+        client
+            .register_local_wt_stream(0, 6)
+            .expect("ローカル uni の登録に成功すること");
+
+        client
+            .stop_sending(6, 0x55)
+            .expect("STOP_SENDING の処理に成功すること");
+
+        let event = client
+            .poll_event()
+            .expect("イベント取得に成功すること")
+            .expect("StreamStopSending イベントが存在すること");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::StreamStopSending {
+                session_id: 0,
+                stream_id: 6,
+                error_code: 0x55,
+            })
+        ));
+        assert!(matches!(
+            client
+                .wt_sessions
+                .get(&0)
+                .expect("セッションが残っていること")
+                .state,
+            WtSessionState::Established
+        ));
+    }
+
+    #[test]
+    fn test_stop_sending_falls_through_for_unregistered_uni_stream() {
+        // 未登録の uni ストリームへの STOP_SENDING は WT イベント化されず
+        // 汎用 Event::StopSending にフォールスルーする (handle_wt_stop_sending は false)。
+        //
+        // stream_id=7 はサーバー開始 uni で、クリティカルストリームとも衝突しない。
+        let mut server = make_server_with_established_wt_session(0);
+
+        // stream_id=7 は登録していない
+        server
+            .stop_sending(7, 0x77)
+            .expect("STOP_SENDING の処理に成功すること");
+
+        let event = server
+            .poll_event()
+            .expect("イベント取得に成功すること")
+            .expect("StopSending イベントが存在すること");
+        assert!(matches!(
+            event,
+            Event::StopSending {
+                stream_id: 7,
+                error_code: 0x77,
+            }
+        ));
+    }
+
+    #[test]
     fn test_stop_sending_propagates_to_wt_bidi_data_stream() {
         // 既知 WebTransport セッションに属する双方向データストリームの STOP_SENDING は
         // セッションを終了させず WebTransportEvent::StreamStopSending として通知する
@@ -4694,6 +4820,48 @@ mod tests {
         crate::webtransport::Capsule::DrainSession.encode(&mut payload);
         conn.process_wt_capsule_data(session_id, &payload)
             .expect("test must succeed");
+    }
+
+    #[test]
+    fn test_wt_session_closed_event_carries_reliable_size_for_local_uni() {
+        // ローカル開始 uni を `register_local_wt_stream` で登録した後、
+        // セッション終了時の `SessionClosed.reset_streams` に登録済み uni が
+        // reliable_size (uni header 長 = UNI_TYPE varint 2B + session_id varint 1B = 3B)
+        // 付きで含まれることを検証する (draft-ietf-webtrans-http3-16 Section 4.4 / Section 6)。
+        //
+        // stream_id=7 はサーバー開始 uni (下位 2 ビット 0x03)。
+        let mut server = make_server_with_established_wt_session(0);
+        server
+            .register_local_wt_stream(0, 7)
+            .expect("ローカル uni の登録に成功すること");
+
+        // CONNECT stream の RESET でセッション終了
+        server
+            .stream_reset(0, 0x99, 0)
+            .expect("CONNECT ストリームリセットに成功すること");
+
+        let event = server
+            .poll_event()
+            .expect("イベント取得に成功すること")
+            .expect("SessionClosed イベントが存在すること");
+        let Event::WebTransport(WebTransportEvent::SessionClosed {
+            session_id,
+            reset_streams,
+            ..
+        }) = event
+        else {
+            panic!("SessionClosed イベントではない: {event:?}");
+        };
+        assert_eq!(session_id, 0);
+        // ローカル開始 uni (stream_id=7) が reset_streams に含まれる
+        let entry = reset_streams
+            .iter()
+            .find(|e| e.stream_id == 7)
+            .expect("stream_id=7 が reset_streams に含まれること");
+        assert_eq!(
+            entry.reliable_size, 3,
+            "uni header (UNI_TYPE 2B + session_id 1B) 長と一致すること"
+        );
     }
 
     #[test]
