@@ -171,10 +171,15 @@ pub enum WebTransportEvent {
         error_code: u64,
     },
     /// バッファリング拒否
-    /// (draft-ietf-webtrans-http3-15 Section 4.6)
+    /// (draft-ietf-webtrans-http3-16 Section 4.6)
     ///
-    /// バッファリング上限を超えたため、`error_code` を使用して
-    /// RESET_STREAM / STOP_SENDING を送信すること。
+    /// 保留していた WebTransport ストリームを WT 経路で処理できないため、
+    /// `error_code` を使用して RESET_STREAM / STOP_SENDING を送信すること。
+    /// 発火要因:
+    /// - バッファリング上限 (ストリーム数 / データ量) を超えた
+    /// - セッションが終了済み (`WT_SESSION_GONE` エラーコードで発火する場合あり)
+    /// - ピアの SETTINGS が WebTransport 非対応で、保留していた bidi ストリームを
+    ///   WT 経路に流せない
     BufferedStreamRejected {
         /// 拒否されたストリーム ID
         stream_id: u64,
