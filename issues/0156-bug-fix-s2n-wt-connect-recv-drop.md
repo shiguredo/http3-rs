@@ -1,7 +1,7 @@
 # tokio-s2n-quic の CONNECT ストリーム受信側がドロップされカプセルチャネルが断絶する
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-27
 - Branch: feature/fix-s2n-wt-connect-recv-drop
 - Polished: 2026-08-26
 
@@ -36,10 +36,45 @@
 
 ## 解決方法
 
-### 関連ファイル
+### 変更内容
 
-- `crates/tokio-s2n-quic/src/webtransport/client.rs` (`WtClient::connect`)
-- `crates/tokio-s2n-quic/src/webtransport/server.rs` (`WtSessionRequest` の構造体フィールドと `from_connection` / `accept` の受け渡し)
-- `crates/tokio-s2n-quic/src/webtransport/session.rs` (`WtSession` に受信タスク・接続状態・イベント受信端を追加)
-- `crates/tokio-s2n-quic/src/internal/connection_state.rs` (アブラプトクローズ時に `stream_reset` を sans-I/O 層へ渡す経路)
-- 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 6、`refs/quic/rfc9000.txt` Section 3.5
+- `crates/tokio-s2n-quic/src/webtransport/session.rs` の `WtSession`:
+  - `event_rx: mpsc::Receiver<WebTransportEvent>` と `recv_task: JoinHandle<()>` フィールドを追加
+  - 公開 API `recv_event() -> Option<WebTransportEvent>` を追加。届き得るイベントは `SessionClosed` / `SessionDraining` / `BufferedStreamRejected`
+  - `Drop for WtSession` を追加し、drop 時に `connect_send.finish()` (FIN 送出) と `recv_task.abort()` を呼ぶ
+  - `is_forwardable_wt_event` と `synthesized_session_closed` を共通ヘルパーとして追加
+- `crates/tokio-s2n-quic/src/webtransport/client.rs` の `WtClient::connect`:
+  - ハンドシェイクループで forwardable WebTransport イベントを `pending_wt_events` にバッファする (200 レスポンスと同一 receive で到着した終端カプセル等の取りこぼしを防ぐ)
+  - CONNECT ストリームの受信タスク `run_client_connect_recv_task` を追加
+- `crates/tokio-s2n-quic/src/webtransport/server.rs` の `WtSessionRequest`:
+  - `recv_stream` / `pending_wt_events` フィールドを追加
+  - `from_connection` のハンドシェイクループで forwardable WebTransport イベントを `pending_wt_events` にバッファする
+  - `accept()` で `send_response` 後に `drain_events` を追加実施し、`establish_wt_session_server` で発火した楽観バッファ由来のイベントを `pending_wt_events` に append する
+  - CONNECT ストリームの受信タスク `run_server_connect_recv_task` を追加
+- `crates/tokio-s2n-quic/src/internal/connection_state.rs`:
+  - `Client/ServerConnectionState` に `connect_stream_reset` メソッドを追加 (sans-I/O 層の `stream_reset` を呼び `final_size = 0` で `SessionClosed` を生成させる)
+- 受信タスクの動作:
+  - `pending_wt_events` を先に流したあと、CONNECT ストリームからの受信ループを開始
+  - `Ok(Some)` で `process_stream_data` を呼び、forwardable WebTransport イベントを `event_tx` に流す
+  - `Ok(None)` (FIN) で `process_stream_data(_, &[], true)` を呼び、sans-I/O 層の `terminate_wt_session` に `SessionClosed { close_error_code: 0, close_message: "" }` を発火させる (draft-16 Section 6 のクリーンクローズ等価)
+  - `Err(_)` (RESET_STREAM 等) で `connect_stream_reset` を呼び `SessionClosed` を発火させる
+  - sans-I/O 層が `Err` を返した場合は先に `drain_events` を試み、`SessionClosed` を優先配信する。それも無い場合は `synthesized_session_closed` (close_error_code=0 / message="") をフォールバック配信する
+  - `SessionClosed` を配信したらタスク終了
+- `crates/tokio-s2n-quic/tests/webtransport_session_close_e2e.rs` を新規追加し、実 QUIC ループバック統合テスト 3 件を実装:
+  - `server_close_delivers_session_closed_to_client`: サーバー側 `WtSession::close(42, "server bye")` を検知
+  - `client_close_delivers_session_closed_to_server`: クライアント側 `WtSession::close(7, "client bye")` を検知
+  - `client_drop_delivers_clean_close_to_server`: クライアント側の `drop` によるクリーンクローズ (FIN のみ) で `close_error_code = 0`, `close_message = ""` を検知
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した
+
+### 対象外
+
+- draft-16 Section 6 の追加 MUST 対応: 「受信側は WT_CLOSE_SESSION 受信後に相手に close または reset を返す」「WT_CLOSE_SESSION 受信後の追加データは H3_MESSAGE_ERROR で reset する」「Application Error Message 1024 バイト制限」「STOP_SENDING の error code を明示的に WT_SESSION_GONE にする」「関連ストリームを WT_SESSION_GONE で reset する」は本 issue の範囲外 (別 issue で対応)
+- フロー制御カプセル (`WebTransportEvent::Capsule`) のアプリ配信・送信クレジット更新は 0181 で対応する
+- WT データストリームの RESET_STREAM / STOP_SENDING を sans-I/O 層へフィードする経路の追加、DATAGRAM フレームの sans-I/O 層フィード追加は別 issue で対応する (現状 `Datagram` / `StreamReset` / `StreamStopSending` は tokio-s2n-quic 内で発火経路が無いため `is_forwardable_wt_event` の対象外)
+- `run_client_connect_recv_task` / `run_server_connect_recv_task` の重複除去 (trait 抽出等) は別 issue で対応する
+- アブラプトクローズ (真の RESET_STREAM) を検証する統合テストは s2n-quic の API 制約により本 issue では見送る (別 issue で対応)
+
+### 一次資料
+
+- `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 6 (Session Termination)
+- `refs/quic/rfc9000.txt` Section 3.5 (STOP_SENDING semantics)
