@@ -17,5 +17,6 @@ pub use h3::{
 };
 pub use shiguredo_http3::webtransport::DraftVersion;
 pub use webtransport::{
-    WtBiStream, WtClient, WtRecvStream, WtSendStream, WtServer, WtSession, WtSessionRequest,
+    WebTransportEvent, WtBiStream, WtClient, WtRecvStream, WtSendStream, WtServer, WtSession,
+    WtSessionRequest,
 };

@@ -3,9 +3,12 @@
 use bytes::Bytes;
 use s2n_quic::connection::BidirectionalStreamAcceptor;
 use s2n_quic::stream::{ReceiveStream, SendStream};
+use shiguredo_http3::WebTransportEvent;
 use shiguredo_http3::webtransport::capsule::Capsule;
+use shiguredo_http3::webtransport::error::ErrorCode as WtErrorCode;
 use shiguredo_http3::webtransport::stream::StreamHeader;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 /// WebTransport セッション
 pub struct WtSession {
@@ -19,6 +22,15 @@ pub struct WtSession {
     connect_send: SendStream,
     /// WT 単方向ストリーム受信チャネル
     uni_rx: mpsc::Receiver<WtRecvStream>,
+    /// WebTransport イベント受信チャネル
+    /// (現時点で発火し得るのは `SessionClosed` / `SessionDraining` / `BufferedStreamRejected`)
+    event_rx: mpsc::Receiver<WebTransportEvent>,
+    /// CONNECT ストリーム受信タスク (`WtSession` ドロップ時に abort する)
+    ///
+    /// タスクは CONNECT ストリームの受信データを sans-I/O 層へ流し、
+    /// WT_CLOSE_SESSION カプセルの検知 / CONNECT ストリームの FIN / RESET_STREAM を
+    /// `WebTransportEvent::SessionClosed` に変換して `event_rx` に届ける。
+    recv_task: JoinHandle<()>,
 }
 
 impl WtSession {
@@ -29,6 +41,8 @@ impl WtSession {
         handle: s2n_quic::connection::Handle,
         connect_send: SendStream,
         uni_rx: mpsc::Receiver<WtRecvStream>,
+        event_rx: mpsc::Receiver<WebTransportEvent>,
+        recv_task: JoinHandle<()>,
     ) -> Self {
         Self {
             session_id,
@@ -36,12 +50,35 @@ impl WtSession {
             handle,
             connect_send,
             uni_rx,
+            event_rx,
+            recv_task,
         }
     }
 
     /// セッション ID を取得する
     pub fn session_id(&self) -> u64 {
         self.session_id
+    }
+
+    /// WebTransport イベントを受信する
+    ///
+    /// 現時点で届き得るイベントは以下の 3 種類:
+    /// - `SessionClosed`: CONNECT ストリーム上で WT_CLOSE_SESSION カプセル受信 /
+    ///   クリーンな FIN 受信 / RESET_STREAM 受信のいずれかを検知した
+    /// - `SessionDraining`: WT_DRAIN_SESSION カプセル受信を検知した
+    /// - `BufferedStreamRejected`: セッション確立時のバッファリング済みストリームが
+    ///   フロー制御違反で拒否された
+    ///
+    /// `None` を返した場合、受信タスクが完全に終了しており以降イベントは来ない
+    /// (セッションの終端。`SessionClosed` が届いた後に閉じるほか、CONNECT ストリームが
+    /// 予期せず切断された場合や `WtSession` 自身がドロップされた場合にも `None` になる)。
+    ///
+    /// tokio-s2n-quic では現状 WT データストリームを sans-I/O 層に登録しないため、
+    /// `SessionClosed { reset_streams }` は常に空 `Vec` になる。データストリームの
+    /// 後始末はアプリ層で `WtBiStream::finish` 等を用いて行うこと
+    /// (draft-ietf-webtrans-http3-16 Section 6)。
+    pub async fn recv_event(&mut self) -> Option<WebTransportEvent> {
+        self.event_rx.recv().await
     }
 
     /// 双方向ストリームを受け付ける
@@ -166,6 +203,68 @@ impl WtSession {
             .map_err(crate::Error::transport)?;
         // FIN 送出
         self.connect_send.finish().map_err(crate::Error::transport)
+    }
+}
+
+impl Drop for WtSession {
+    fn drop(&mut self) {
+        // 送信端 (`connect_send`) に明示的に FIN を送出する。
+        //
+        // s2n-quic の `SendStream::drop` にも FIN 送出の暗黙挙動があるため実質同じ結果に
+        // なるが、明示呼び出しにより「WtSession の drop でクリーンクローズを相手に届ける」
+        // という意図を型レベルではなくコードで表明する
+        // (draft-ietf-webtrans-http3-16 Section 6: FIN のみでのクリーンクローズは
+        // WT_CLOSE_SESSION(error_code=0, message="") と等価)。
+        // `finish()` が Err を返す場合 (既にストリームが閉じているなど) は無視する。
+        let _ = self.connect_send.finish();
+        // 受信タスクに abort を通知する (実際の termination は runtime 依存で遅延しうる)。
+        // `abort` を送っても直ちにタスクが停止する保証はないが、ハンドルが drop されて
+        // 参照が失われた後は間もなく runtime が回収する。
+        self.recv_task.abort();
+    }
+}
+
+/// アプリ向け `WtSession::recv_event` に転送する WebTransport イベントかどうかを判定する
+///
+/// 転送対象: CONNECT ストリーム経由で sans-I/O 層が現在発火し得るセッションレベルの
+/// 通知イベント (`SessionClosed` / `SessionDraining` / `BufferedStreamRejected`)。
+///
+/// 除外対象:
+/// - `SessionEstablished`: ハンドシェイクループが `HeadersEnd` (クライアント) /
+///   `establish_wt_session_server` (サーバー) で確立判定するため転送不要
+/// - `BidiStreamOpen` / `BidiStreamData` / `BidiStreamEnd`: `accept_bi_stream` /
+///   `WtBiStream::recv` で扱う
+/// - `UniStreamOpen` / `UniStreamData` / `UniStreamEnd`: `accept_uni_stream` /
+///   `WtRecvStream::recv` で扱う
+/// - `Datagram` / `StreamReset` / `StreamStopSending` / `Capsule`: tokio-s2n-quic が
+///   これらの生成源となる sans-I/O 呼び出し (DATAGRAM フィード、WT データストリーム
+///   RESET_STREAM / STOP_SENDING 経路、フロー制御カプセルの取り出し) を wire していない
+///   ため現時点で発火しない。将来 wire する対応が入る際に本フィルタへ追加する。
+pub(crate) fn is_forwardable_wt_event(event: &WebTransportEvent) -> bool {
+    matches!(
+        event,
+        WebTransportEvent::SessionClosed { .. }
+            | WebTransportEvent::SessionDraining { .. }
+            | WebTransportEvent::BufferedStreamRejected { .. }
+    )
+}
+
+/// アプリへ SessionClosed が届かない Err パスを埋めるための合成イベント
+///
+/// 受信タスクが sans-I/O 層の Err に遭遇し `drain_events` からも `SessionClosed` を
+/// 取り出せなかった場合の最終フォールバック。以下の値でクリーンクローズ相当のセマンティクスを
+/// 与える (draft-ietf-webtrans-http3-16 Section 6):
+/// - `error_code`: `WT_SESSION_GONE` (sans-I/O 側 `terminate_wt_session` の既定と同じ)
+/// - `close_error_code`: 0 (WT_CLOSE_SESSION 未受信)
+/// - `close_message`: 空文字列
+/// - `reset_streams`: 空 (tokio-s2n-quic は WT データストリームを sans-I/O に登録しない)
+pub(crate) fn synthesized_session_closed(session_id: u64) -> WebTransportEvent {
+    WebTransportEvent::SessionClosed {
+        session_id,
+        reset_streams: Vec::new(),
+        error_code: WtErrorCode::SessionGone as u64,
+        close_error_code: 0,
+        close_message: String::new(),
     }
 }
 
