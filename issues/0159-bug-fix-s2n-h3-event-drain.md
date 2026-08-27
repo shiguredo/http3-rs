@@ -1,7 +1,7 @@
 # tokio-s2n-quic の H3 uni ストリームタスクがグローバルイベントキューを破棄する
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-27
 - Branch: feature/fix-s2n-h3-event-drain
 - Polished: 2026-08-26
 
@@ -32,9 +32,24 @@ QPACK ブロック解除イベント (ブロック解除された応答ヘッダ
 
 ## 解決方法
 
-### 関連ファイル
+### 変更内容
 
-- `crates/tokio-s2n-quic/src/h3/client.rs` (uni ストリームタスクと `H3Client::send_request` の受信ループ)
-- `crates/tokio-s2n-quic/src/h3/server.rs` (uni ストリームタスクと `accept_request` の受信ループ)
-- 参考実装: `crates/tokio-s2n-quic/src/webtransport/client.rs` の `feed_stream_only` + notify 方式
-- 一次資料: `refs/h3/rfc9204.txt` Section 2.1.2, 2.2.1
+- `crates/tokio-s2n-quic/src/h3/client.rs` / `server.rs` の uni ストリーム受信タスクを `process_stream_data` (feed + drain) から `feed_stream_only` に切り替え、`Arc<Notify>` (`qpack_unblock_notify`) の `notify_one()` でリクエスト受信ループに通知する
+- リクエスト受信ループ (`H3Client::send_request` / `H3ServerConnection::accept_request`) を `tokio::select!` に置き換え、以下の条件で待機・再確認する:
+  - ループ先頭で `drain_events` を回し、QPACK ブロック解除で生成されたヘッダー・ボディ・StreamEnd (サーバーでは HeadersEnd も) をストリーム ID フィルタ付きで取り出す
+  - `recv_stream.receive()` (guard `if !peer_fin`) / `qpack_unblock_notify.notified()` / 10ms フォールバックポーリングを `select!` で待つ
+  - 受信ブランチも `feed_stream_only` で feed のみ実施し、`drain_events` は次周のループ先頭に一本化する (受信ブランチで `process_stream_data` の戻り値 `Vec<Event>` を破棄する構造を回避する)
+- s2n-quic の `ReceiveStream::receive` は `DataRead` 状態で常に `Ok(None)` を返すため、FIN 受信後は `peer_fin` フラグを立てて `select!` の受信ブランチを停止し、busy loop を防ぐ
+- `H3ServerConnection::accept_request` の doc に「1 接続 1 リクエスト逐次処理」の設計制約 (呼び出し側 / ピア側両方の前提) を明示する
+- `Notify` フィールド名を `qpack_unblock_notify` に統一する
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加する
+
+### 対象外 (別 issue で対応)
+
+- 動的テーブル参照を行うピア (nghttp3 等) との interop テストの追加は 0165 の後に対応する (issue で明記)
+- `Event::StreamReset` / `Event::StopSending` の無視、リクエスト間 permit 持ち越し、`feed_stream_only` の Err を `let _` で捨てる問題への tracing ログ (0186 で対応)、uni ストリームタスクの client / server 重複 4 系統の共通化 (0187 で対応)、H3 サーバーの並列複数リクエスト対応、H3 サーバーの WT 有効化ケースの相互作用、uni タスクの `while let Ok(Some(data))` エラー経路が `ClosedCriticalStream` をラッチする副作用の修正、`send_request` にも同様の逐次処理 doc を追加、`drain_events` の `StreamError` に対する RESET 送出方針の整理、`peer_fin` かつ終了条件未達時の HTTP レベルタイムアウト機構は別 issue で対応する
+
+### 一次資料
+
+- `refs/h3/rfc9204.txt` Section 2.1.2 (Blocked Streams: 挿入命令とヘッダーの到着順は保証されない)
+- `refs/h3/rfc9204.txt` Section 2.2.1 (Blocked Decoding: Required Insert Count が Insert Count 以下になった時点で解除)
