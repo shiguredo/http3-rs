@@ -1,7 +1,7 @@
 # WT ネゴシエーション完了前に到着した先頭 0x41 の bidi ストリームがリクエストストリームとして誤処理される
 
 - Created: 2026-08-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-27
 - Branch: feature/fix-wt-stream-before-negotiation
 - Polished: 2026-08-26
 
@@ -42,8 +42,26 @@ WT ネゴシエーション未完了時に到着した正当な WT bidi スト�
 
 ## 解決方法
 
-- `src/connection/mod.rs` の `Connection::feed_stream` / `Connection::dispatch_client_bidi_stream` を変更し、サーバー側の新規クライアント開始 bidi ストリームを `is_wt_fully_negotiated()` の状態に関わらず先頭 varint で判定し、0x41 かつ未ネゴシエーションならストリームデータを保留バッファに格納する
-- SETTINGS 受信時 (`Connection::process_control_stream` 内、`process_deferred_wt_connects` の後) に保留バッファを再ディスパッチし、`is_wt_fully_negotiated()` が true なら `handle_wt_bidi_stream` 経由で WT ストリームとして処理し、false のままなら保留したストリームを破棄する
-- 保留には上限 (ストリーム数・データ量) を設け、超過時はストリームをリセットして破棄する (draft-16 Section 4.6)
-- テスト: `src/connection/mod.rs` の `#[cfg(test)]` モジュールで、SETTINGS 受信前に先頭 0x41 の bidi ストリームを feed → 接続エラーにならず保留 → SETTINGS と CONNECT 受信後に WT イベント (`BidiStreamOpen` / `BidiStreamData`) が発火することを検証する。ピアの SETTINGS が WT 非対応の場合のストリーム破棄と、保留上限超過時の破棄も検証する
-- 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 3.1 / 4.3 / 4.6、`refs/h3/rfc9114.txt` Section 9
+### 実装
+
+- `src/connection/mod.rs` の `Connection::feed_stream` から `is_wt_fully_negotiated()` ゲートを外し、`Connection::dispatch_client_bidi_stream` は WT ネゴシエーションの状態に関わらず先頭 varint で判定する
+- 0x41 判定後の分岐を 3 分割する:
+  1. ネゴシエーション完了済み → 従来どおり `handle_wt_bidi_stream` に即時ディスパッチ
+  2. SETTINGS 受信済みだが WT 非対応で確定 → `ignored_pre_negotiation_wt_bidi` に記録 + `WebTransportEvent::BufferedStreamRejected` を発火 (post-SETTINGS で 0x41 を送り続けられた場合に保留マップ上限が意図せず埋まるのを防ぐ)
+  3. SETTINGS 未受信 → `pending_wt_bidi_pre_negotiation: HashMap<u64, PendingWtBidiPreNegotiation>` にストリームデータ (バイト列 + FIN フラグ) を保留
+- `Connection::process_control_stream` の SETTINGS 受信処理で `process_deferred_wt_connects` の直後に `process_pending_wt_bidi_pre_negotiation` を呼び、`is_wt_fully_negotiated()` が true なら `handle_wt_bidi_stream` に流し、false なら `ignored_pre_negotiation_wt_bidi` に記録して `BufferedStreamRejected` を発火する (統合層は同イベントで RESET_STREAM / STOP_SENDING をピアに送出する)
+- 保留上限は既存の pre-association buffering と揃えて、ストリーム数 100 本 (`webtransport::session::MAX_BUFFERED_STREAMS`)、1 ストリームあたり 64 KiB (`connection::wt_types::WT_MAX_BUFFERED_STREAM_BYTES`) とする
+- `ignored_pre_negotiation_wt_bidi: HashSet<u64>` を追加し、`feed_stream` の先頭でチェックして拒否済み stream_id への後続チャンクを破棄する (中間バイトが `dispatch_client_bidi_stream` で新規 varint として誤解釈されるのを防ぐ)
+- `Connection::stream_reset` で `pending_bidi_dispatch` の清掃を追加し、`WtSession::handle_wt_stream_reset` で `pending_wt_bidi_pre_negotiation` の破棄と `ignored_pre_negotiation_wt_bidi` への記録・吸収分岐を追加する
+- `WtSession::handle_wt_stop_sending` に `pending_wt_bidi_pre_negotiation` / `ignored_pre_negotiation_wt_bidi` の吸収分岐を追加し、上位層に見えていない 0x41 bidi への STOP_SENDING を汎用イベントで通知しないようにする
+- `WebTransportEvent::BufferedStreamRejected` の doc に発火要因 (上限超過 / セッション終了 / ピア WT 非対応) を明記する
+
+### テスト
+
+- `src/connection/mod.rs` の `#[cfg(test)]` に 13 件のテストを追加する。SETTINGS 未受信の bidi 保留・SETTINGS 受信後の再ディスパッチ (WT 経路への到達を `wt_bidi_streams` / `Pending WT セッション` の登録で検証)・WT 非対応 SETTINGS の破棄・上限超過拒否・後続チャンクの ignored 破棄・マルチチャンク蓄積・純粋 FIN の伝播・RESET と STOP_SENDING の吸収・post-SETTINGS + WT 非対応時の即拒否・`pending_bidi_dispatch` の RESET 清掃を検証する
+
+### 一次資料
+
+- `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 3.1 / 4.3 / 4.6
+- `refs/h3/rfc9114.txt` Section 9
+- `refs/quic/rfc9000.txt` Section 4.4 / 3.5
