@@ -177,31 +177,37 @@ impl WtClient {
         // QPACK エンコーダーストリームが先に到着してブロック解除される場合に備え、
         // recv_stream.receive() と unblock_notify.notified() を select! で待つ。
         //
+        // セッション確立判定は sans-I/O 層の `WebTransportEvent::SessionEstablished` で行う。
+        // sans-I/O 層は CONNECT レスポンスの `:status` が 2xx のときのみ SessionEstablished を
+        // 発火するため、これを確立判定に使うことで `:status` の検証を委譲する
+        // (draft-ietf-webtrans-http3-16 Section 3.2)。
+        //
+        // ただし非 2xx レスポンスでは SessionEstablished が発火せず、ピアが FIN を送らなければ
+        // ハンドシェイクループが永久にブロックしうる。`:status` を監視して最終レスポンスの
+        // 非 2xx を検出したら早期に Err で抜ける。1xx 中間レスポンス (例: 103 Early Hints) は
+        // 失敗扱いにせずスキップする (RFC 9114 Section 4.1)。
+        //
         // ハンドシェイク中に到着した WebTransport イベント (200 レスポンスと同一 receive で
         // 到着した終端カプセル等) は破棄せず `pending_wt_events` に貯めて受信タスクへ
         // 引き継ぐ (取りこぼしを防ぐため)。
         let mut session_established = false;
+        let mut latest_status: Option<u16> = None;
         let mut pending_wt_events: Vec<WebTransportEvent> = Vec::new();
-        while !session_established {
+        loop {
             // QPACK エンコーダーストリームのデータが先に処理されて
             // notify_one() が取りこぼされる場合に備え、毎回 drain_events を確認する
-            {
-                let events = {
-                    let mut s = state.lock().expect("mutex should not be poisoned");
-                    s.drain_events()?
-                };
-                for event in events {
-                    match event {
-                        Event::HeadersEnd { .. } => session_established = true,
-                        Event::WebTransport(wt) if is_forwardable_wt_event(&wt) => {
-                            pending_wt_events.push(wt);
-                        }
-                        _ => {}
-                    }
-                }
-                if session_established {
-                    break;
-                }
+            let events = state
+                .lock()
+                .expect("mutex should not be poisoned")
+                .drain_events()?;
+            process_handshake_events(
+                events,
+                &mut latest_status,
+                &mut session_established,
+                &mut pending_wt_events,
+            )?;
+            if session_established {
+                break;
             }
 
             tokio::select! {
@@ -212,34 +218,32 @@ impl WtClient {
                         Err(e) => return Err(crate::Error::transport(e)),
                     };
 
-                    let events = {
-                        let mut s = state.lock().expect("mutex should not be poisoned");
-                        match s.process_stream_data(connect_stream_id, &data, fin) {
-                            Ok(events) => events,
-                            Err(e) => {
-                                // ストリームレベルのエラーは RESET_STREAM でピアに伝える
-                                // (接続は維持する: RFC 9114 Section 8)
-                                crate::internal::reset_stream_on_stream_error(
-                                    &mut send_stream,
-                                    &e,
-                                );
-                                return Err(e);
-                            }
+                    let events = match state
+                        .lock()
+                        .expect("mutex should not be poisoned")
+                        .process_stream_data(connect_stream_id, &data, fin)
+                    {
+                        Ok(events) => events,
+                        Err(e) => {
+                            // ストリームレベルのエラーは RESET_STREAM でピアに伝える
+                            // (接続は維持する: RFC 9114 Section 8)
+                            crate::internal::reset_stream_on_stream_error(
+                                &mut send_stream,
+                                &e,
+                            );
+                            return Err(e);
                         }
                     };
+                    process_handshake_events(
+                        events,
+                        &mut latest_status,
+                        &mut session_established,
+                        &mut pending_wt_events,
+                    )?;
 
-                    for event in events {
-                        match event {
-                            Event::HeadersEnd { .. } => session_established = true,
-                            Event::WebTransport(wt) if is_forwardable_wt_event(&wt) => {
-                                pending_wt_events.push(wt);
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    if fin {
-                        break;
+                    if fin && !session_established {
+                        // ピア側で FIN のみ送信 (拒否・切断) されて確立できなかった
+                        return Err(crate::Error::ConnectionClosed);
                     }
                 }
                 _ = unblock_notify.notified() => {
@@ -249,10 +253,6 @@ impl WtClient {
                 // notify_one() の取りこぼし対策
                 _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
             }
-        }
-
-        if !session_established {
-            return Err(crate::Error::ConnectionClosed);
         }
 
         // CONNECT ストリームの受信タスクを起動する。
@@ -286,6 +286,82 @@ impl WtClient {
             recv_task,
         ))
     }
+}
+
+/// CONNECT ハンドシェイクループのイベント処理を切り出したヘルパー
+///
+/// 各イベントに対する状態遷移:
+/// - `:status` ヘッダー: 直近のレスポンスステータスコードを更新
+/// - `HeadersEnd`: `:status` が非 2xx かつ非 1xx なら早期エラー、1xx なら次のレスポンスを待つため
+///   状態をクリアする (次のレスポンス `:status` が来ないまま HeadersEnd が飛んだ場合に古い 1xx を
+///   最終レスポンス扱いしないよう防御的にクリアする)。sans-I/O 層の `validate_response_headers` が
+///   `:status` を必須化しているため `latest_status = None` の分岐は実装上到達しない
+/// - `SessionEstablished`: セッション確立完了
+/// - **確立前** の `SessionClosed` / `SessionDraining`: sans-I/O 層で AlpnError / wt-protocol 不正等が
+///   検知され `SessionEstablished` が発火しないケース。確立不能として `ConnectionClosed` を返す
+/// - **確立後** の `SessionClosed` / `SessionDraining`: 200 OK と同じ receive で WT_CLOSE_SESSION や
+///   WT_DRAIN_SESSION が届いたケース。ここではエラーにせず `pending_wt_events` に積んで受信タスクへ
+///   引き継ぎ、`close_error_code` / `close_message` などの終端情報を保持する
+/// - 転送対象の他 WebTransport イベント (`BufferedStreamRejected` 等): `pending_wt_events` にバッファ
+/// - その他: 破棄
+///
+/// 1xx 範囲判定は `100..200` を使う。RFC 9114 Section 4.5 で HTTP/3 は 101 を持たず、sans-I/O 層の
+/// `validate_response_headers` (src/validation.rs) が 101 の `:status` を拒否するため 101 が届く
+/// 経路は無い。
+fn process_handshake_events(
+    events: Vec<Event>,
+    latest_status: &mut Option<u16>,
+    session_established: &mut bool,
+    pending_wt_events: &mut Vec<WebTransportEvent>,
+) -> crate::Result<()> {
+    for event in events {
+        match event {
+            Event::Header { name, value, .. } if name == b":status" => {
+                *latest_status = parse_status(&value);
+            }
+            Event::HeadersEnd { .. } => {
+                if let Some(status) = *latest_status {
+                    if (100..200).contains(&status) {
+                        // 1xx 中間レスポンス: 次のレスポンスヘッダーを待つ (RFC 9114 Section 4.1)。
+                        // 保持し続けても error 分岐には落ちないが、次のレスポンス開始まで状態を
+                        // 持ち越さないことで各レスポンスの評価を独立させる。
+                        *latest_status = None;
+                    } else if !(200..300).contains(&status) {
+                        // 非 2xx / 非 1xx の最終レスポンス: セッション確立失敗
+                        // (draft-ietf-webtrans-http3-16 Section 3.2)
+                        return Err(crate::Error::ConnectionClosed);
+                    }
+                }
+            }
+            Event::WebTransport(WebTransportEvent::SessionEstablished { .. }) => {
+                *session_established = true;
+            }
+            Event::WebTransport(
+                WebTransportEvent::SessionClosed { .. } | WebTransportEvent::SessionDraining { .. },
+            ) if !*session_established => {
+                // 確立前にセッション終端イベントが届くのは sans-I/O 層でセットアップエラーが
+                // 検出された場合 (例: AlpnError で wt-protocol が不正)。この時点で
+                // `SessionEstablished` は発火しないため、確立ループを打ち切る必要がある。
+                return Err(crate::Error::ConnectionClosed);
+            }
+            Event::WebTransport(wt) if is_forwardable_wt_event(&wt) => {
+                // 確立後の SessionClosed / SessionDraining はここに落ちる (guard で早期エラー化されない)。
+                // pending_wt_events に積むことで `close_error_code` / `close_message` を保持したまま
+                // 受信タスクへ引き継ぐ。
+                pending_wt_events.push(wt);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// `:status` ヘッダー値をパースしてステータスコードを返す
+///
+/// sans-I/O 層の `validate_response_headers` が `:status` を「3 桁の ASCII 数字」に制限するため、
+/// 通常は必ず `Some(u16)` が返る。到達不能な非パースケースは `None` として静かに無視する。
+fn parse_status(value: &[u8]) -> Option<u16> {
+    std::str::from_utf8(value).ok().and_then(|s| s.parse().ok())
 }
 
 async fn run_client_connect_recv_task(
@@ -465,5 +541,242 @@ async fn route_uni_stream(
                 .feed_stream_only(stream_id, &[], true);
             notify.notify_one();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shiguredo_http3::event::WtStreamReset;
+
+    const STREAM_ID: u64 = 0;
+
+    /// テスト用: `Event::Header` を組み立てる
+    fn header(name: &[u8], value: &[u8]) -> Event {
+        Event::Header {
+            stream_id: STREAM_ID,
+            name: name.to_vec(),
+            value: value.to_vec(),
+        }
+    }
+
+    /// テスト用: `Event::HeadersEnd` を組み立てる
+    fn headers_end() -> Event {
+        Event::HeadersEnd {
+            stream_id: STREAM_ID,
+        }
+    }
+
+    /// テスト用: `SessionEstablished` イベントを組み立てる
+    fn wt_session_established() -> Event {
+        Event::WebTransport(WebTransportEvent::SessionEstablished {
+            session_id: STREAM_ID,
+            flow_control_enabled: true,
+        })
+    }
+
+    /// テスト用: `SessionClosed` イベントを組み立てる (`close_error_code` / `close_message` は保持される値)
+    fn wt_session_closed() -> Event {
+        Event::WebTransport(WebTransportEvent::SessionClosed {
+            session_id: STREAM_ID,
+            reset_streams: Vec::<WtStreamReset>::new(),
+            error_code: 0,
+            close_error_code: 42,
+            close_message: String::from("bye"),
+        })
+    }
+
+    /// テスト用: `SessionDraining` イベントを組み立てる
+    fn wt_session_draining() -> Event {
+        Event::WebTransport(WebTransportEvent::SessionDraining {
+            session_id: STREAM_ID,
+        })
+    }
+
+    /// テスト用: `BufferedStreamRejected` イベントを組み立てる
+    fn wt_buffered_stream_rejected() -> Event {
+        Event::WebTransport(WebTransportEvent::BufferedStreamRejected {
+            stream_id: 4,
+            error_code: 0,
+        })
+    }
+
+    #[test]
+    fn test_process_handshake_events_1xx_then_2xx_without_established_waits_next_response() {
+        // 1xx (103) → 2xx (200) の HeadersEnd が飛んでも、SessionEstablished が来ていない
+        // 状態では established は立たず (Err にもならず) 次のレスポンスを待つ経路が成立する
+        let events = vec![
+            header(b":status", b"103"),
+            headers_end(),
+            header(b":status", b"200"),
+            headers_end(),
+        ];
+        let mut status = None;
+        let mut established = false;
+        let mut pending = Vec::new();
+        process_handshake_events(events, &mut status, &mut established, &mut pending)
+            .expect("1xx → 2xx 経路が Err にならないこと");
+        assert!(
+            !established,
+            "SessionEstablished が来ないため established は false のまま"
+        );
+        assert!(pending.is_empty(), "終端イベント無しなので pending は空");
+    }
+
+    #[test]
+    fn test_process_handshake_events_1xx_then_2xx_established() {
+        // 1xx (103) → 2xx (200) + SessionEstablished で確立成功
+        let events = vec![
+            header(b":status", b"103"),
+            headers_end(),
+            header(b":status", b"200"),
+            headers_end(),
+            wt_session_established(),
+        ];
+        let mut status = None;
+        let mut established = false;
+        let mut pending = Vec::new();
+        process_handshake_events(events, &mut status, &mut established, &mut pending)
+            .expect("1xx → 2xx + SessionEstablished 経路が Err にならないこと");
+        assert!(established, "SessionEstablished 経由で確立判定されること");
+        assert!(
+            pending.is_empty(),
+            "確立系イベントは pending に積まれないこと"
+        );
+    }
+
+    #[test]
+    fn test_process_handshake_events_non_2xx_after_1xx_returns_connection_closed() {
+        // 1xx の後に非 2xx (404) が来たら早期エラー
+        let events = vec![
+            header(b":status", b"103"),
+            headers_end(),
+            header(b":status", b"404"),
+            headers_end(),
+        ];
+        let mut status = None;
+        let mut established = false;
+        let mut pending = Vec::new();
+        let result = process_handshake_events(events, &mut status, &mut established, &mut pending);
+        assert!(
+            matches!(result, Err(crate::Error::ConnectionClosed)),
+            "非 2xx で ConnectionClosed になること: {result:?}"
+        );
+        assert!(!established, "確立判定されないこと");
+    }
+
+    #[test]
+    fn test_process_handshake_events_direct_non_2xx_returns_connection_closed() {
+        // 1xx なしで非 2xx (405) が来ても即エラー
+        let events = vec![header(b":status", b"405"), headers_end()];
+        let mut status = None;
+        let mut established = false;
+        let mut pending = Vec::new();
+        let result = process_handshake_events(events, &mut status, &mut established, &mut pending);
+        assert!(
+            matches!(result, Err(crate::Error::ConnectionClosed)),
+            "非 2xx で ConnectionClosed になること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_process_handshake_events_session_established_alone_marks_established() {
+        // `SessionEstablished` 単発でも確立判定される (:status 検証は sans-I/O に委譲)
+        let events = vec![wt_session_established()];
+        let mut status = None;
+        let mut established = false;
+        let mut pending = Vec::new();
+        process_handshake_events(events, &mut status, &mut established, &mut pending)
+            .expect("SessionEstablished 単発が Err にならないこと");
+        assert!(established, "確立判定されること");
+    }
+
+    #[test]
+    fn test_process_handshake_events_early_session_closed_returns_connection_closed() {
+        // 確立前に SessionClosed が届いたら早期エラー (200 OK + AlpnError 等のセットアップ失敗ケース)
+        let events = vec![
+            wt_session_closed(),
+            header(b":status", b"200"),
+            headers_end(),
+        ];
+        let mut status = None;
+        let mut established = false;
+        let mut pending = Vec::new();
+        let result = process_handshake_events(events, &mut status, &mut established, &mut pending);
+        assert!(
+            matches!(result, Err(crate::Error::ConnectionClosed)),
+            "確立前 SessionClosed で ConnectionClosed になること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_process_handshake_events_early_session_draining_returns_connection_closed() {
+        // 確立前に SessionDraining が届いたら早期エラー (SessionClosed と同じ or パターン)
+        let events = vec![wt_session_draining()];
+        let mut status = None;
+        let mut established = false;
+        let mut pending = Vec::new();
+        let result = process_handshake_events(events, &mut status, &mut established, &mut pending);
+        assert!(
+            matches!(result, Err(crate::Error::ConnectionClosed)),
+            "確立前 SessionDraining で ConnectionClosed になること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_process_handshake_events_session_established_then_session_closed_is_forwarded() {
+        // 確立後に SessionClosed が届いた場合、エラーにせず pending_wt_events に転送する
+        // (200 OK + WT_CLOSE_SESSION が同一 receive で届いたケース。regression 防止)
+        let events = vec![
+            wt_session_established(),
+            header(b":status", b"200"),
+            headers_end(),
+            wt_session_closed(),
+        ];
+        let mut status = None;
+        let mut established = false;
+        let mut pending = Vec::new();
+        process_handshake_events(events, &mut status, &mut established, &mut pending)
+            .expect("確立後の SessionClosed はエラーで返さないこと");
+        assert!(established, "確立判定されること");
+        assert_eq!(
+            pending.len(),
+            1,
+            "確立後の SessionClosed は pending_wt_events に転送されること"
+        );
+        match &pending[0] {
+            WebTransportEvent::SessionClosed {
+                close_error_code,
+                close_message,
+                ..
+            } => {
+                assert_eq!(
+                    *close_error_code, 42,
+                    "close_error_code が保持されていること"
+                );
+                assert_eq!(close_message, "bye", "close_message が保持されていること");
+            }
+            other => panic!("SessionClosed 以外が pending に入った: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_process_handshake_events_buffered_stream_rejected_is_forwarded() {
+        // 転送対象の WebTransport イベント (BufferedStreamRejected) は pending_wt_events に積まれる
+        let events = vec![wt_buffered_stream_rejected()];
+        let mut status = None;
+        let mut established = false;
+        let mut pending = Vec::new();
+        process_handshake_events(events, &mut status, &mut established, &mut pending)
+            .expect("BufferedStreamRejected が Err にならないこと");
+        assert!(
+            !established,
+            "確立系イベントではないので established は false"
+        );
+        assert_eq!(
+            pending.len(),
+            1,
+            "BufferedStreamRejected は pending_wt_events に転送されること"
+        );
     }
 }

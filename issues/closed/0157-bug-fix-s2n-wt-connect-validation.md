@@ -1,7 +1,7 @@
 # tokio-s2n-quic の WebTransport CONNECT 検証が欠落している
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-27
 - Branch: feature/fix-s2n-wt-connect-validation
 - Polished: 2026-08-26
 
@@ -32,9 +32,30 @@ CONNECT レスポンスの `:status` と、CONNECT リクエストの `:method` 
 
 ## 解決方法
 
-### 関連ファイル
+### 変更内容
 
-- `crates/tokio-s2n-quic/src/webtransport/client.rs` (`WtClient::connect`。`SessionEstablished` イベントでの確立判定と `:status` 監視による非 2xx の早期検出)
-- `crates/tokio-s2n-quic/src/webtransport/server.rs` (`WtSessionRequest::from_connection` / `accept` / `reject`。`ConnectRequest::from_headers` による検証と 405 送信ヘルパーの抽出)
-- 0156 と同一ファイル (`client.rs` / `server.rs` の同一関数) を変更するため、0156 の実装を取り込んでから作業する
-- 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 3.2、`refs/webtrans/rfc8441.txt` Section 4
+- `crates/tokio-s2n-quic/src/webtransport/client.rs` の `WtClient::connect`:
+  - セッション確立判定を `Event::HeadersEnd` から `WebTransportEvent::SessionEstablished` に切り替え、sans-I/O 層の `handle_wt_connect_response` (2xx 時のみ SessionEstablished を発火する経路) に `:status` 検証を委譲する
+  - `:status` ヘッダーを監視し、`HeadersEnd` の時点で 1xx なら次のレスポンスを待つためクリア、非 2xx / 非 1xx なら早期に `Error::ConnectionClosed` を返す
+  - 200 OK + AlpnError で SessionClosed が発火するなど確立前にセッション終端イベントが届いたケースは早期エラー化する。ただし確立後 (SessionEstablished 発火後) に届いた `SessionClosed` / `SessionDraining` は `pending_wt_events` に転送し、`close_error_code` / `close_message` を保持したまま受信タスクへ引き継ぐ
+  - ハンドシェイクループを `process_handshake_events` ヘルパーに抽出し、drain 側と process_stream_data 側で同じロジックを使う
+- `crates/tokio-s2n-quic/src/webtransport/server.rs` の `WtSessionRequest`:
+  - `from_connection` で全ヘッダーを `Vec<(Vec<u8>, Vec<u8>)>` に収集し、`ConnectRequest::from_headers` で `:method = CONNECT` / `:protocol = webtransport-h3 | webtransport` を検証する (draft-ietf-webtrans-http3-16 Section 3.2)
+  - `InvalidMethod` / `InvalidProtocol` は 405 レスポンスをピアに返してから `Error::ConnectionClosed` を返す (draft-16 Section 3.2 の SHOULD)
+  - `InvalidEncoding` は sans-I/O 側の `is_valid_field_value` が `obs-text` を許容するエッジケースで到達し得るため、`Error::Internal` として扱う
+  - ハンドシェイクループを `collect_request_events` ヘルパーに抽出、CONNECT レスポンス送信を `send_reject_response` に共通化し `reject()` からも利用する
+- `crates/tokio-s2n-quic/tests/webtransport_connect_validation_e2e.rs` を新規追加し、実 QUIC ループバックで `reject(405)` → クライアント側 `ConnectionClosed` を検証する統合テストを実装した
+- `process_handshake_events` の単体テスト 9 件を追加した (1xx → 2xx、非 2xx、SessionEstablished 単発、確立前 SessionClosed / SessionDraining、確立後 SessionClosed 転送 (regression)、BufferedStreamRejected 転送等)
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した
+
+### 対象外
+
+- `:status` の詳細エラー variant (例: `RejectedByPeer(status)`) の追加は本 issue の設計方針で見送り (`ConnectionClosed` 単一で表現)
+- 通常の GET リクエストが 405 で拒否されることの e2e 検証は sans-I/O 層の単体テスト (`test_connect_request_from_headers_invalid_method` / `test_connect_request_from_headers_invalid_protocol`) に委譲した
+- FIN なし 405 レスポンスの受信検証、Err 復帰時の `send_stream.finish()` 呼び出し、`WtServer::bind` のバックグラウンドタスクリーク、`WtSessionRequest.recv_stream` の `stream_id` 絞り込み、`ConnectRequest::from_headers` のイテレータ化、`WtSessionRequest.path` / `authority` の `String` 化、e2e テストヘルパーの `tests/helpers` 共通化は別 issue で対応する
+
+### 一次資料
+
+- `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 3.2 (WebTransport CONNECT。2xx 受信で確立 / 非対応リソースへの 405 SHOULD)
+- `refs/webtrans/rfc8441.txt` Section 4 (Extended CONNECT)
+- `refs/h3/rfc9114.txt` Section 4.1 (1xx 中間レスポンスの扱い) / Section 4.5 (HTTP/3 で 101 を使わない)

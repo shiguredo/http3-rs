@@ -230,7 +230,7 @@ impl Drop for WtSession {
 /// 通知イベント (`SessionClosed` / `SessionDraining` / `BufferedStreamRejected`)。
 ///
 /// 除外対象:
-/// - `SessionEstablished`: ハンドシェイクループが `HeadersEnd` (クライアント) /
+/// - `SessionEstablished`: ハンドシェイクループが `SessionEstablished` (クライアント) /
 ///   `establish_wt_session_server` (サーバー) で確立判定するため転送不要
 /// - `BidiStreamOpen` / `BidiStreamData` / `BidiStreamEnd`: `accept_bi_stream` /
 ///   `WtBiStream::recv` で扱う
