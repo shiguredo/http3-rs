@@ -26,6 +26,8 @@
   - @voluntas
 - [FIX] `tokio-s2n-quic` の WebTransport CONNECT 検証が欠落し不正な CONNECT を通していた問題を修正する (クライアントは `WebTransportEvent::SessionEstablished` を確立判定に使い非 2xx レスポンスを `Error::ConnectionClosed` として扱う。1xx 中間レスポンスはスキップ。サーバーは `ConnectRequest::from_headers` で `:method` / `:protocol` を検証し、通常の GET 等の非 WebTransport リクエストには 405 を返してから拒否する。draft-ietf-webtrans-http3-16 Section 3.2)
   - @voluntas
+- [FIX] `tokio-s2n-quic` の H3 uni ストリームタスクが `process_stream_data` (feed + drain) で取り出したイベントを破棄していたため QPACK ブロック解除で生成されたヘッダー・ボディ・StreamEnd イベントが欠落してレスポンスが空になる問題を修正する。uni タスクを `feed_stream_only` + `Notify` 通知方式に変更し、リクエスト受信ループが `tokio::select!` でブロック解除を待って `drain_events` を回すよう再構成する (RFC 9204 Section 2.2.1)
+  - @voluntas
 - [CHANGE] MSRV (Minimum Supported Rust Version) を 1.88 から 1.93 に引き上げる
   - @voluntas
 - [CHANGE] `Client::connect` / `ClientWebTransportSession::connect` / `TlsContext::new_client` でサーバー証明書のチェーン検証とホスト名検証を有効にする (従来 `verify_peer=true` は検証なしと同等の挙動だった)。検証に失敗する既存接続は失敗するようになる (RFC 9114 Section 3.1 / RFC 9001 Section 4.4)
