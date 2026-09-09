@@ -1,18 +1,18 @@
-# `handle_wt_stream_reset` がローカル開始 uni について `local_initiated=false` と誤判定する
+# `handle_wt_stream_reset` がローカル開始 uni の RESET_STREAM でクレジット回復・登録除去してしまう
 
 - Created: 2026-08-27
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-wt-stream-reset-local-uni-role
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-09
 
 ## 目的
 
-`Connection::handle_wt_stream_reset` がローカル開始 WebTransport uni ストリームを bidi 判定関数 `is_local_initiated_bidi` のみで扱い、常に `local_initiated=false` と判定する既存バグを修正する。QUIC 層をバイパスして RESET_STREAM が sans-I/O に渡った場合の防御を追加する。
+`Connection::handle_wt_stream_reset` がローカル開始 WebTransport uni ストリームに対する RESET_STREAM を bidi と同様に処理し、ピアのクレジット (WT_MAX_STREAMS) を不正に回復し、`wt_uni_streams` の登録を除去してしまう問題を修正する。QUIC 層をバイパスして RESET_STREAM が sans-I/O に渡った場合の防御を追加する。
 
 ## 現状
 
-- `src/connection/wt_session.rs` の `handle_wt_stream_reset` (0170 修正後) は `is_local_initiated_bidi(kind)` のみを判定に使う
-- 0170 で追加した `is_local_initiated_uni(kind)` を考慮していないため、ローカル開始 uni ストリームは常に `local_initiated=false` と判定される
+- `src/connection/wt_session.rs` の `handle_wt_stream_reset` は `let local_initiated = self.is_local_initiated_bidi(kind);` のみを使い、`is_local_initiated_uni(kind)` を考慮しないため、ローカル開始 uni ストリームは常に `local_initiated=false` と判定される (この判定は 0145 由来で、0170 のローカル uni 登録により顕在化した)
+- 同じ `handle_wt_stream_reset` から先に呼ばれる `account_wt_stream_reset` も `header_len` 判定に `is_local_initiated_bidi(kind)` しか使わないため、ローカル開始 uni でピアが送っていないヘッダー長を `final_size` から減算する
 - 仮に QUIC 層をバイパスして RESET_STREAM が sans-I/O に渡ると:
   - `on_remote_stream_closed(is_bidi=false)` が呼ばれ、ピアが開いていない uni のクレジット (WT_MAX_STREAMS) を不正に回復する
   - `wt_uni_streams.remove` で登録が消え、以後の STOP_SENDING が汎用 `Event::StopSending` にフォールスルーする (0170 修正の趣旨を裏返す)
@@ -20,29 +20,37 @@
 
 ## 設計方針
 
-- `handle_wt_stream_reset` の `local_initiated` 判定を `is_local_initiated_bidi(kind) || is_local_initiated_uni(kind)` に拡張する
-- ローカル開始 uni の RESET_STREAM 受信は draft-16 Section 6 相当のクレジット非回復ケースとして扱う (`on_remote_stream_closed` を呼ばない)
-- テストを追加する: ローカル開始 uni に対する `stream_reset` 呼び出しでピアのクレジット回復が発生しないこと
+- `handle_wt_stream_reset` で、`wt_uni_streams` に登録済みのローカル開始 uni (`is_local_initiated_uni(kind)` が true) の RESET_STREAM は RFC 9000 Section 19.4 の STREAM_STATE_ERROR に相当する不正入力として防御的に無視する。`session_id` 解決後に `true` を返して早期 return し、次を行わない:
+  - `on_remote_stream_closed` による WT_MAX_STREAMS クレジットの回復 (根拠: draft-16 Section 5.3 は「ピアが開始するストリーム」の数の制限)
+  - `account_wt_stream_reset` のデータ FC ヘッダー減算
+  - `wt_uni_streams` の登録除去 (0170 の STOP_SENDING → `WebTransportEvent::StreamStopSending` 通知を維持する)
+  - `WebTransportEvent::StreamReset` の発火
+- 早期 return により `handle_wt_stream_reset` 内の `local_initiated` 判定 (bidi 用) にはローカル開始 uni が到達しなくなる。bidi の判定は現状のままでよい
+- WT 以外のローカル開始 uni (H3 の push 等) は従来どおり `session_id` 解決前に `false` を返して汎用 `Event::StreamReset` を発火する (本 issue のスコープ外)
+- テストを追加する: ローカル開始 uni に対する `stream_reset` 呼び出しでクレジット回復・ヘッダー減算・登録除去・`StreamReset` 発火が起きないこと
 
 ## 完了条件
 
-- `handle_wt_stream_reset` がローカル開始 uni ストリームに対してクレジット回復を行わない
-- テストが追加される (ローカル開始 uni の登録 → 疑似 stream_reset → WT_MAX_STREAMS 変化なし / SessionClosed 経路)
+- `handle_wt_stream_reset` がローカル開始 uni の RESET_STREAM を無視し、クレジット回復・ヘッダー減算・登録除去・`StreamReset` 発火を行わない
+- テストが追加される:
+  - ローカル開始 uni を登録 → `stream_reset` → `MaxStreams` カプセルが生成されない
+  - ローカル開始 uni を登録 → `stream_reset` → `wt_uni_streams` に残り、その後の `stop_sending` が `WebTransportEvent::StreamStopSending` として通知される
+  - ローカル開始 uni を登録 → `stream_reset` → `WebTransportEvent::StreamReset` が発火しない
 - `cargo test --all` と `cargo fmt --all -- --check` と `cargo clippy --all-targets --all-features -- -D warnings` が通る
 
 ## 解決方法
 
 ### 関連ファイル
 
-- `src/connection/wt_session.rs` (`Connection::handle_wt_stream_reset`)
-- `src/connection/wt_stream.rs` (`is_local_initiated_bidi` / `is_local_initiated_uni`)
+- `src/connection/wt_session.rs` (`Connection::handle_wt_stream_reset` / `Connection::account_wt_stream_reset`)
+- `src/connection/wt_stream.rs` (`is_local_initiated_bidi` / `is_local_initiated_uni` / `register_local_wt_stream`)
 - `src/connection/mod.rs` (テスト追加)
 
 ### 一次資料
 
-- `refs/quic/rfc9000.txt` Section 3.5 / Section 19.4 (RESET_STREAM)
-- `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 5.3 (WT_MAX_STREAMS / クレジット) / Section 6
+- `refs/quic/rfc9000.txt` Section 2.1 (ストリーム種別) / Section 3.5 / Section 19.4 (RESET_STREAM)
+- `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 5.3 (WT_MAX_STREAMS / クレジット)
 
 ### 関連 issue
 
-- 0170 (ローカル開始 WT uni ストリームの登録 API 拡張。本 issue はその副作用として存在する既存バグの修正)
+- 0170 (ローカル開始 WT uni ストリームの登録 API 拡張。本 issue はそれにより顕在化した既存バグの修正)
