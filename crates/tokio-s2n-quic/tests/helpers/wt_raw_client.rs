@@ -130,6 +130,7 @@ impl RawWtClient {
         });
 
         // サーバー SETTINGS の受信を待つ (WebTransport CONNECT の送信に必要)
+        let settings_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             if h3
                 .lock()
@@ -139,6 +140,10 @@ impl RawWtClient {
             {
                 break;
             }
+            assert!(
+                tokio::time::Instant::now() < settings_deadline,
+                "サーバー SETTINGS の受信がタイムアウトした"
+            );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 

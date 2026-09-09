@@ -94,6 +94,14 @@ async fn same_write_additional_data_triggers_message_error_reset() {
             .await
             .expect("SessionClosed のタイムアウト待ちが完了すること")
             .expect("SessionClosed が届くこと");
+        // 終端イベントは二重配送されない
+        let next = tokio::time::timeout(Duration::from_secs(2), session.recv_event())
+            .await
+            .expect("None 受信のタイムアウト待ちが完了すること");
+        assert!(
+            next.is_none(),
+            "SessionClosed の後は recv_event が None を返すこと"
+        );
         (session, event)
     });
 
@@ -120,10 +128,14 @@ async fn same_write_additional_data_triggers_message_error_reset() {
 }
 
 /// WT_CLOSE_SESSION 送信後に別 write で追加 DATA を送る
+///
+/// サーバーが SessionClosed を観測したことを通知してから追加 DATA を送ることで、
+/// WT_CLOSE_SESSION と追加 DATA が別 receive チャンクで届くことを確定させる。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn separate_write_additional_data_triggers_message_error_reset() {
     let (mut server, server_addr, cert_pem) = start_server().await;
 
+    let (closed_tx, closed_rx) = tokio::sync::oneshot::channel::<()>();
     let server_task = tokio::spawn(async move {
         let request = server.accept().await.expect("accept に成功すること");
         let mut session = request
@@ -134,6 +146,16 @@ async fn separate_write_additional_data_triggers_message_error_reset() {
             .await
             .expect("SessionClosed のタイムアウト待ちが完了すること")
             .expect("SessionClosed が届くこと");
+        // クライアントへ SessionClosed 観測を通知し、追加 DATA を送らせる
+        let _ = closed_tx.send(());
+        // 終端イベントは二重配送されない
+        let next = tokio::time::timeout(Duration::from_secs(5), session.recv_event())
+            .await
+            .expect("None 受信のタイムアウト待ちが完了すること");
+        assert!(
+            next.is_none(),
+            "SessionClosed の後は recv_event が None を返すこと"
+        );
         (session, event)
     });
 
@@ -145,6 +167,10 @@ async fn separate_write_additional_data_triggers_message_error_reset() {
         .send(Bytes::from(close_session_data_frame()))
         .await
         .expect("カプセルの送信に成功すること");
+    // サーバーが SessionClosed を観測するまで待つ (別 receive チャンクを確定させる)
+    closed_rx
+        .await
+        .expect("SessionClosed 観測の通知を受信できること");
     // 別 write で追加 DATA を送る
     client
         .send

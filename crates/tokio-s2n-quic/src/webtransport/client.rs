@@ -414,6 +414,8 @@ async fn run_client_connect_recv_task_inner(
         }
     }
 
+    // 実 SessionClosed を転送済みか (Err 分岐で synthesized を再送しないため)
+    let mut session_closed_delivered = false;
     loop {
         let received = recv_stream.receive().await;
         // MutexGuard は await を跨げないため、ブロックで囲って先にドロップする。
@@ -485,7 +487,7 @@ async fn run_client_connect_recv_task_inner(
                         }
                     }
                 }
-                if !delivered {
+                if !delivered && !session_closed_delivered {
                     let _ = event_tx.send(synthesized_session_closed(session_id)).await;
                 }
                 return;
@@ -495,9 +497,14 @@ async fn run_client_connect_recv_task_inner(
         for event in events {
             if let Event::WebTransport(wt) = event
                 && is_forwardable_wt_event(&wt)
-                && event_tx.send(wt).await.is_err()
             {
-                return;
+                let is_terminal = matches!(wt, WebTransportEvent::SessionClosed { .. });
+                if event_tx.send(wt).await.is_err() {
+                    return;
+                }
+                if is_terminal {
+                    session_closed_delivered = true;
+                }
             }
         }
 
