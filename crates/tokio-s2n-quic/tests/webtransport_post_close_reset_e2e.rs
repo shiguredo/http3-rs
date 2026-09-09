@@ -46,6 +46,20 @@ fn close_session_data_frame() -> Vec<u8> {
     buf
 }
 
+/// WT_CLOSE_SESSION カプセルに同一 DATA フレーム内の後続バイトを付けてエンコードする
+fn close_session_data_frame_with_trailing(trailing: &[u8]) -> Vec<u8> {
+    let mut capsule = Vec::new();
+    Capsule::CloseSession {
+        error_code: 0,
+        message: String::new(),
+    }
+    .encode(&mut capsule);
+    let mut data = vec![0x00, (capsule.len() + trailing.len()) as u8];
+    data.extend_from_slice(&capsule);
+    data.extend_from_slice(trailing);
+    data
+}
+
 /// 追加データを表す H3 DATA フレーム (type=0x00, length=1) を返す
 fn additional_data_frame() -> Vec<u8> {
     vec![0x00, 0x01, 0xAA]
@@ -114,6 +128,44 @@ async fn same_write_additional_data_triggers_message_error_reset() {
         .send(Bytes::from(buf))
         .await
         .expect("カプセルと追加データの送信に成功すること");
+
+    let err = observe_reset(&mut client).await;
+    assert_message_error_reset(&err);
+
+    let (_session, event) = server_task
+        .await
+        .expect("サーバータスクの終了に成功すること");
+    assert!(
+        matches!(event, WebTransportEvent::SessionClosed { .. }),
+        "サーバー側で SessionClosed が届くこと: {event:?}"
+    );
+}
+
+/// 同一 DATA フレーム内で WT_CLOSE_SESSION に続く追加バイトで RESET_STREAM される
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn same_data_frame_trailing_triggers_message_error_reset() {
+    let (mut server, server_addr, cert_pem) = start_server().await;
+
+    let server_task = tokio::spawn(async move {
+        let request = server.accept().await.expect("accept に成功すること");
+        let mut session = request
+            .accept()
+            .await
+            .expect("セッション確立に成功すること");
+        let event = tokio::time::timeout(Duration::from_secs(5), session.recv_event())
+            .await
+            .expect("SessionClosed のタイムアウト待ちが完了すること")
+            .expect("SessionClosed が届くこと");
+        (session, event)
+    });
+
+    let mut client = RawWtClient::connect(server_addr, &cert_pem).await;
+
+    client
+        .send
+        .send(Bytes::from(close_session_data_frame_with_trailing(&[0xAA])))
+        .await
+        .expect("カプセルと後続バイトの送信に成功すること");
 
     let err = observe_reset(&mut client).await;
     assert_message_error_reset(&err);
