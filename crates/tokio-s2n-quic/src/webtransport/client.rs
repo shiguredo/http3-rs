@@ -15,6 +15,7 @@ use super::session::{
     synthesized_session_closed,
 };
 use crate::config::ClientConfig;
+use crate::internal::classify_uni_recv;
 use crate::internal::connection_state::ClientConnectionState;
 
 /// WebTransport クライアント
@@ -574,18 +575,23 @@ async fn route_uni_stream(
                 .feed_stream_only(stream_id, &type_buf, false);
             notify.notify_one();
 
-            while let Ok(Some(data)) = recv_stream.receive().await {
-                let _ = state
+            loop {
+                let action = classify_uni_recv(recv_stream.receive().await);
+                // 受信アクションを sans-I/O 層へ適用する。クリティカルストリームの
+                // RESET は H3_CLOSED_CRITICAL_STREAM としてラッチされる
+                // (RFC 9114 Section 6.2.1 / RFC 9204 Section 4.2)。
+                // 接続エラー等の Err はラッチ済みのためタスクを終了する
+                // (unwrap_or_default() で false になる)
+                let cont = state
                     .lock()
                     .expect("mutex should not be poisoned")
-                    .feed_stream_only(stream_id, &data, false);
+                    .apply_uni_recv_action(stream_id, action)
+                    .unwrap_or_default();
                 notify.notify_one();
+                if !cont {
+                    break;
+                }
             }
-            let _ = state
-                .lock()
-                .expect("mutex should not be poisoned")
-                .feed_stream_only(stream_id, &[], true);
-            notify.notify_one();
         }
     }
 }

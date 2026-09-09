@@ -1,7 +1,7 @@
 # tokio-s2n-quic の H3 uni タスクが `recv_stream.receive()` の Err 経路で `ClosedCriticalStream` を誤ラッチする
 
 - Created: 2026-08-27
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-10
 - Branch: feature/fix-s2n-h3-uni-err-critical-stream-latch
 - Polished: 2026-09-09
 
@@ -38,13 +38,31 @@ H3 uni タスクが `recv_stream.receive()` から接続エラー (`StreamError:
 
 ## 解決方法
 
+### 修正内容
+
+- `internal::classify_uni_recv` を追加し、`recv_stream.receive()` の結果を `Data` / `Fin` / `Reset(エラーコード)` / `Ignore` に分類する
+- `ClientConnectionState` / `ServerConnectionState` に `apply_uni_recv_action` を追加し、分類に応じて `feed_stream_only` (データ / FIN) と `stream_reset_only` (RESET) を適用する。`Ignore` は何も伝達しない
+- イベントの取り出しを受信ループ先頭の `drain_events` に一本化するため、`stream_reset_only` (drain しない版) を追加し、uni 受信タスクはこちらを使う
+- H3 / WebTransport の単方向ストリーム受信タスク 4 箇所 (h3 client / server、WT client / server の `route_uni_stream` Http3 分岐) を `classify_uni_recv` + `apply_uni_recv_action` に置き換える
+- 設計方針の「エラーログのみ記録」は、`tokio-s2n-quic` にログ基盤 (`tracing` 等) が無いため、接続エラー等は伝達せずタスク終了するのみとした
+
+### 検証結果
+
+- `cargo test -p tokio-s2n-quic` / `cargo test -p shiguredo_http3 --lib` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` が通る
+- `cargo clippy --all-targets --all-features -- -D warnings` は `nghttp3-sys` / `ngtcp2-sys` の `overwrite` feature で既存の `clippy::ptr_arg` に抵触するため通らない (本 issue の変更起因ではない。CI も `--all-features` を使わない)
+- 実 QUIC 統合テスト `tests/h3_critical_stream_reset_e2e.rs` (制御 / QPACK エンコーダーストリームの RESET で `H3_CLOSED_CRITICAL_STREAM` をラッチ) を 20 回連続で実行し全て成功
+- 単体テスト `test_classify_uni_recv_connection_error_is_ignored` / `test_apply_uni_recv_action_ignore_does_not_feed_fin` が、接続エラーを FIN として誤伝達する退行を検知する (一時的に退行させて失敗することを確認)
+- `cargo test -p interop_h3 --test advanced` を 50 回連続で実行し flake が発生しないこと
+
 ### 関連ファイル
 
 - `crates/tokio-s2n-quic/src/h3/client.rs` (uni ストリーム受信タスク)
 - `crates/tokio-s2n-quic/src/h3/server.rs` (uni ストリーム受信タスク)
 - `crates/tokio-s2n-quic/src/webtransport/client.rs` (`route_uni_stream` の `ClassifiedUniStream::Http3` 分岐)
 - `crates/tokio-s2n-quic/src/webtransport/server.rs` (`route_uni_stream` の `ClassifiedUniStream::Http3` 分岐)
-- `crates/tokio-s2n-quic/src/internal/connection_state.rs` (`Connection::stream_reset` のラッパー追加)
+- `crates/tokio-s2n-quic/src/internal/mod.rs` (`classify_uni_recv` / `UniRecvAction`)
+- `crates/tokio-s2n-quic/src/internal/connection_state.rs` (`apply_uni_recv_action` / `stream_reset_only`)
+- `crates/tokio-s2n-quic/tests/h3_critical_stream_reset_e2e.rs` (実 QUIC 回帰テスト)
 - `interop/h3/tests/advanced.rs` (flake 確認)
 
 ### 一次資料
