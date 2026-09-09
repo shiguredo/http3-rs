@@ -69,8 +69,11 @@ async fn accept_request_returns_error_on_stream_reset() {
         .await
         .expect("双方向ストリームのオープンに成功すること");
     let (_recv, mut send) = stream.split();
-    send.reset(s2n_quic::application::Error::new(0).expect("H3_NO_ERROR は VarInt 範囲内"))
-        .expect("RESET_STREAM の送信に成功すること");
+    send.reset(
+        s2n_quic::application::Error::new(0)
+            .expect("アプリケーションエラーコード 0 は VarInt 範囲内"),
+    )
+    .expect("RESET_STREAM の送信に成功すること");
 
     let result = tokio::time::timeout(Duration::from_secs(5), server_task)
         .await

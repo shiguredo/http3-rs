@@ -6,6 +6,8 @@ use shiguredo_http3::{
     ClientConnection, Event, H3InitData, Header, ServerConnection, Settings as H3Settings,
 };
 
+use super::UniRecvAction;
+
 /// サーバー側 HTTP/3 接続状態
 pub(crate) struct ServerConnectionState {
     /// HTTP/3 接続 (Sans I/O)
@@ -116,8 +118,22 @@ impl ServerConnectionState {
         stream_id: u64,
         error_code: u64,
     ) -> crate::Result<Vec<Event>> {
-        self.h3_conn.stream_reset(stream_id, error_code, 0)?;
+        self.stream_reset_only(stream_id, error_code)?;
         Ok(self.h3_conn.drain_events()?)
+    }
+
+    /// RESET_STREAM 受信を sans-I/O 層に通知する (イベントは drain しない)
+    ///
+    /// 単方向ストリーム受信タスクはイベント取り出しを各受信ループ先頭の
+    /// `drain_events` に一本化するため、ここで drain すると他ストリームのイベントを
+    /// 巻き込んで破棄してしまう。
+    pub(crate) fn stream_reset_only(
+        &mut self,
+        stream_id: u64,
+        error_code: u64,
+    ) -> crate::Result<()> {
+        self.h3_conn.stream_reset(stream_id, error_code, 0)?;
+        Ok(())
     }
 
     /// WebTransport CONNECT ストリームのリセット (RESET_STREAM 受信) を通知しイベントを返す
@@ -131,6 +147,33 @@ impl ServerConnectionState {
         error_code: u64,
     ) -> crate::Result<Vec<Event>> {
         self.stream_reset(stream_id, error_code)
+    }
+
+    /// 単方向ストリームの受信アクションを適用する
+    ///
+    /// 戻り値はタスクを継続するか (`true`) 終了するか (`false`)。
+    /// `Ignore` は接続エラー等を表し、FIN を伝達するとクリティカルストリームで
+    /// `H3_CLOSED_CRITICAL_STREAM` を誤ラッチするため何も伝達しない。
+    pub(crate) fn apply_uni_recv_action(
+        &mut self,
+        stream_id: u64,
+        action: UniRecvAction,
+    ) -> crate::Result<bool> {
+        match action {
+            UniRecvAction::Data(data) => {
+                self.feed_stream_only(stream_id, &data, false)?;
+                Ok(true)
+            }
+            UniRecvAction::Fin => {
+                self.feed_stream_only(stream_id, &[], true)?;
+                Ok(false)
+            }
+            UniRecvAction::Reset(error_code) => {
+                self.stream_reset_only(stream_id, error_code)?;
+                Ok(false)
+            }
+            UniRecvAction::Ignore => Ok(false),
+        }
     }
 }
 
@@ -238,8 +281,22 @@ impl ClientConnectionState {
         stream_id: u64,
         error_code: u64,
     ) -> crate::Result<Vec<Event>> {
-        self.h3_conn.stream_reset(stream_id, error_code, 0)?;
+        self.stream_reset_only(stream_id, error_code)?;
         Ok(self.h3_conn.drain_events()?)
+    }
+
+    /// RESET_STREAM 受信を sans-I/O 層に通知する (イベントは drain しない)
+    ///
+    /// 単方向ストリーム受信タスクはイベント取り出しを各受信ループ先頭の
+    /// `drain_events` に一本化するため、ここで drain すると他ストリームのイベントを
+    /// 巻き込んで破棄してしまう。
+    pub(crate) fn stream_reset_only(
+        &mut self,
+        stream_id: u64,
+        error_code: u64,
+    ) -> crate::Result<()> {
+        self.h3_conn.stream_reset(stream_id, error_code, 0)?;
+        Ok(())
     }
 
     /// WebTransport CONNECT ストリームのリセット (RESET_STREAM 受信) を通知しイベントを返す
@@ -253,6 +310,33 @@ impl ClientConnectionState {
         error_code: u64,
     ) -> crate::Result<Vec<Event>> {
         self.stream_reset(stream_id, error_code)
+    }
+
+    /// 単方向ストリームの受信アクションを適用する
+    ///
+    /// 戻り値はタスクを継続するか (`true`) 終了するか (`false`)。
+    /// `Ignore` は接続エラー等を表し、FIN を伝達するとクリティカルストリームで
+    /// `H3_CLOSED_CRITICAL_STREAM` を誤ラッチするため何も伝達しない。
+    pub(crate) fn apply_uni_recv_action(
+        &mut self,
+        stream_id: u64,
+        action: UniRecvAction,
+    ) -> crate::Result<bool> {
+        match action {
+            UniRecvAction::Data(data) => {
+                self.feed_stream_only(stream_id, &data, false)?;
+                Ok(true)
+            }
+            UniRecvAction::Fin => {
+                self.feed_stream_only(stream_id, &[], true)?;
+                Ok(false)
+            }
+            UniRecvAction::Reset(error_code) => {
+                self.stream_reset_only(stream_id, error_code)?;
+                Ok(false)
+            }
+            UniRecvAction::Ignore => Ok(false),
+        }
     }
 }
 
@@ -484,6 +568,96 @@ mod tests {
                     if *sid == stream_id && *error_code == 0x10e
             )),
             "StreamReset イベントが生成されること"
+        );
+    }
+
+    /// `Ignore` は sans-I/O 層へ FIN を伝達しない (クリティカルストリームの誤ラッチ防止)
+    #[test]
+    fn test_apply_uni_recv_action_ignore_does_not_feed_fin() {
+        let mut state = ClientConnectionState::new(H3Settings::default());
+        state
+            .init_h3_streams(2, 6, 10)
+            .expect("テスト用の初期化に成功すること");
+        // ピア制御ストリーム (ID 3) を登録する
+        state
+            .feed_stream_only(3, &[0x00, 0x04, 0x00], false)
+            .expect("テスト用の制御ストリーム feed に成功すること");
+        let _ = state
+            .drain_events()
+            .expect("テスト用のイベント drain に成功すること");
+
+        let cont = state
+            .apply_uni_recv_action(3, UniRecvAction::Ignore)
+            .expect("Ignore の適用に成功すること");
+        assert!(!cont, "Ignore でタスクを終了すること");
+        assert!(
+            state.drain_events().is_ok(),
+            "Ignore では制御ストリームへ FIN を伝達せず H3_CLOSED_CRITICAL_STREAM をラッチしない"
+        );
+    }
+
+    /// `Fin` は制御ストリームで H3_CLOSED_CRITICAL_STREAM をラッチする (対照)
+    #[test]
+    fn test_apply_uni_recv_action_fin_latches_closed_critical_stream() {
+        let mut state = ClientConnectionState::new(H3Settings::default());
+        state
+            .init_h3_streams(2, 6, 10)
+            .expect("テスト用の初期化に成功すること");
+        state
+            .feed_stream_only(3, &[0x00, 0x04, 0x00], false)
+            .expect("テスト用の制御ストリーム feed に成功すること");
+        let _ = state
+            .drain_events()
+            .expect("テスト用のイベント drain に成功すること");
+
+        let result = state.apply_uni_recv_action(3, UniRecvAction::Fin);
+        assert!(
+            matches!(
+                result,
+                Err(crate::Error::Http3(
+                    shiguredo_http3::Error::ConnectionError(
+                        shiguredo_http3::ErrorCode::ClosedCriticalStream
+                    )
+                ))
+            ),
+            "Fin は制御ストリームで H3_CLOSED_CRITICAL_STREAM をラッチすること: {result:?}"
+        );
+    }
+
+    /// `Reset` は非クリティカルストリームで StreamReset イベントを生成する
+    #[test]
+    fn test_apply_uni_recv_action_reset_generates_stream_reset_event() {
+        let mut state = ClientConnectionState::new(H3Settings::default());
+        state
+            .init_h3_streams(2, 6, 10)
+            .expect("テスト用の初期化に成功すること");
+        let headers = vec![
+            Header::new(b":method", b"GET").expect("テスト用のヘッダーに成功すること"),
+            Header::new(b":scheme", b"https").expect("テスト用のヘッダーに成功すること"),
+            Header::new(b":authority", b"example.com").expect("テスト用のヘッダーに成功すること"),
+            Header::new(b":path", b"/").expect("テスト用のヘッダーに成功すること"),
+        ];
+        let stream_id = state
+            .send_request(&headers, true)
+            .expect("テスト用のリクエスト送信に成功すること");
+        let _ = state
+            .drain_events()
+            .expect("テスト用のイベント drain に成功すること");
+
+        let cont = state
+            .apply_uni_recv_action(stream_id, UniRecvAction::Reset(0x10e))
+            .expect("Reset の適用に成功すること");
+        assert!(!cont, "Reset でタスクを終了すること");
+        let events = state
+            .drain_events()
+            .expect("テスト用のイベント drain に成功すること");
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                Event::StreamReset { stream_id: sid, error_code }
+                    if *sid == stream_id && *error_code == 0x10e
+            )),
+            "Reset で StreamReset イベントが生成されること"
         );
     }
 }
