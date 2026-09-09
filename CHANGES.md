@@ -34,6 +34,8 @@
   - @voluntas
 - [FIX] `tokio-s2n-quic` の H3 リクエスト受信ループがピアの RESET_STREAM を sans-I/O 層に通知せず QPACK Stream Cancellation と blocked 状態の掃除が行われない問題を修正する。また WebTransport の CONNECT ストリームで WT_CLOSE_SESSION を受信した側が close (FIN) を返さず送信側が close 応答を観測できない問題を修正する (RFC 9114 Section 8 / RFC 9204 Section 2.2.2.2 / RFC 9000 Section 19.4 / draft-ietf-webtrans-http3-16 Section 6)
   - @voluntas
+- [FIX] `tokio-s2n-quic` の受信側が WT_CLOSE_SESSION 受信後に CONNECT ストリームへ届いた追加 DATA を H3_MESSAGE_ERROR で reset しない問題を修正する。受信タスクが `StreamError(MessageError)` を受けたら RESET_STREAM(H3_MESSAGE_ERROR) を送り、同一 DATA フレーム内で WT_CLOSE_SESSION に続く追加バイトも sans-I/O 層で拒否する (draft-ietf-webtrans-http3-16 Section 6)
+  - @voluntas
 - [CHANGE] MSRV (Minimum Supported Rust Version) を 1.88 から 1.93 に引き上げる
   - @voluntas
 - [CHANGE] `Client::connect` / `ClientWebTransportSession::connect` / `TlsContext::new_client` でサーバー証明書のチェーン検証とホスト名検証を有効にする (従来 `verify_peer=true` は検証なしと同等の挙動だった)。検証に失敗する既存接続は失敗するようになる (RFC 9114 Section 3.1 / RFC 9001 Section 4.4)

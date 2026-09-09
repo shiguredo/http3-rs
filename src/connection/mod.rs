@@ -4270,6 +4270,20 @@ mod tests {
         data
     }
 
+    /// WT_CLOSE_SESSION カプセルに同一 DATA フレーム内の後続バイトを付けてエンコードするヘルパー
+    fn close_session_data_frame_with_trailing(trailing: &[u8]) -> Vec<u8> {
+        let mut capsule = Vec::new();
+        crate::webtransport::Capsule::CloseSession {
+            error_code: 0,
+            message: String::new(),
+        }
+        .encode(&mut capsule);
+        let mut data = vec![0x00, (capsule.len() + trailing.len()) as u8];
+        data.extend_from_slice(&capsule);
+        data.extend_from_slice(trailing);
+        data
+    }
+
     #[test]
     fn test_wt_session_registered_on_connect_send() {
         let (mut client, _server) = setup_wt_pair();
@@ -6166,6 +6180,22 @@ mod tests {
         assert!(
             !server.streams.contains_key(&stream_id),
             "終了後の FIN で streams に再生成されないこと"
+        );
+    }
+
+    #[test]
+    fn test_wt_connect_same_data_frame_trailing_after_session_close_rejected() {
+        // 同一 DATA フレーム内で WT_CLOSE_SESSION カプセルに続く追加バイトは
+        // H3_MESSAGE_ERROR で拒否されることを検証する
+        // (draft-ietf-webtrans-http3-16 Section 6)
+        let (mut client, mut server) = setup_wt_pair();
+        let stream_id = establish_wt_session(&mut client, &mut server);
+
+        let data = close_session_data_frame_with_trailing(&[0xAA]);
+        let err = server.feed_stream(stream_id, &data, false).unwrap_err();
+        assert!(
+            matches!(err, Error::StreamError(ErrorCode::MessageError)),
+            "同一 DATA フレーム内の追加バイトは H3_MESSAGE_ERROR であること: {err:?}"
         );
     }
 
