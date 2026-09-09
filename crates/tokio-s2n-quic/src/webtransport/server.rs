@@ -631,22 +631,19 @@ async fn run_server_connect_recv_task_inner(
             }
         };
 
-        let mut session_closed = false;
         for event in events {
             if let Event::WebTransport(wt) = event
                 && is_forwardable_wt_event(&wt)
+                && event_tx.send(wt).await.is_err()
             {
-                let is_terminal = matches!(wt, WebTransportEvent::SessionClosed { .. });
-                if event_tx.send(wt).await.is_err() {
-                    return;
-                }
-                if is_terminal {
-                    session_closed = true;
-                }
+                return;
             }
         }
 
-        if terminated || session_closed {
+        // SessionClosed を転送しても、ピアの FIN を読み切るまでは return しない。
+        // 早期に recv_stream を drop すると STOP_SENDING が送出され、ピアの送信
+        // (WT_CLOSE_SESSION カプセル + FIN) と競合して RESET_STREAM になりうる。
+        if terminated {
             return;
         }
     }
