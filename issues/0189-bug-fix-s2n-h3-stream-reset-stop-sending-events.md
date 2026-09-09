@@ -1,7 +1,7 @@
 # tokio-s2n-quic の H3 リクエスト受信ループが `Event::StreamReset` / `Event::StopSending` を無視する
 
 - Created: 2026-08-27
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-09
 - Branch: feature/fix-s2n-h3-stream-reset-stop-sending-events
 - Polished: {YYYY-MM-DD}
 
@@ -38,3 +38,12 @@ H3 クライアント / サーバーがピアからの RESET_STREAM / STOP_SENDI
 ### 一次資料
 
 - `refs/h3/rfc9114.txt` Section 4.1.1 / Section 8 (ストリームエラー)
+- `refs/quic/rfc9000.txt` Section 3.5 / Section 19.4 (STOP_SENDING / RESET_STREAM)
+
+### closed にする理由
+
+本 issue の設計方針「受信ループの match アームに `Event::StreamReset` / `Event::StopSending` を追加する」は成立しない。両イベントは統合層が `Connection::stream_reset` / `Connection::stop_sending` を呼んだときだけ生成され、H3 リクエスト経路はこれを呼んでいないため、追加しても到達不能なデッドコードになる。RESET_STREAM は現行の `recv_stream.receive()` の `Err(e) => return Err(crate::Error::transport(e))` で既に即時エラー終了しており、完了条件は満たされている。STOP_SENDING は s2n-quic のトランスポート層が自動で RESET_STREAM を送るため受信ループから観測できない。
+
+これらは 0172 (`tokio-s2n-quic` に STOP_SENDING / セッション終了への RESET 応答を配線する) の対象と重複するため、本 issue は 0172 に統合して closed にする。
+
+統合にあたり、RESET_STREAM 受信時に sans-I/O の `Connection::stream_reset` を呼んで QPACK Stream Cancellation / `blocked_by_ricnt` を掃除する経路も 0172 の対象に含めること (現行は transport エラーを返すだけで sans-I/O のストリーム状態が残る)。
