@@ -380,8 +380,15 @@ async fn run_client_connect_recv_task(
     pending_wt_events: Vec<WebTransportEvent>,
     connect_tx: mpsc::UnboundedSender<ConnectCommand>,
 ) {
-    run_client_connect_recv_task_inner(session_id, recv_stream, state, event_tx, pending_wt_events)
-        .await;
+    run_client_connect_recv_task_inner(
+        session_id,
+        recv_stream,
+        state,
+        event_tx,
+        pending_wt_events,
+        &connect_tx,
+    )
+    .await;
     // 受信タスクの終了は CONNECT ストリームの終端を意味するため、送信側も close する
     // (draft-ietf-webtrans-http3-16 Section 6: WT_CLOSE_SESSION の受信側は close か reset を返す)
     let _ = connect_tx.send(ConnectCommand::Finish);
@@ -393,6 +400,7 @@ async fn run_client_connect_recv_task_inner(
     state: Arc<StdMutex<ClientConnectionState>>,
     event_tx: mpsc::Sender<WebTransportEvent>,
     pending_wt_events: Vec<WebTransportEvent>,
+    connect_tx: &mpsc::UnboundedSender<ConnectCommand>,
 ) {
     // ハンドシェイク中に到着していた WebTransport イベントを先に流す。
     // SessionClosed が既にキューに乗っていた場合はここでタスクを終了する。
@@ -406,6 +414,8 @@ async fn run_client_connect_recv_task_inner(
         }
     }
 
+    // 実 SessionClosed を転送済みか (Err 分岐で synthesized を再送しないため)
+    let mut session_closed_delivered = false;
     loop {
         let received = recv_stream.receive().await;
         // MutexGuard は await を跨げないため、ブロックで囲って先にドロップする。
@@ -438,14 +448,25 @@ async fn run_client_connect_recv_task_inner(
         };
         let events = match result {
             Ok(events) => events,
-            Err(_) => {
+            Err(err) => {
+                // WT_CLOSE_SESSION 後の追加データは H3_MESSAGE_ERROR で reset する
+                // (draft-ietf-webtrans-http3-16 Section 6 の MUST)。
+                if matches!(
+                    &err,
+                    crate::Error::Http3(shiguredo_http3::Error::StreamError(
+                        shiguredo_http3::ErrorCode::MessageError
+                    ))
+                ) {
+                    let _ = connect_tx.send(ConnectCommand::Reset {
+                        error_code: shiguredo_http3::ErrorCode::MessageError.code(),
+                    });
+                }
                 // sans-I/O 層が Err を返しても、既に event queue に push 済みの
                 // `SessionClosed` (WT_CLOSE_SESSION 受信済みのケース等) が沈殿している
                 // 可能性があるため、まず drain_events を試みる。
                 //
                 // 取り出せた `SessionClosed` を優先的に届け、それも無い場合のみ
-                // 合成イベントで終端を通知する。真の H3_MESSAGE_ERROR RESET_STREAM
-                // 送出は未対応である (draft-ietf-webtrans-http3-16 Section 6 の MUST)。
+                // 合成イベントで終端を通知する。
                 let residual = state
                     .lock()
                     .expect("mutex should not be poisoned")
@@ -466,7 +487,7 @@ async fn run_client_connect_recv_task_inner(
                         }
                     }
                 }
-                if !delivered {
+                if !delivered && !session_closed_delivered {
                     let _ = event_tx.send(synthesized_session_closed(session_id)).await;
                 }
                 return;
@@ -476,9 +497,14 @@ async fn run_client_connect_recv_task_inner(
         for event in events {
             if let Event::WebTransport(wt) = event
                 && is_forwardable_wt_event(&wt)
-                && event_tx.send(wt).await.is_err()
             {
-                return;
+                let is_terminal = matches!(wt, WebTransportEvent::SessionClosed { .. });
+                if event_tx.send(wt).await.is_err() {
+                    return;
+                }
+                if is_terminal {
+                    session_closed_delivered = true;
+                }
             }
         }
 

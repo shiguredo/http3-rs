@@ -91,12 +91,6 @@ pub(crate) struct WtSession {
     /// 両端がフロー制御を宣言した場合のみ `true`。
     /// セッション確立時に `flow_control_enabled_with_peer` で決定される。
     pub(crate) flow_control_enabled: bool,
-    /// WT_CLOSE_SESSION カプセル受信済みフラグ
-    ///
-    /// WT_CLOSE_SESSION 受信後に CONNECT ストリーム上で追加データが届いた場合、
-    /// H3_MESSAGE_ERROR でストリームをリセットする。
-    /// (draft-ietf-webtrans-http3-15 Section 6)
-    pub(crate) close_session_received: bool,
     /// 受信側ストリームフロー制御 (単方向)
     /// (draft-ietf-webtrans-http3-15 Section 5.6)
     /// フロー制御有効時にセッション確立時点で初期化される。
@@ -149,7 +143,6 @@ impl WtSession {
             capsule_buf: Vec::new(),
             available_protocols: Vec::new(),
             flow_control_enabled: false,
-            close_session_received: false,
             recv_stream_fc_uni: None,
             recv_stream_fc_bidi: None,
             recv_data_fc: None,

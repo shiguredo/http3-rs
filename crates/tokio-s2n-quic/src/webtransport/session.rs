@@ -22,6 +22,11 @@ pub(crate) enum ConnectCommand {
     },
     /// FIN のみを送る (受信タスクの close 応答 / `Drop`)
     Finish,
+    /// RESET_STREAM を送る (WT_CLOSE_SESSION 後の追加データを拒否する経路)
+    Reset {
+        /// アプリケーションエラーコード
+        error_code: u64,
+    },
 }
 
 /// CONNECT ストリームの送信端を所有し、指示を順に処理するタスク
@@ -45,6 +50,12 @@ pub(crate) async fn run_connect_send_task(
             ConnectCommand::Finish => {
                 // 既に FIN 送信済みの場合は冪等 (s2n-quic はエラーを返さない)
                 let _ = send.finish();
+            }
+            ConnectCommand::Reset { error_code } => {
+                // H3 エラーコードは VarInt 値域内のため new は常に成功する
+                let error = s2n_quic::application::Error::new(error_code)
+                    .expect("H3 error code fits in VarInt range");
+                let _ = send.reset(error);
             }
         }
     }

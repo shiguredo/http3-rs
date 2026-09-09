@@ -1,7 +1,7 @@
 # tokio-s2n-quic の受信側で WT_CLOSE_SESSION 受信後の追加ストリームデータを H3_MESSAGE_ERROR で reset しない
 
 - Created: 2026-08-27
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-10
 - Branch: feature/fix-s2n-wt-post-close-message-error
 - Polished: 2026-09-09
 
@@ -40,9 +40,27 @@ WT_CLOSE_SESSION 受信後に CONNECT ストリームで追加のストリーム
 
 - `crates/tokio-s2n-quic/src/webtransport/client.rs` (`run_client_connect_recv_task` の Err 分岐 / `SessionClosed` 後の読み取り継続)
 - `crates/tokio-s2n-quic/src/webtransport/server.rs` (`run_server_connect_recv_task` の Err 分岐 / `SessionClosed` 後の読み取り継続)
-- `crates/tokio-s2n-quic/src/webtransport/session.rs` (`connect_send` の共有経路。0172 の実装に依存)
-- `src/connection/wt_capsule.rs` (`handle_wt_data_frame` の `closed_wt_sessions` 分岐 / `process_wt_capsule_data` の同一 DATA フレーム内後続バイト検査)
-- `crates/tokio-s2n-quic/tests/webtransport_session_close_e2e.rs` (RESET 検知ケース追加)
+- `crates/tokio-s2n-quic/src/webtransport/session.rs` (`ConnectCommand::Reset` の追加)
+- `src/connection/wt_capsule.rs` (`process_wt_capsule_data` の同一 DATA フレーム内後続バイト検査 / 到達不能な `close_session_received` ガードの削除)
+- `crates/tokio-s2n-quic/tests/webtransport_post_close_reset_e2e.rs` (raw QUIC クライアントで RESET を観測)
+- `crates/tokio-s2n-quic/tests/helpers/wt_raw_client.rs` (raw QUIC の WebTransport クライアントヘルパー)
+
+### 修正内容
+
+- `ConnectCommand::Reset { error_code }` を追加し、`run_connect_send_task` で `SendStream::reset` を送る
+- 受信タスクの `Err(StreamError(MessageError))` で `Reset { H3_MESSAGE_ERROR }` を送る。`SessionClosed` 転送後も FIN まで読み続け、終端イベントの二重配送を防ぐ `session_closed_delivered` を追加
+- `process_wt_capsule_data` で WT_CLOSE_SESSION に続くバッファ内の追加バイトを `Err(MessageError)` として検出
+- 到達不能だった内部 `WtSession::close_session_received` フィールドとガードを削除 (tombstone 経路と `has_trailing` 検査が役割を代替)
+- テスト追加: `tests/webtransport_post_close_reset_e2e.rs` (同一 write / 別 write / 同一 DATA フレーム内後続バイトの 3 ケース)、`connection/mod.rs` の同一 DATA フレーム内後続バイト単体テスト、`tests/helpers/wt_raw_client.rs` (生の s2n-quic で CONNECT ストリームを操作するヘルパー)
+
+### 検証結果
+
+- `cargo test --workspace --tests` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` が通る
+- `cargo clippy --all-targets --all-features -- -D warnings` は `nghttp3-sys` / `ngtcp2-sys` の `overwrite` feature で既存の `clippy::ptr_arg` に抵触するため通らない (本 issue の変更起因ではない。CI も `--all-features` を使わない)
+
+### 既知の残課題
+
+- 楽観的カプセル送信 (Pending バッファ) 経路では `establish_wt_session_server` が `process_wt_capsule_data` の Err を握りつぶすため RESET_STREAM が送られない (pre-existing の構造。対象 issue の範囲外)
 
 ### 一次資料
 

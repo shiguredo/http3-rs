@@ -22,14 +22,6 @@ impl Connection {
         session_id: u64,
         data: &[u8],
     ) -> Result<(), Error> {
-        // WT_CLOSE_SESSION 受信済みの場合、追加データは H3_MESSAGE_ERROR でリセット
-        // (draft-ietf-webtrans-http3-15 Section 6)
-        if let Some(session) = self.wt_sessions.get(&session_id)
-            && session.close_session_received
-        {
-            return Err(Error::StreamError(ErrorCode::MessageError));
-        }
-
         // セッションの capsule_buf にデータを追加
         if let Some(session) = self.wt_sessions.get_mut(&session_id) {
             session.capsule_buf.extend_from_slice(data);
@@ -46,6 +38,9 @@ impl Connection {
 
             match crate::webtransport::Capsule::decode(&buf) {
                 Ok(Some((capsule, consumed))) => {
+                    let has_trailing = buf.len() > consumed;
+                    let is_close_session =
+                        matches!(capsule, crate::webtransport::Capsule::CloseSession { .. });
                     // バッファから消費済み部分を除去
                     if let Some(session) = self.wt_sessions.get_mut(&session_id) {
                         session.capsule_buf.drain(..consumed);
@@ -53,6 +48,13 @@ impl Connection {
 
                     // Capsule を処理してイベントに変換
                     self.handle_wt_capsule(session_id, &capsule)?;
+
+                    // WT_CLOSE_SESSION に続く同一 DATA フレーム内の追加バイトは
+                    // H3_MESSAGE_ERROR で拒否する (draft-ietf-webtrans-http3-16 Section 6)。
+                    // セッション除去で while ループが終了するため、ここで検出する。
+                    if is_close_session && has_trailing {
+                        return Err(Error::StreamError(ErrorCode::MessageError));
+                    }
                 }
                 Ok(None) => {
                     // バッファ不足: 次の DATA フレームを待つ
@@ -85,11 +87,8 @@ impl Connection {
                 // WT_CLOSE_SESSION: セッションを終了し、error_code / message を通知する
                 // (draft-ietf-webtrans-http3-15 Section 6)
                 //
-                // WT_CLOSE_SESSION 受信後の追加データは H3_MESSAGE_ERROR で拒否する
-                // (draft-ietf-webtrans-http3-15 Section 6)
-                if let Some(session) = self.wt_sessions.get_mut(&session_id) {
-                    session.close_session_received = true;
-                }
+                // 終了後は tombstone (`closed_wt_sessions`) 経由で追加データを
+                // H3_MESSAGE_ERROR として拒否する (draft-ietf-webtrans-http3-16 Section 6)
                 self.terminate_wt_session_with(
                     session_id,
                     WtErrorCode::SessionGone as u64,
