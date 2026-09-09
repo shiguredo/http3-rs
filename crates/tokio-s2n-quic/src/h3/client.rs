@@ -292,7 +292,20 @@ impl H3Client {
                     let (data, fin) = match received {
                         Ok(Some(data)) => (data.to_vec(), false),
                         Ok(None) => (vec![], true),
-                        Err(e) => return Err(crate::Error::transport(e)),
+                        Err(e) => {
+                            // ピアの RESET_STREAM を sans-I/O 層に通知し、QPACK Stream
+                            // Cancellation と blocked 状態の掃除、ストリーム状態の破棄を
+                            // 行う (RFC 9114 Section 8 / RFC 9204 Section 2.2.2.2)。
+                            if let s2n_quic::stream::Error::StreamReset { error, .. } = &e {
+                                let _ = self
+                                    .state
+                                    .lock()
+                                    .expect("mutex should not be poisoned")
+                                    .stream_reset(stream_id, **error);
+                                flush_qpack(&self.state, &self.qpack_tx);
+                            }
+                            return Err(crate::Error::transport(e));
+                        }
                     };
                     if let Err(e) = self
                         .state

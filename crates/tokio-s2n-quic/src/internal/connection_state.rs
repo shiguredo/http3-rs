@@ -108,9 +108,20 @@ impl ServerConnectionState {
         self.h3_conn.take_stream_data(stream_id)
     }
 
-    /// WebTransport CONNECT ストリームのリセット (RESET_STREAM 受信) を通知しイベントを返す
+    /// RESET_STREAM 受信を sans-I/O 層に通知し、生成されたイベントを返す
     ///
     /// s2n-quic の `stream::Error` は Final Size を公開しないため常に 0 を渡す。
+    pub(crate) fn stream_reset(
+        &mut self,
+        stream_id: u64,
+        error_code: u64,
+    ) -> crate::Result<Vec<Event>> {
+        self.h3_conn.stream_reset(stream_id, error_code, 0)?;
+        Ok(self.h3_conn.drain_events()?)
+    }
+
+    /// WebTransport CONNECT ストリームのリセット (RESET_STREAM 受信) を通知しイベントを返す
+    ///
     /// sans-I/O 層は CONNECT ストリームのリセットで `terminate_wt_session` を呼び
     /// `SessionClosed` イベントを発火するのみで `final_size` は使用しない
     /// (draft-ietf-webtrans-http3-16 Section 6)。
@@ -119,8 +130,7 @@ impl ServerConnectionState {
         stream_id: u64,
         error_code: u64,
     ) -> crate::Result<Vec<Event>> {
-        self.h3_conn.stream_reset(stream_id, error_code, 0)?;
-        Ok(self.h3_conn.drain_events()?)
+        self.stream_reset(stream_id, error_code)
     }
 }
 
@@ -220,9 +230,20 @@ impl ClientConnectionState {
         self.h3_conn.take_stream_data(stream_id)
     }
 
-    /// WebTransport CONNECT ストリームのリセット (RESET_STREAM 受信) を通知しイベントを返す
+    /// RESET_STREAM 受信を sans-I/O 層に通知し、生成されたイベントを返す
     ///
     /// s2n-quic の `stream::Error` は Final Size を公開しないため常に 0 を渡す。
+    pub(crate) fn stream_reset(
+        &mut self,
+        stream_id: u64,
+        error_code: u64,
+    ) -> crate::Result<Vec<Event>> {
+        self.h3_conn.stream_reset(stream_id, error_code, 0)?;
+        Ok(self.h3_conn.drain_events()?)
+    }
+
+    /// WebTransport CONNECT ストリームのリセット (RESET_STREAM 受信) を通知しイベントを返す
+    ///
     /// sans-I/O 層は CONNECT ストリームのリセットで `terminate_wt_session` を呼び
     /// `SessionClosed` イベントを発火するのみで `final_size` は使用しない
     /// (draft-ietf-webtrans-http3-16 Section 6)。
@@ -231,8 +252,7 @@ impl ClientConnectionState {
         stream_id: u64,
         error_code: u64,
     ) -> crate::Result<Vec<Event>> {
-        self.h3_conn.stream_reset(stream_id, error_code, 0)?;
-        Ok(self.h3_conn.drain_events()?)
+        self.stream_reset(stream_id, error_code)
     }
 }
 
@@ -432,6 +452,38 @@ mod tests {
         assert!(
             err.is_err(),
             "制御ストリームへの DATA フレームはエラーになること: {err:?}"
+        );
+    }
+
+    /// クライアント: RESET_STREAM 通知が受理され、StreamReset イベントが生成される
+    #[test]
+    fn test_client_stream_reset_is_accepted() {
+        let mut state = ClientConnectionState::new(H3Settings::default());
+        state
+            .init_h3_streams(2, 6, 10)
+            .expect("テスト用の初期化に成功すること");
+
+        let headers = vec![
+            Header::new(b":method", b"GET").expect("テスト用のヘッダーに成功すること"),
+            Header::new(b":scheme", b"https").expect("テスト用のヘッダーに成功すること"),
+            Header::new(b":authority", b"example.com").expect("テスト用のヘッダーに成功すること"),
+            Header::new(b":path", b"/").expect("テスト用のヘッダーに成功すること"),
+        ];
+        let stream_id = state
+            .send_request(&headers, true)
+            .expect("テスト用のリクエスト送信に成功すること");
+
+        // ピアの RESET_STREAM を通知すると StreamReset イベントが生成されること
+        let events = state
+            .stream_reset(stream_id, 0x10e)
+            .expect("RESET_STREAM の通知に成功すること");
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                Event::StreamReset { stream_id: sid, error_code }
+                    if *sid == stream_id && *error_code == 0x10e
+            )),
+            "StreamReset イベントが生成されること"
         );
     }
 }

@@ -1,8 +1,8 @@
 # tokio-s2n-quic に RESET_STREAM 受信と WebTransport セッション終了への応答を配線する
 
 - Created: 2026-08-08
-- Completed: {YYYY-MM-DD}
-- Branch: feature/refactor-s2n-stream-error-reset
+- Completed: 2026-09-09
+- Branch: feature/fix-s2n-stream-error-reset
 - Polished: 2026-09-09
 
 ## 目的
@@ -24,7 +24,7 @@
 ## 設計方針
 
 - H3 リクエスト受信ループの `recv_stream.receive()` の `Err` が `StreamError::StreamReset { error, .. }` の場合、`internal/connection_state.rs` のラッパー経由で sans-I/O の `Connection::stream_reset(stream_id, *error, 0)` を呼んでから `crate::Error::transport(e)` を返す (`final_size` は現行 API から取得できないため 0。`connect_stream_reset` と同じ)。`stream_reset` でバッファされた QPACK Stream Cancellation を送るため `flush_qpack` を呼ぶ
-- WT の受信タスクは、`SessionClosed` を検知した時点で CONNECT ストリームの送信端に close (FIN) を送る。実装は `connect_send` を所有する送信タスクを 1 つ置き、`WtSession::close` / `Drop` / 受信タスクから mpsc チャネルで `Fin` / `Reset { error_code }` を送る方式を第一候補とする (`shiguredo-rust` の「共有状態を `Mutex` / `RwLock` で保護する設計を安易に選ばない」に合わせる)。`SendStream::finish` の二重呼び出しは冪等だが、戻り値は念のため握り潰す。`SendStream::reset` は FIN が ACK 済み (送信完了) だと no-op になるため、0185 の H3_MESSAGE_ERROR reset を送る場合は FIN の ACK 前に送る順序を 0185 と調整する
+- WT の受信タスクは、`SessionClosed` を検知した時点で CONNECT ストリームの送信端に close (FIN) を送る。実装は `connect_send` を所有する送信タスクを 1 つ置き、`WtSession::close` / `Drop` / 受信タスクから mpsc チャネルで close (FIN) 指示を送る方式を第一候補とする (`shiguredo-rust` の「共有状態を `Mutex` / `RwLock` で保護する設計を安易に選ばない」に合わせる)。`SendStream::finish` の二重呼び出しは冪等だが、戻り値は念のため握り潰す。WT_CLOSE_SESSION 後の追加データを H3_MESSAGE_ERROR で reset する経路 (0185) が必要になった時点で、チャネルに reset 指示を追加し、`SendStream::reset` が FIN の ACK 済みで no-op になる制約と送信順序を 0185 と調整する
 - `WtSession::close` と `Drop for WtSession` の `connect_send.finish()` は送信タスク経由に整理し、重複送出を避ける
 - 送信側が受信側の close 応答を `SessionClosed` として観測できることを統合テストで検証する (FIN のみの応答は `close_error_code=0` / `close_message=""` と等価。draft-16 Section 6)
 - STOP_SENDING は s2n-quic のトランスポート層が処理するため本 issue の対象外とし、その旨をコメントに残す
@@ -44,9 +44,22 @@
 - `crates/tokio-s2n-quic/src/h3/client.rs` (`H3Client::send_request` の Err 分岐)
 - `crates/tokio-s2n-quic/src/h3/server.rs` (`H3ServerConnection::accept_request` の Err 分岐)
 - `crates/tokio-s2n-quic/src/internal/connection_state.rs` (`Connection::stream_reset` のラッパー追加)
-- `crates/tokio-s2n-quic/src/webtransport/session.rs` (`WtSession` / `connect_send` の送信タスク)
+- `crates/tokio-s2n-quic/src/webtransport/session.rs` (`WtSession` / CONNECT ストリームの送信タスク)
 - `crates/tokio-s2n-quic/src/webtransport/client.rs` / `server.rs` (`run_*_connect_recv_task` の close 応答)
 - `crates/tokio-s2n-quic/tests/webtransport_session_close_e2e.rs` (echo 検証ケース追加)
+
+### 修正内容
+
+- `internal/connection_state.rs` に汎用の `stream_reset` を追加し、`connect_stream_reset` をその委譲にした
+- `h3/client.rs` / `server.rs` の受信ループで `Err(StreamReset { error, .. })` のとき `stream_reset(stream_id, **error)` を呼び、`flush_qpack` してから transport エラーを返す
+- `webtransport/session.rs` に `ConnectCommand` と `run_connect_send_task` を追加し、`connect_send` を送信タスクへ移した。`WtSession::close` は `SendAndFinish`、`Drop` は `Finish` を送る
+- `webtransport/client.rs` / `server.rs` の受信タスクを wrapper / inner に分け、終了時に `Finish` を送る。送信タスクを起動し `connect_tx` を `WtSession` と受信タスクで共有する
+- テスト追加: `tests/h3_stream_reset_e2e.rs` (生の s2n-quic クライアントで RESET_STREAM し `accept_request` の Err 分岐を通す)、`tests/webtransport_session_close_e2e.rs` (送信側で close 応答の `SessionClosed` を観測する 2 テスト)、`connection_state.rs` (`stream_reset` が StreamReset イベントを生成する単体テスト)
+- `tests/helpers/certs.rs` を追加し、3 テストで重複していた `generate_certificate` を集約した
+
+### 検証結果
+
+- `cargo test --workspace --tests` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` が通る
 
 ### 一次資料
 

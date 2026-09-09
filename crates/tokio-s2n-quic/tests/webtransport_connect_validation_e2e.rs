@@ -15,19 +15,14 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use rcgen::generate_simple_self_signed;
+// テスト間で共有するヘルパーは tests/helpers/ に置き、必要なファイルだけを
+// 明示的に取り込む (モジュール全体を取り込むと未使用部分が dead code になるため)
+#[path = "helpers/certs.rs"]
+mod certs;
+
+use certs::generate_certificate;
 use shiguredo_http3::{VarInt, webtransport};
 use tokio_s2n_quic::{ClientConfig, Error, ServerConfig, WtClient, WtServer};
-
-fn generate_certificate() -> (String, String) {
-    let subject_alt_names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-    let certified_key =
-        generate_simple_self_signed(subject_alt_names).expect("自己署名証明書生成に成功すること");
-    (
-        certified_key.cert.pem(),
-        certified_key.signing_key.serialize_pem(),
-    )
-}
 
 fn build_wt_settings() -> webtransport::Settings {
     let v =
