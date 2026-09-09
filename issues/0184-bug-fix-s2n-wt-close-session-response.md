@@ -1,7 +1,7 @@
 # tokio-s2n-quic の受信側で WT_CLOSE_SESSION 受信後に close または reset を返さない
 
 - Created: 2026-08-27
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-09
 - Branch: feature/fix-s2n-wt-close-session-response
 - Polished: {YYYY-MM-DD}
 
@@ -45,3 +45,9 @@ WT_CLOSE_SESSION 受信側が CONNECT ストリームに close (FIN) または r
 ### 一次資料
 
 - `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 6 (Session Termination) の MUST 記述
+
+### closed にする理由
+
+本 issue が対象とする「WT_CLOSE_SESSION 受信側が CONNECT ストリームに close または reset を返す」実装は、先に起票済みの 0172 (`tokio-s2n-quic` に STOP_SENDING / セッション終了への RESET 応答を配線する) の設計方針「`WtSession` の `connect_send` を RESET できるようにし、`SessionClosed` イベント受信時にリセットする」と実装対象・契機・手段が重複する。二重に実装しないため、本 issue は 0172 の重複として closed にする。
+
+本 issue に固有の「送信側で echo を検知する統合テスト」と「close 応答を FIN とするか RESET とするかの選択」は 0172 の完了条件に明記されていないため、0172 の実装時に対象へ含めること。
