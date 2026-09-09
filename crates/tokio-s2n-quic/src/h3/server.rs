@@ -210,7 +210,7 @@ impl H3ServerConnection {
     /// ピアが並行して 2 本目のリクエストストリームを開いた場合、本メソッドが接続共有
     /// イベントキューを排他的にドレインする構造上、他ストリームの `Event::Header` /
     /// `Event::HeadersEnd` / `Event::Data` / `Event::StreamEnd` は `_ => {}` で捨てられ、
-    /// そのストリームは復旧できない。並行リクエスト対応は別 issue で扱う。
+    /// そのストリームは復旧できない。並行リクエストは未対応である。
     pub async fn accept_request(&mut self) -> crate::Result<H3Request> {
         let stream: s2n_quic::stream::BidirectionalStream = self
             .bidi_acceptor
@@ -289,7 +289,20 @@ impl H3ServerConnection {
                     let (data, fin) = match received {
                         Ok(Some(data)) => (data.to_vec(), false),
                         Ok(None) => (vec![], true),
-                        Err(e) => return Err(crate::Error::transport(e)),
+                        Err(e) => {
+                            // ピアの RESET_STREAM を sans-I/O 層に通知し、QPACK Stream
+                            // Cancellation と blocked 状態の掃除、ストリーム状態の破棄を
+                            // 行う (RFC 9114 Section 8 / RFC 9204 Section 2.2.2.2)。
+                            if let s2n_quic::stream::Error::StreamReset { error, .. } = &e {
+                                let _ = self
+                                    .state
+                                    .lock()
+                                    .expect("mutex should not be poisoned")
+                                    .stream_reset(stream_id, **error);
+                                flush_qpack(&self.state, &self.qpack_tx);
+                            }
+                            return Err(crate::Error::transport(e));
+                        }
                     };
                     if let Err(e) = self
                         .state

@@ -32,6 +32,8 @@
   - @voluntas
 - [FIX] WT ネゴシエーション完了前に到着した先頭 0x41 の bidi ストリームがリクエストストリームとして誤処理される問題を修正する。サーバー側の `Connection::dispatch_client_bidi_stream` を `is_wt_fully_negotiated()` の状態に関わらず先頭 varint で判定し、0x41 かつ未ネゴシエーション時は `pending_wt_bidi_pre_negotiation` にストリームデータを保留する。SETTINGS 受信時に `process_pending_wt_bidi_pre_negotiation` で再ディスパッチする。保留上限 (ストリーム 100 本 / データ 64 KiB) 超過時、およびピア SETTINGS が WT 非対応で保留を解消できない場合は `WT_BUFFERED_STREAM_REJECTED` エラーコードで通知する (draft-ietf-webtrans-http3-16 Section 4.3 / 4.6)
   - @voluntas
+- [FIX] `tokio-s2n-quic` の H3 リクエスト受信ループがピアの RESET_STREAM を sans-I/O 層に通知せず QPACK Stream Cancellation と blocked 状態の掃除が行われない問題を修正する。また WebTransport の CONNECT ストリームで WT_CLOSE_SESSION を受信した側が close (FIN) を返さず送信側が close 応答を観測できない問題を修正する (RFC 9114 Section 8 / RFC 9204 Section 2.2.2.2 / RFC 9000 Section 19.4 / draft-ietf-webtrans-http3-16 Section 6)
+  - @voluntas
 - [CHANGE] MSRV (Minimum Supported Rust Version) を 1.88 から 1.93 に引き上げる
   - @voluntas
 - [CHANGE] `Client::connect` / `ClientWebTransportSession::connect` / `TlsContext::new_client` でサーバー証明書のチェーン検証とホスト名検証を有効にする (従来 `verify_peer=true` は検証なしと同等の挙動だった)。検証に失敗する既存接続は失敗するようになる (RFC 9114 Section 3.1 / RFC 9001 Section 4.4)

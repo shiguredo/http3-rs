@@ -11,7 +11,8 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc;
 
 use super::session::{
-    WtRecvStream, WtSession, is_forwardable_wt_event, synthesized_session_closed,
+    ConnectCommand, WtRecvStream, WtSession, is_forwardable_wt_event, run_connect_send_task,
+    synthesized_session_closed,
 };
 use crate::config::ClientConfig;
 use crate::internal::connection_state::ClientConnectionState;
@@ -268,19 +269,26 @@ impl WtClient {
         // クライアントは `send_response` 相当のステップがないため、`pending_wt_events` に
         // 対する追加ドレインは不要 (サーバー側の `accept()` は追加ドレインを行う)。
         let (event_tx, event_rx) = mpsc::channel::<WebTransportEvent>(64);
+        // CONNECT ストリームの送信端を専用タスクへ移し、受信タスクの close 応答と
+        // `WtSession::close` / `Drop` の双方から操作できるようにする
+        // (draft-ietf-webtrans-http3-16 Section 6)
+        let (connect_tx, connect_rx) = mpsc::unbounded_channel::<ConnectCommand>();
+        // 送信タスクは connect_tx が全て drop されると終了するため detach する
+        tokio::spawn(run_connect_send_task(send_stream, connect_rx));
         let recv_task = tokio::spawn(run_client_connect_recv_task(
             connect_stream_id,
             recv_stream,
             Arc::clone(&state),
             event_tx,
             pending_wt_events,
+            connect_tx.clone(),
         ));
 
         Ok(WtSession::new(
             connect_stream_id,
             bidi_acceptor,
             handle,
-            send_stream,
+            connect_tx,
             uni_rx,
             event_rx,
             recv_task,
@@ -366,6 +374,21 @@ fn parse_status(value: &[u8]) -> Option<u16> {
 
 async fn run_client_connect_recv_task(
     session_id: u64,
+    recv_stream: s2n_quic::stream::ReceiveStream,
+    state: Arc<StdMutex<ClientConnectionState>>,
+    event_tx: mpsc::Sender<WebTransportEvent>,
+    pending_wt_events: Vec<WebTransportEvent>,
+    connect_tx: mpsc::UnboundedSender<ConnectCommand>,
+) {
+    run_client_connect_recv_task_inner(session_id, recv_stream, state, event_tx, pending_wt_events)
+        .await;
+    // 受信タスクの終了は CONNECT ストリームの終端を意味するため、送信側も close する
+    // (draft-ietf-webtrans-http3-16 Section 6: WT_CLOSE_SESSION の受信側は close か reset を返す)
+    let _ = connect_tx.send(ConnectCommand::Finish);
+}
+
+async fn run_client_connect_recv_task_inner(
+    session_id: u64,
     mut recv_stream: s2n_quic::stream::ReceiveStream,
     state: Arc<StdMutex<ClientConnectionState>>,
     event_tx: mpsc::Sender<WebTransportEvent>,
@@ -422,7 +445,7 @@ async fn run_client_connect_recv_task(
                 //
                 // 取り出せた `SessionClosed` を優先的に届け、それも無い場合のみ
                 // 合成イベントで終端を通知する。真の H3_MESSAGE_ERROR RESET_STREAM
-                // 送出は別対応とする (draft-ietf-webtrans-http3-16 Section 6 の MUST)。
+                // 送出は未対応である (draft-ietf-webtrans-http3-16 Section 6 の MUST)。
                 let residual = state
                     .lock()
                     .expect("mutex should not be poisoned")

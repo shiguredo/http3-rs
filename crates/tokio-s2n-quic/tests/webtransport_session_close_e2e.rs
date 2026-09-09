@@ -10,20 +10,15 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use rcgen::generate_simple_self_signed;
+// テスト間で共有するヘルパーは tests/helpers/ に置き、必要なファイルだけを
+// 明示的に取り込む (モジュール全体を取り込むと未使用部分が dead code になるため)
+#[path = "helpers/certs.rs"]
+mod certs;
+
+use certs::generate_certificate;
 use shiguredo_http3::{VarInt, webtransport};
 use tokio::sync::oneshot;
 use tokio_s2n_quic::{ClientConfig, ServerConfig, WebTransportEvent, WtClient, WtServer};
-
-/// テスト用の自己署名証明書を生成する
-fn generate_certificate() -> (String, String) {
-    let subject_alt_names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-    let certified_key =
-        generate_simple_self_signed(subject_alt_names).expect("自己署名証明書生成に成功すること");
-    let cert_pem = certified_key.cert.pem();
-    let key_pem = certified_key.signing_key.serialize_pem();
-    (cert_pem, key_pem)
-}
 
 /// テスト用の WebTransport 設定 (draft-15) を返す
 fn build_wt_settings() -> webtransport::Settings {
@@ -265,4 +260,151 @@ async fn client_drop_delivers_clean_close_to_server() {
     client_task
         .await
         .expect("クライアントタスクの終了に成功すること");
+}
+
+/// サーバー側で `WtSession::close` を呼び出すと、送信側 (サーバー) の `recv_event()` でも
+/// 受信側 (クライアント) の close 応答 (FIN) による `SessionClosed` が届くことを検証する
+///
+/// (draft-ietf-webtrans-http3-16 Section 6: WT_CLOSE_SESSION の受信側は close か reset を返す)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_close_response_is_observed_by_server() {
+    let (mut server, server_addr, ca_cert_pem) = start_server().await;
+
+    let (client_ready_tx, client_ready_rx) = oneshot::channel::<()>();
+
+    let server_task = tokio::spawn(async move {
+        let request = server
+            .accept()
+            .await
+            .expect("サーバー側の accept に成功すること");
+        let mut session = request
+            .accept()
+            .await
+            .expect("セッション確立に成功すること");
+        client_ready_rx
+            .await
+            .expect("クライアント接続完了通知を受信できること");
+        session
+            .close(42, "server bye")
+            .await
+            .expect("サーバー側の close に成功すること");
+        // 受信側 (クライアント) の close 応答 (FIN) を送信側で観測する
+        let event = tokio::time::timeout(Duration::from_secs(5), session.recv_event())
+            .await
+            .expect("close 応答のタイムアウト待ちが完了すること")
+            .expect("close 応答の SessionClosed が届くこと");
+        (session, event)
+    });
+
+    let mut client_session = WtClient::connect(build_client_config(server_addr, ca_cert_pem), "/")
+        .await
+        .expect("クライアント接続に成功すること");
+    client_ready_tx
+        .send(())
+        .expect("サーバー側にクライアント準備完了を通知できること");
+
+    // クライアント側でも WT_CLOSE_SESSION 受信による SessionClosed を観測する
+    let client_event = tokio::time::timeout(Duration::from_secs(5), client_session.recv_event())
+        .await
+        .expect("イベント受信のタイムアウト待ちが完了すること")
+        .expect("SessionClosed イベントが届くこと");
+    assert!(
+        matches!(client_event, WebTransportEvent::SessionClosed { .. }),
+        "クライアント側で SessionClosed が届くこと: {client_event:?}"
+    );
+
+    let (_server_session, event) = server_task
+        .await
+        .expect("サーバータスクの終了に成功すること");
+    match event {
+        WebTransportEvent::SessionClosed {
+            close_error_code,
+            close_message,
+            ..
+        } => {
+            // 受信側の close 応答 (FIN) は error_code=0 / message="" と等価
+            assert_eq!(
+                close_error_code, 0,
+                "close 応答 (FIN) の close_error_code は 0 になること"
+            );
+            assert!(
+                close_message.is_empty(),
+                "close 応答 (FIN) の close_message は空になること: {close_message:?}"
+            );
+        }
+        other => panic!("SessionClosed 以外のイベントが届いた: {other:?}"),
+    }
+}
+
+/// クライアント側で `WtSession::close` を呼び出すと、送信側 (クライアント) の
+/// `recv_event()` でも受信側 (サーバー) の close 応答 (FIN) による `SessionClosed` が
+/// 届くことを検証する (サーバー発のケースと対称)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_close_response_is_observed_by_client() {
+    let (mut server, server_addr, ca_cert_pem) = start_server().await;
+
+    let (server_ready_tx, server_ready_rx) = oneshot::channel::<()>();
+
+    let client_task = tokio::spawn(async move {
+        let mut client_session =
+            WtClient::connect(build_client_config(server_addr, ca_cert_pem), "/")
+                .await
+                .expect("クライアント接続に成功すること");
+        server_ready_rx
+            .await
+            .expect("サーバー準備完了通知を受信できること");
+        client_session
+            .close(7, "client bye")
+            .await
+            .expect("クライアント側の close に成功すること");
+        // 受信側 (サーバー) の close 応答 (FIN) を送信側で観測する
+        let event = tokio::time::timeout(Duration::from_secs(5), client_session.recv_event())
+            .await
+            .expect("close 応答のタイムアウト待ちが完了すること")
+            .expect("close 応答の SessionClosed が届くこと");
+        (client_session, event)
+    });
+
+    let request = server
+        .accept()
+        .await
+        .expect("サーバー側の accept に成功すること");
+    let mut server_session = request
+        .accept()
+        .await
+        .expect("セッション確立に成功すること");
+    server_ready_tx
+        .send(())
+        .expect("クライアント側にサーバー準備完了を通知できること");
+
+    // サーバー側でも WT_CLOSE_SESSION 受信による SessionClosed を観測する
+    let server_event = tokio::time::timeout(Duration::from_secs(5), server_session.recv_event())
+        .await
+        .expect("イベント受信のタイムアウト待ちが完了すること")
+        .expect("SessionClosed イベントが届くこと");
+    assert!(
+        matches!(server_event, WebTransportEvent::SessionClosed { .. }),
+        "サーバー側で SessionClosed が届くこと: {server_event:?}"
+    );
+
+    let (_client_session, event) = client_task
+        .await
+        .expect("クライアントタスクの終了に成功すること");
+    match event {
+        WebTransportEvent::SessionClosed {
+            close_error_code,
+            close_message,
+            ..
+        } => {
+            assert_eq!(
+                close_error_code, 0,
+                "close 応答 (FIN) の close_error_code は 0 になること"
+            );
+            assert!(
+                close_message.is_empty(),
+                "close 応答 (FIN) の close_message は空になること: {close_message:?}"
+            );
+        }
+        other => panic!("SessionClosed 以外のイベントが届いた: {other:?}"),
+    }
 }

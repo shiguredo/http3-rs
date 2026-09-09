@@ -8,7 +8,47 @@ use shiguredo_http3::webtransport::capsule::Capsule;
 use shiguredo_http3::webtransport::error::ErrorCode as WtErrorCode;
 use shiguredo_http3::webtransport::stream::StreamHeader;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+
+/// CONNECT ストリーム送信タスクへの指示
+pub(crate) enum ConnectCommand {
+    /// データを送信して FIN を送る (`WtSession::close`)
+    SendAndFinish {
+        /// 送信するカプセルデータ (H3 DATA フレーム)
+        data: Bytes,
+        /// 送信結果の通知先
+        done: oneshot::Sender<crate::Result<()>>,
+    },
+    /// FIN のみを送る (受信タスクの close 応答 / `Drop`)
+    Finish,
+}
+
+/// CONNECT ストリームの送信端を所有し、指示を順に処理するタスク
+///
+/// `WtSession::close` / `Drop` / CONNECT ストリーム受信タスクの 3 経路から
+/// 同じ送信端を操作するため、所有権をこのタスクに集約して mpsc で指示を送る。
+pub(crate) async fn run_connect_send_task(
+    mut send: SendStream,
+    mut rx: mpsc::UnboundedReceiver<ConnectCommand>,
+) {
+    while let Some(command) = rx.recv().await {
+        match command {
+            ConnectCommand::SendAndFinish { data, done } => {
+                let result = async {
+                    send.send(data).await.map_err(crate::Error::transport)?;
+                    send.finish().map_err(crate::Error::transport)
+                }
+                .await;
+                let _ = done.send(result);
+            }
+            ConnectCommand::Finish => {
+                // 既に FIN 送信済みの場合は冪等 (s2n-quic はエラーを返さない)
+                let _ = send.finish();
+            }
+        }
+    }
+}
 
 /// WebTransport セッション
 pub struct WtSession {
@@ -18,8 +58,10 @@ pub struct WtSession {
     bidi_acceptor: BidirectionalStreamAcceptor,
     /// 接続ハンドル
     handle: s2n_quic::connection::Handle,
-    /// CONNECT ストリームの送信端 (WT_CLOSE_SESSION 送信 + FIN 送出用)
-    connect_send: SendStream,
+    /// CONNECT ストリーム送信タスクへの指示チャネル
+    ///
+    /// 送信タスクはこのチャネルが閉じると終了するため JoinHandle は保持しない
+    connect_tx: mpsc::UnboundedSender<ConnectCommand>,
     /// WT 単方向ストリーム受信チャネル
     uni_rx: mpsc::Receiver<WtRecvStream>,
     /// WebTransport イベント受信チャネル
@@ -39,7 +81,7 @@ impl WtSession {
         session_id: u64,
         bidi_acceptor: BidirectionalStreamAcceptor,
         handle: s2n_quic::connection::Handle,
-        connect_send: SendStream,
+        connect_tx: mpsc::UnboundedSender<ConnectCommand>,
         uni_rx: mpsc::Receiver<WtRecvStream>,
         event_rx: mpsc::Receiver<WebTransportEvent>,
         recv_task: JoinHandle<()>,
@@ -48,7 +90,7 @@ impl WtSession {
             session_id,
             bidi_acceptor,
             handle,
-            connect_send,
+            connect_tx,
             uni_rx,
             event_rx,
             recv_task,
@@ -197,26 +239,28 @@ impl WtSession {
         // として送出する必要がある (RFC 9297 Section 3.1 / RFC 9114 Section 7.2.1)。
         let mut buf = Vec::new();
         capsule.encode_as_data_frame(&mut buf);
-        self.connect_send
-            .send(Bytes::from(buf))
-            .await
-            .map_err(crate::Error::transport)?;
-        // FIN 送出
-        self.connect_send.finish().map_err(crate::Error::transport)
+        // 送信タスクへカプセル送出と FIN を依頼し、完了を待つ
+        let (done_tx, done_rx) = oneshot::channel();
+        self.connect_tx
+            .send(ConnectCommand::SendAndFinish {
+                data: Bytes::from(buf),
+                done: done_tx,
+            })
+            .map_err(|_| crate::Error::StreamClosed)?;
+        done_rx.await.map_err(|_| crate::Error::StreamClosed)?
     }
 }
 
 impl Drop for WtSession {
     fn drop(&mut self) {
-        // 送信端 (`connect_send`) に明示的に FIN を送出する。
+        // 送信タスクへ FIN を依頼する。
         //
         // s2n-quic の `SendStream::drop` にも FIN 送出の暗黙挙動があるため実質同じ結果に
         // なるが、明示呼び出しにより「WtSession の drop でクリーンクローズを相手に届ける」
-        // という意図を型レベルではなくコードで表明する
+        // という意図をコードで表明する
         // (draft-ietf-webtrans-http3-16 Section 6: FIN のみでのクリーンクローズは
         // WT_CLOSE_SESSION(error_code=0, message="") と等価)。
-        // `finish()` が Err を返す場合 (既にストリームが閉じているなど) は無視する。
-        let _ = self.connect_send.finish();
+        let _ = self.connect_tx.send(ConnectCommand::Finish);
         // 受信タスクに abort を通知する (実際の termination は runtime 依存で遅延しうる)。
         // `abort` を送っても直ちにタスクが停止する保証はないが、ハンドルが drop されて
         // 参照が失われた後は間もなく runtime が回収する。
