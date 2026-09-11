@@ -48,6 +48,11 @@ impl ServerConfig {
     }
 
     /// WebTransport を有効にする
+    ///
+    /// WebTransport を扱わない `H3Server::bind` に本設定を有効化した
+    /// `ServerConfig` を渡すと `Error::InvalidState` で拒否される。
+    /// WebTransport サーバーとして使う場合も本設定を有効化した `ServerConfig` を
+    /// `WtServer::bind` に渡すこと。
     pub fn enable_webtransport(mut self, wt: webtransport::Settings) -> Self {
         self.h3_settings = self.h3_settings.enable_webtransport_server(wt);
         self
