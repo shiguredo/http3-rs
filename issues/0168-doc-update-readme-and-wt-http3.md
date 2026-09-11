@@ -22,6 +22,10 @@ docs/WT_HTTP3.md:
 
 - draft 02 / 07 / 15 の差分表のみで、実装済みの draft-14 / draft-16 が未記載
 
+crates/tokio-s2n-quic/README.md:
+
+- 実行例の example 名が実在しない (`shiguredo_s2n_quic_server` / `shiguredo_s2n_quic_client`。実在するのは `h3_server` / `h3_client` / `wt_echo_server` / `wt_echo_client`)
+
 その他:
 
 - `src/settings.rs` のモジュール doc の「draft-ietf-webtrans-http3-02 / -07 / -14 / -15」に -16 がない
@@ -31,6 +35,7 @@ docs/WT_HTTP3.md:
 ## 設計方針
 
 - README を draft-16 表記に更新し、サンプルコードを現在の API に合わせて修正する
+- `crates/tokio-s2n-quic/README.md` の example 名を実在する example に修正する
 - エラーコード一覧を実装に合わせて修正する
 - docs/WT_HTTP3.md に draft-14 / draft-16 を追記する
 - ソースコード内のドラフト表記・誤った doc も修正する
@@ -38,6 +43,7 @@ docs/WT_HTTP3.md:
 ## 完了条件
 
 - README のサンプルコードがコンパイルできる
+- `crates/tokio-s2n-quic/README.md` の example 名が実在する example と一致する
 - README / docs/WT_HTTP3.md のドラフト表記とエラーコード一覧が実装と一致する
 - `cargo test --doc` が通る (README の doctest を含む場合)
 
@@ -46,5 +52,6 @@ docs/WT_HTTP3.md:
 ### 関連ファイル
 
 - `README.md`
+- `crates/tokio-s2n-quic/README.md`
 - `docs/WT_HTTP3.md`
 - `src/settings.rs` / `src/error.rs` / `src/webtransport/` 配下の doc コメント
