@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use bytes::Bytes;
 use s2n_quic::connection::BidirectionalStreamAcceptor;
 use s2n_quic::stream::SendStream;
-use shiguredo_http3::{Event, Header};
+use shiguredo_http3::{Event, Header, WebTransportEvent};
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -16,6 +16,9 @@ use crate::internal::classify_uni_recv;
 use crate::internal::connection_state::ServerConnectionState;
 
 /// HTTP/3 サーバー
+///
+/// 本サーバーは WebTransport を扱わない。WebTransport を使う場合は
+/// `WtServer::bind` を使うこと。
 pub struct H3Server {
     /// s2n-quic Server
     server: s2n_quic::Server,
@@ -27,7 +30,19 @@ pub struct H3Server {
 
 impl H3Server {
     /// サーバーをバインドする
+    ///
+    /// `H3Server` は WebTransport を扱わないため、WebTransport を有効化した
+    /// `ServerConfig` を渡した場合は `Error::InvalidState` を返す。WebTransport を
+    /// 使う場合は `WtServer::bind` を使うこと。
     pub fn bind(config: ServerConfig) -> crate::Result<Self> {
+        // H3Server は WebTransport を扱わない。WT 有効の設定は WtServer::bind を
+        // 使うべき誤用であり、接続を受け付ける前に設定の矛盾として拒否する。
+        if config.h3_settings.is_webtransport_enabled() {
+            return Err(crate::Error::InvalidState(
+                "WebTransport is enabled; use WtServer instead of H3Server".to_string(),
+            ));
+        }
+
         let server = s2n_quic::Server::builder()
             .with_tls((config.cert_pem.as_str(), config.key_pem.as_str()))
             .map_err(crate::Error::transport)?
@@ -216,6 +231,13 @@ impl H3ServerConnection {
     /// イベントキューを排他的にドレインする構造上、他ストリームの `Event::Header` /
     /// `Event::HeadersEnd` / `Event::Data` / `Event::StreamEnd` は `_ => {}` で捨てられ、
     /// そのストリームは復旧できない。並行リクエストは未対応である。
+    ///
+    /// `H3Server` は WebTransport を扱わないため、ピアの 0x41 (WT_STREAM) の
+    /// 双方向ストリームが sans-I/O 層で `BufferedStreamRejected` 等の WT イベントに
+    /// なった時点で `Error::InvalidState` を返す。`BufferedStreamRejected` の場合は
+    /// イベントの `error_code` (WT_BUFFERED_STREAM_REJECTED) で RESET_STREAM と
+    /// STOP_SENDING をピアへ送ってから返す
+    /// (draft-ietf-webtrans-http3-16 Section 4.3 / 4.6)。
     pub async fn accept_request(&mut self) -> crate::Result<H3Request> {
         let stream: s2n_quic::stream::BidirectionalStream = self
             .bidi_acceptor
@@ -279,6 +301,35 @@ impl H3ServerConnection {
                     }
                     Event::StreamEnd { stream_id: sid } if sid == stream_id => {
                         stream_ended = true;
+                    }
+                    // H3Server は WebTransport を扱わない。ピアの 0x41 bidi ストリームは
+                    // sans-I/O 層で WT 経路に流せず `BufferedStreamRejected` 等の
+                    // WT イベントとして発火する。これを捨てるとヘッダー / FIN が
+                    // 来ないまま 10ms ポーリングが回り続けるため、即エラー終了する
+                    // (draft-ietf-webtrans-http3-16 Section 4.3 / 4.6)。
+                    Event::WebTransport(WebTransportEvent::BufferedStreamRejected {
+                        stream_id: sid,
+                        error_code,
+                    }) if sid == stream_id => {
+                        // イベント契約どおり error_code (WT_BUFFERED_STREAM_REJECTED)
+                        // で両方向を閉じてからエラー終了する。送信失敗は無視する
+                        // (ストリームが既に閉じている等のため)。
+                        let error = s2n_quic::application::Error::new(error_code)
+                            .expect("WebTransport error code fits in VarInt range");
+                        let _ = send_stream.reset(error);
+                        let _ = recv_stream.stop_sending(error);
+                        return Err(crate::Error::InvalidState(
+                            "WebTransport is not supported by H3Server".to_string(),
+                        ));
+                    }
+                    // BufferedStreamRejected 以外の WT イベントも H3Server では
+                    // 処理できないためエラー終了する。`stream_id()` はセッション系
+                    // イベントでは `session_id` を返すため、WT セッションを扱う変更を
+                    // 入れる場合はこのガードを見直すこと。
+                    Event::WebTransport(wt) if wt.stream_id() == Some(stream_id) => {
+                        return Err(crate::Error::InvalidState(
+                            "WebTransport is not supported by H3Server".to_string(),
+                        ));
                     }
                     _ => {}
                 }

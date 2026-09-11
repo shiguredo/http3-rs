@@ -1,7 +1,7 @@
 # tokio-s2n-quic の `H3Server` がピアの WebTransport bidi ストリーム (`0x41`) でハングする
 
 - Created: 2026-08-27
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-s2n-h3-webtransport-bidi-hang
 - Polished: 2026-09-09
 
@@ -42,6 +42,24 @@
 - `crates/tokio-s2n-quic/src/config.rs` (`ServerConfig` の doc)
 - `crates/tokio-s2n-quic/src/error.rs` (`Error::InvalidState` は既存)
 - `crates/tokio-s2n-quic/tests/` (H3 e2e テスト。新規追加)
+
+### 修正内容
+
+- `H3Server::bind` の先頭で `config.h3_settings.is_webtransport_enabled()` を検査し、WebTransport 有効化済みの `ServerConfig` を `Error::InvalidState` で拒否する (WebTransport は `WtServer::bind` を使う)。`H3Server` / `bind` / `accept_request` と `ServerConfig::enable_webtransport` の doc に、WebTransport を扱わないことと代替 API を明記する
+- `H3ServerConnection::accept_request` のイベントループに WT イベントの分岐を追加する。`BufferedStreamRejected` はイベントの `error_code` (WT_BUFFERED_STREAM_REJECTED = 0x3994bd84) で `SendStream::reset` と `ReceiveStream::stop_sending` を送ってから `Error::InvalidState` を返す。その他の WT イベントもストリーム ID 一致時に `Error::InvalidState` を返す
+- これにより、ピアの `0x41` bidi ストリームが WT イベントとして発火した時点で受信ループが終了し、ヘッダー / FIN が来ないまま 10ms フォールバックポーリングが回り続けるハングを解消する
+
+### テスト
+
+- `crates/tokio-s2n-quic/tests/h3_webtransport_bidi_rejected_e2e.rs` を追加する
+  - 生の s2n-quic クライアントで SETTINGS と `0x40 0x41` (WT_STREAM) を送り、`accept_request` がハングせず `Error::InvalidState` で終了し、ピアが RESET_STREAM(WT_BUFFERED_STREAM_REJECTED) を観測することを検証する (実 QUIC 接続。モック・スタブ不使用)
+  - WebTransport を有効化した `ServerConfig` を `H3Server::bind` が `Error::InvalidState` で拒否することを検証する
+- 修正アームを外した状態で最初のテストが 5 秒タイムアウトで失敗することを確認し、ハングの回帰検知が機能することを確かめる
+
+### 検証結果
+
+- `cargo test --workspace --tests` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` が通る
+- `cargo clippy --all-targets --all-features -- -D warnings` は `ngtcp2-sys` / `nghttp3-sys` の `build.rs` (`overwrite_bindgen` の `&PathBuf` 引数) に既存の `clippy::ptr_arg` があり失敗する (本 issue の変更起因ではない。CI も `--all-features` を使わない)
 
 ### 一次資料
 
