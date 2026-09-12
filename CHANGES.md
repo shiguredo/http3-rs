@@ -11,6 +11,52 @@
 
 ## develop
 
+- [FIX] 公開 API とピア入力にあった panic 経路を除去する。`SendBuffer::consume` / `RecvBuffer::consume` は残量を超える長さを末尾へ丸め、`Capsule::encode` / `Capsule::encode_as_data_frame` は `Result<(), CapsuleEncodeError>` を返して VarInt 範囲外の `Unknown` を拒否する。`encoded_frame_len` は WT_STREAM (0x41) に `None` を返し `encode_frame` と整合させる
+  - @voluntas
+- [FIX] QPACK の `length as usize` 切り詰めを `usize::try_from` に置き換え、32bit 環境で peer 入力により panic する経路を除去する (RFC 9204 Section 4.1.1)
+  - @voluntas
+- [FIX] 静的テーブル専用 `Decoder` (公開 API `QpackDecoder`) が Required Insert Count=0 で Sign ビット 1 のフィールドブロックを受理していた RFC 9204 Section 4.5.1.2 の MUST 違反を修正する
+  - @voluntas
+- [FIX] `examples/wt_server` が Origin ヘッダーを検証せずブラウザからのクロスサイト接続を受理していた問題を修正する。`WtSessionRequest::origin()` を追加し、`--allow-origin` の許可リストと照合して不一致なら 403 を返す (draft-ietf-webtrans-http3-16 Section 3.2)
+  - @voluntas
+- [FIX] `examples/wt_server` の `WtSession::close` がカプセルを HTTP/3 DATA フレームに包まずに送信し、ピアが H3_FRAME_ERROR で閉じる問題を修正する (`encode_as_data_frame` を使う。RFC 9297 Section 3.1)
+  - @voluntas
+- [FIX] `examples/wt_server` が `reset_stream_at` を `false` 固定にしており draft-14 / draft-15 クライアントのセッション確立が `H3_MESSAGE_ERROR` で失敗する問題を修正する (draft-ietf-webtrans-http3-16 Section 3.1)
+  - @voluntas
+- [FIX] `TlsSession` が `TlsContext` より長生きすると ALPN コールバック引数が解放済みメモリを指す use-after-free を修正する。ALPN データを `Arc` で共有し、`TlsContext` の drop 後も `TlsSession` が生存させる
+  - @voluntas
+- [FIX] 送信本文の追跡と WebTransport カプセルバッファに上限を設け、無制限バッファリングを解消する。`RequestStream` は合計バイト数のみを計上して保持を 64 KiB に抑え、確立済みセッションの `capsule_buf` も 64 KiB で打ち切る。あわせてカプセルバッファの読み出し位置を進めて O(n^2) コピーを解消する
+  - @voluntas
+- [FIX] 無視対象の単方向ストリームを水位 (「これ以下の ID は無視する」) で記録していたため、ピアが未知タイプのストリームを先に開くと、それより小さい ID の制御ストリーム (0x00) が後から到着した場合に SETTINGS ごと破棄してセッション確立が停止する問題を修正する。h3 (quinn) は制御ストリームより先に GREASE ストリームを送るため実際に発生する。ID 単位の記録に戻す (増え続ける経路は無く、制御 / QPACK ストリームは 2 本目で接続エラーになる)
+  - @voluntas
+- [FIX] ネゴシエーション未完了の 0x54 (WebTransport 単方向ストリーム) を拒否した後の後続チャンクを破棄する。再びストリームタイプとして解釈すると varint の途中を制御ストリーム等に誤束縛する
+  - @voluntas
+- [FIX] Extended CONNECT の `:path` に path-absolute の構文検証を追加し、IPv6 リテラルの空ポート (`[::1]:`) を拒否する (RFC 8441 Section 4, RFC 3986 Section 3.2.3)
+  - @voluntas
+- [FIX] `tokio-s2n-quic` の `accept_bi_stream` が不正な WT_STREAM ヘッダーで無限ループしバッファが増え続ける問題を修正する (`decode_bidirectional_checked` でエラー種別を区別する)
+  - @voluntas
+- [FIX] `tokio-ngtcp2` の WebTransport サーバーに接続数の上限を設け、送信元アドレス検証を行わない経路でのメモリ消費を抑える
+  - @voluntas
+- [REFACTOR] 死にコードを削除する: `qpack::Header` の never-indexed 一式 (設定経路が無く N ビット分岐が到達不能)、`webtransport::stream::classify_uni_stream` (危険な非 checked 版)、`stream_type` モジュール、`peer_max_blocked_streams` / `UnknownFrame::into_payload` / 未使用の example メソッド
+  - @voluntas
+
+- [FIX] WebTransport のカプセルベースフロー制御を接続層へ統合し、`WT_MAX_STREAMS` / `WT_MAX_DATA` の送信経路を追加する。ピアから受信した上限を保持して送信前に検証し、上限到達時は `WT_STREAMS_BLOCKED` / `WT_DATA_BLOCKED` を生成する。これにより Safari 26.4 が要求するセッション確立直後の初期クレジットが送出され、初期クレジット 0 のままストリームを開けない問題を解消する (`Connection::take_wt_flow_control_capsules` / `can_open_wt_uni_stream` / `can_open_wt_bidi_stream` / `wt_stream_opened` / `can_send_wt_data` / `wt_data_sent` / `wt_data_consumed` / `wt_remote_max_data` / `wt_session_closed` / `wt_outbound_flow_state` を追加。draft-ietf-webtrans-http3-16 Section 5.5, 5.6)
+  - @voluntas
+- [FIX] 送信側上限をピア SETTINGS から先取りして初期化していたため、双方が同じ `WT_INITIAL_MAX_*` を広告する場合にピアの初期カプセルを「増加しない値」と誤判定して `WT_FLOW_CONTROL_ERROR` でセッションを閉じていた問題を修正する。送信側上限は `WT_MAX_STREAMS` / `WT_MAX_DATA` カプセルの受信で確定させ、未受信の間は送信を許可しない (draft-ietf-webtrans-http3-16 Section 5.5, 5.6.2, 5.6.4)
+  - @voluntas
+- [CHANGE] `webtransport::Session` / `webtransport::SessionState` / `webtransport::BufferedStream` / `webtransport::CapsuleProcessError` を削除する。本番経路 (`connection::WtSession`) から切り離された並行実装であり、フロー制御の送信側ロジックが到達不能な側にのみ存在していた。フロー制御型は `webtransport::flow_control` へ移動し、`webtransport::FlowControlLimits` / `webtransport::FlowControlState` として公開する
+  - @voluntas
+- [CHANGE] `webtransport::DraftVersion::Draft15` を `DraftVersion::Draft16` に改名する。draft-16 Section 7.1 は draft ごとに `SETTINGS_WT_ENABLED` のコードポイントが異なると述べるが、draft-15 と draft-16 は実際には同じ `0x2c7cf000` を使うため wire 上で区別できない。両版を 1 つの variant に統合し draft-16 の意味論 (値 `> 1` は `H3_SETTINGS_ERROR`、フロー制御カプセルの非増加値は `WT_FLOW_CONTROL_ERROR`) を適用する。ソースコードの draft 参照も draft-16 に統一する
+  - @voluntas
+- [FIX] `tokio-s2n-quic` の WebTransport 経路が QPACK エンコーダー / デコーダーストリームを送出せず、Section Acknowledgment と Stream Cancellation がピアに届かない問題を修正する (`flush_flow_control_capsules` と `ConnectCommand::Send` を追加し、セッション確立直後・カプセル受信後・データ消費後に送出する。RFC 9204 Section 2.2.2.1)
+  - @voluntas
+- [FIX] `tokio-s2n-quic` の `WtServer::bind` / `WtClient::connect` が QUIC DATAGRAM (RFC 9221) を有効化しておらず、`max_datagram_frame_size` transport parameter が 0 のため WebTransport 対応ブラウザ (Chrome / Safari) が接続を拒否する問題を修正する。datagram provider を設定し `s2n-quic` の `unstable-provider-datagram` feature を有効化する (draft-ietf-webtrans-http3-16 Section 3.1)
+  - @voluntas
+- [FIX] `tokio-s2n-quic` が `WebTransportEvent::Capsule` をアプリへ転送していなかった問題を修正する (`is_forwardable_wt_event` に追加)
+  - @voluntas
+- [FIX] `WebTransportEvent::Capsule` の doc が削除済みの `webtransport::Session::process_capsule` を案内していたため、接続層で上限反映が完了していることと送信前検証の API を案内するよう修正する
+  - @voluntas
+
 - [REFACTOR] ソースコードのコメントに残っていた issue 番号参照を除去し、理由そのもの (仕様節番号・設計意図) に書き換える
 - [TEST] interop テストの空振り (assert なし・全分岐パス) を修正する: レスポンスボディの厳密検証、WT セッション確立の成功のみパス (draft バージョン不一致を想定内にしない)
 - [REFACTOR] 死にコードと未使用の公開 API を削除する: QPACK ストリームゲッター 8 本、`writable_streams` / `peer_goaway_received` フィールド、`ControlStreamRecv::peer_settings` の二重管理、`Event::ConnectionError` バリアント、到達不能な Post-Base エンコード分岐、未使用エラーバリアント群

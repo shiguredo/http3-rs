@@ -160,34 +160,46 @@ assert_eq!(decoded[0].name(), b":method");
 ### WebTransport over HTTP/3
 
 ```rust
-use shiguredo_http3::webtransport::{
-    Session, SessionState, Capsule, Stream, StreamHeader, Datagram,
-    FlowControlLimits,
-};
+use shiguredo_http3::webtransport::{Capsule, Datagram, StreamHeader, Settings as WtSettings};
+use shiguredo_http3::{Header, ServerConnection, Settings, VarInt};
 
-// セッションを作成 (session_id = CONNECT ストリーム ID)
-let mut session = Session::new(0);
-assert_eq!(session.state(), SessionState::Pending);
+let wt = WtSettings::new()
+    .wt_enabled(VarInt::from_static(1))
+    .wt_initial_max_streams_uni(VarInt::from_static(100))
+    .wt_initial_max_streams_bidi(VarInt::from_static(100))
+    .wt_initial_max_data(VarInt::from_static(8 * 1024 * 1024));
+let mut conn = ServerConnection::new(Settings::new().enable_webtransport_server(wt));
 
-// セッション状態を遷移
-session.set_connecting();
-assert_eq!(session.state(), SessionState::Connecting);
-session.set_established();
-assert_eq!(session.state(), SessionState::Established);
+// SETTINGS / CONNECT の交換後、WebTransport セッションが確立すると
+// `Event::WebTransport(WebTransportEvent::SessionEstablished { session_id, .. })` が届く。
+// session_id は CONNECT ストリーム ID。
 
-// ローカルのフロー制御リミットを初期化
-session.initialize_local_limits(FlowControlLimits {
-    max_streams_uni: 10,
-    max_streams_bidi: 10,
-    max_data: 1_000_000,
-});
+// セッション確立直後に初期フロー制御クレジットを送出する。
+// ピアがカプセルベースのフロー制御を要求している場合 (Safari 26.4 など)、
+// これが無いとピアは初期クレジット 0 のままストリームを開けない。
+// (draft-ietf-webtrans-http3-16 Section 5.6)
+for capsule in conn.take_wt_flow_control_capsules(session_id) {
+    let mut data = Vec::new();
+    // CONNECT ストリーム上のカプセルは HTTP/3 DATA フレームに包む
+    // (RFC 9297 Section 3.1)
+    capsule.encode_as_data_frame(&mut data);
+    // conn.send_body(session_id, &data, false) 等で送出する
+}
 
-// ストリームを追加
-let stream = Stream::new(4, 0, true); // stream_id, session_id, bidirectional
-session.add_stream(stream);
+// 送信前にピアの広告上限を確認する
+if conn.can_open_wt_bidi_stream(session_id) {
+    // ストリームを開いたら計上する (上限超過時は WT_STREAMS_BLOCKED が生成される)
+    assert!(conn.wt_stream_opened(session_id, true));
+}
+if conn.can_send_wt_data(session_id, payload_len) {
+    assert!(conn.wt_data_sent(session_id, payload_len));
+}
+
+// ピアからデータを受信して消費したら通知する (ウィンドウ更新カプセルが生成される)
+conn.wt_data_consumed(session_id, consumed_bytes);
 
 // ストリームヘッダーのエンコード/デコード
-let header = StreamHeader::new(0).unwrap(); // session_id
+let header = StreamHeader::new(session_id).unwrap();
 let mut buf = Vec::new();
 // 単方向ストリーム: Stream Type (0x54) + Session ID
 header.encode_unidirectional(&mut buf);
@@ -195,27 +207,22 @@ header.encode_unidirectional(&mut buf);
 header.encode_bidirectional(&mut buf);
 
 // Datagram のエンコード/デコード (Quarter Stream ID = session_id / 4)
-let datagram = Datagram::new(0, b"hello".to_vec()).unwrap();
+let datagram = Datagram::new(session_id, b"hello".to_vec()).unwrap();
 let mut buf = Vec::new();
 datagram.encode(&mut buf);
 let (decoded, consumed) = Datagram::decode(&buf).unwrap();
-assert_eq!(decoded.session_id, 0);
+assert_eq!(decoded.session_id, session_id);
 assert_eq!(decoded.payload, b"hello");
 assert_eq!(consumed, buf.len());
 
-// Capsule を送信キューに追加
-session.queue_capsule(Capsule::MaxData { maximum: 2_000_000 });
-
-// 送信待ち Capsule を取り出す
-let capsules = session.take_pending_capsules();
-assert_eq!(capsules.len(), 1);
-
-// グレースフルシャットダウン
-session.drain();
-assert_eq!(session.state(), SessionState::Draining);
-
-// エラーでクローズ (WT_CLOSE_SESSION Capsule を生成)
-// session.close_with_error(0, "bye");
+// セッションを閉じる (WT_CLOSE_SESSION カプセルを DATA フレームとして送出する)
+let mut close = Vec::new();
+Capsule::CloseSession {
+    error_code: 0,
+    message: String::new(),
+}
+.encode_as_data_frame(&mut close);
+// conn.send_body(session_id, &close, true) 等で送出する
 ```
 
 ## HTTP/3
@@ -280,7 +287,6 @@ assert_eq!(session.state(), SessionState::Draining);
 - `StopSending` - 送信停止要求 (STOP_SENDING 受信)
 - `GoawayReceived` - GOAWAY 受信
 - `WebTransport` - WebTransport 関連イベント (`WebTransportEvent` にネスト)
-- `ConnectionError` - 接続エラー
 
 ### 未実装機能
 
@@ -336,7 +342,12 @@ draft-ietf-webtrans-http3 の複数バージョンをサポートし、ピアの
 
 詳細な差分は [`docs/WT_HTTP3.md`](docs/WT_HTTP3.md) を参照してください。
 
-SETTINGS コードポイントが同一のため、draft-15 と draft-16 は SETTINGS だけでは区別できません。本実装は draft-16 の検証ロジック (単調性チェック、`SETTINGS_WT_ENABLED > 1` の拒否など) を draft-15 以降に適用します。
+draft-16 の Section 7.1 は「Each draft version defines a distinct codepoint for
+SETTINGS_WT_ENABLED」と述べますが、draft-15 と draft-16 は実際には同じ
+`0x2c7cf000` を使います (両版の Section 9.2)。したがって両版は wire 上で区別できないため、
+本実装は `DraftVersion::Draft16` 1 つに統合し、draft-16 の検証ロジック
+(単調性チェック、`SETTINGS_WT_ENABLED > 1` の拒否など) を適用します。
+この挙動は draft-15 の要件も満たします。
 
 ### draft 毎の主要な挙動の違い
 
