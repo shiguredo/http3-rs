@@ -100,6 +100,13 @@ impl ServerConnection {
     /// `fin=true` の場合は送信方向クローズ (FIN) を設定する。FIN はデータが全て
     /// 消費された後に `get_stream_data` / `take_stream_data` を再度呼び出したときに
     /// 交付される (RFC 9114 Section 4.1)。
+    ///
+    /// WebTransport CONNECT に対する 2xx レスポンスでは、セッション確立時に
+    /// バッファリング済みカプセルの検証に失敗した場合
+    /// `Error::StreamError(ErrorCode::MessageError)` (H3_MESSAGE_ERROR) を返す。
+    /// エラー時は encode 済みのレスポンスがストリームの送信バッファに残るため
+    /// `take_stream_data` で取り出さず、必ず該当ストリームを H3_MESSAGE_ERROR で
+    /// reset して破棄すること (draft-ietf-webtrans-http3-16 Section 6)。
     pub fn send_response(
         &mut self,
         stream_id: u64,

@@ -352,14 +352,31 @@ impl WtSessionRequest {
     }
 
     /// セッションリクエストを受け入れる
-    pub async fn accept(self) -> crate::Result<WtSession> {
+    ///
+    /// WebTransport の 2xx 応答を送る過程で、2xx 応答前にバッファリングされた
+    /// カプセルが不正な場合 (`WT_CLOSE_SESSION` 後の追加 DATA 等) は
+    /// `Error::Http3(StreamError(H3_MESSAGE_ERROR))` を返し、CONNECT ストリームを
+    /// RESET_STREAM(H3_MESSAGE_ERROR) で閉じる
+    /// (draft-ietf-webtrans-http3-16 Section 6)。
+    pub async fn accept(mut self) -> crate::Result<WtSession> {
         let response_headers = ConnectResponse::new(200).to_headers()?;
 
         // Sans I/O でレスポンスをエンコード
         let (data, fin) = {
             let mut s = self.state.lock().expect("mutex should not be poisoned");
-            s.h3_conn
-                .send_response(self.stream_id, &response_headers, false)?;
+            if let Err(e) = s
+                .h3_conn
+                .send_response(self.stream_id, &response_headers, false)
+            {
+                // 2xx 応答前にバッファリングされたカプセルの検証に失敗した場合、
+                // 2xx を送らず CONNECT ストリームを reset してエラーを返す。
+                // reset するのはストリームエラー (H3_MESSAGE_ERROR 等) のみ
+                // (draft-ietf-webtrans-http3-16 Section 6)。
+                drop(s);
+                let err = crate::Error::from(e);
+                crate::internal::reset_stream_on_stream_error(&mut self.send_stream, &err);
+                return Err(err);
+            }
 
             // エンコード済みデータを取得 (fin=false のためデータのみ)
             // fin=true を交付する場合に備えて fin 受領で break し finish() すること
@@ -562,19 +579,22 @@ async fn run_server_connect_recv_task_inner(
     connect_tx: &mpsc::UnboundedSender<ConnectCommand>,
 ) {
     // ハンドシェイク中に到着していた WebTransport イベントを先に流す。
-    // SessionClosed が既にキューに乗っていた場合はここでタスクを終了する。
+    // SessionClosed を転送してもタスクは終了せず、ピアの FIN / Err まで読み続ける。
+    // 早期に終了すると WT_CLOSE_SESSION 後の追加 DATA を読めず、
+    // H3_MESSAGE_ERROR での reset (draft-ietf-webtrans-http3-16 Section 6 の MUST) に
+    // 到達できない。
+    // 実 SessionClosed を転送済みか (Err 分岐で synthesized を再送しないため)
+    let mut session_closed_delivered = false;
     for event in pending_wt_events {
         let is_terminal = matches!(event, WebTransportEvent::SessionClosed { .. });
         if event_tx.send(event).await.is_err() {
             return;
         }
         if is_terminal {
-            return;
+            session_closed_delivered = true;
         }
     }
 
-    // 実 SessionClosed を転送済みか (Err 分岐で synthesized を再送しないため)
-    let mut session_closed_delivered = false;
     loop {
         let received = recv_stream.receive().await;
         // MutexGuard は await を跨げないため、ブロックで囲って先にドロップする。
