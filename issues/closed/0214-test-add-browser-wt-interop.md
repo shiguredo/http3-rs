@@ -16,7 +16,7 @@ Rust 側のテストだけではブラウザ固有の要件を検証できない
 - `examples/wt_server` は `handle_bidi_echo` / `handle_uni_echo` / `handle_datagram_echo` を持ち、双方向ストリーム・単方向ストリーム・データグラムの経路が実装されている
 - 一方でブラウザからの接続を検証する自動テストは存在しない。`docs/SAFARI_WT.md` に手順が記録されているが、手動での確認に依存しており回帰を検出できない
 - リポジトリには `interop/h3` / `interop/wt` があり、他実装との相互運用を自動テストしている。ブラウザも「もう 1 つの WebTransport 実装」として同じ枠に置けるが、現状は未整備
-- `interop-wt.yml` は `macos-26` で動作しており、Chromium と WebKit の実エンジンを CI で動かせる土台がある
+- `ci.yml` の macOS ジョブと `interop-wt.yml` は `macos-26` で動作しており、Chromium と WebKit の実エンジンを CI で動かせる土台がある
 - `--allow-origin` オプションと `WtSessionRequest::origin()` は実装済みで、ブラウザが送る Origin ヘッダーを検証できる
 
 ## 設計方針
@@ -71,7 +71,7 @@ Node.js の Playwright を使う。Chromium と WebKit を同一 API で駆動�
 ## 完了条件
 
 - `make interop-test-browser` で Chromium と WebKit の両方が全項目通過する
-- ブラウザテストが `interop-wt.yml` (macos-26) で自動実行される
+- ブラウザテストが `ci.yml` の macOS ジョブで自動実行される
 - Playwright のバージョンが `package.json` で固定されている
 - `README.md` に実行方法と前提 (Node.js / Playwright の導入) が記載されている
 - 既存の `cargo test --workspace --tests` と `make interop-test` に影響がない
@@ -88,7 +88,7 @@ Node.js の Playwright を使う。Chromium と WebKit を同一 API で駆動�
 - `index.html`: 検証ページ。接続先 URL と証明書ハッシュは `addInitScript` で注入する。各検証項目は独立したセッションを開き、`RESULT` 行を出力する。1 項目が失敗しても残りを続行する
 - `certs/`: ページ配信用の自己署名証明書。ECDSA の証明書は Node.js の TLS 実装が `decode error` で拒否するため RSA を使う。検証対象のサーバーが使う ECDSA P-256 証明書とは別物であり、接続先の検証はページ側の `serverCertificateHashes` が担う
 - `Makefile`: `interop-test-browser` を追加する。`npm ci` とブラウザのダウンロードに時間がかかるため `interop-test` には含めず、CI から個別に実行する
-- `.github/workflows/interop-wt.yml`: Playwright の導入、サーバーのビルド、テストの実行を追加する。`WT_FORCE=1` により Playwright 未導入が skip で緑になることを防ぐ
+- `.github/workflows/ci.yml`: Playwright の導入、サーバーのビルド、テストの実行を macOS ジョブへ追加する。`WT_FORCE=1` により Playwright 未導入が skip で緑になることを防ぐ
 
 検証項目はセッション確立・双方向ストリームのエコー・双方向ストリームの複数本・クライアント起点の単方向ストリーム送信の 4 つである。
 
@@ -109,7 +109,7 @@ WebKit で双方向ストリームの書き込みが停止する問題を検出�
 
 - `interop/browser/` (新規)
 - `Makefile` (`interop-test-browser` ターゲット)
-- `.github/workflows/interop-wt.yml` (ブラウザテストのステップ)
+- `.github/workflows/ci.yml` (ブラウザテストのステップ)
 - `examples/wt_server/src/main.rs` (検証対象。`--allow-origin` を指定して起動する)
 - `CHANGES.md` (追加の記載)
 - 参考実装: `shiguredo/webtransport-py` の `tests/browser/`

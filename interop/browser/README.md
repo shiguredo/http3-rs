@@ -21,6 +21,11 @@ Safari 26.4 は draft-07 と draft-13/14 のハイブリッド実装であり、
 
 検証対象のサーバーは `examples/wt_server` のバイナリである。
 
+## CI
+
+`ci.yml` の macOS ジョブで実行する。ブラウザは macOS でのみ導入できるためで
+ある。`WT_FORCE=1` を設定し、Playwright 未導入が skip で緑になることを防ぐ。
+
 ## 実行方法
 
 ```bash
