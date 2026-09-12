@@ -5233,6 +5233,98 @@ mod tests {
     }
 
     #[test]
+    fn test_wt_local_uni_stream_reset_is_ignored_on_server() {
+        // ローカル開始 uni (ピアは受信専用) への RESET_STREAM は不正入力として
+        // 静かに吸収し、クレジット回復・データ FC 計上・登録除去・StreamReset 発火を
+        // 行わない (RFC 9000 Section 19.4 / draft-ietf-webtrans-http3-16 Section 5.3)
+        let mut conn = make_server_with_fc_small_data_wt_session(0);
+        // ストリーム FC のクレジット返却が発生しうる状態にする
+        {
+            let session = conn.wt_sessions.get_mut(&0).expect("test must succeed");
+            let fc = session
+                .recv_stream_fc_uni
+                .as_mut()
+                .expect("test must succeed");
+            for _ in 0..51 {
+                fc.on_stream_received();
+            }
+        }
+        // ローカル開始 uni (stream_id=7) を登録する
+        conn.register_local_wt_stream(0, 7)
+            .expect("test must succeed");
+
+        // ピアが送っていない final_size 付き RESET を防御的に処理する
+        conn.stream_reset(7, 0xab, 15).expect("test must succeed");
+
+        // MaxStreams カプセルが生成されない (クレジット回復なし)
+        let session = conn.wt_sessions.get(&0).expect("test must succeed");
+        assert!(
+            !session
+                .pending_capsules
+                .iter()
+                .any(|c| matches!(c, crate::webtransport::Capsule::MaxStreams { .. })),
+            "ローカル uni の RESET で MaxStreams カプセルが生成されないこと"
+        );
+        // データ FC も計上されない (残り 100 バイトのまま)
+        assert!(session.check_received_data(100));
+        assert!(!session.check_received_data(101));
+        // 登録が維持される
+        assert!(
+            conn.wt_uni_streams.contains_key(&7),
+            "登録が除去されないこと"
+        );
+        // StreamReset イベントが発火しない
+        assert!(conn.poll_event().expect("test must succeed").is_none());
+
+        // その後の STOP_SENDING は StreamStopSending として通知される
+        conn.stop_sending(7, 0x55).expect("test must succeed");
+        let event = conn
+            .poll_event()
+            .expect("test must succeed")
+            .expect("StreamStopSending イベントが存在すること");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::StreamStopSending {
+                session_id: 0,
+                stream_id: 7,
+                error_code: 0x55,
+            })
+        ));
+    }
+
+    #[test]
+    fn test_wt_local_uni_stream_reset_is_ignored_on_client() {
+        // クライアント側でもローカル開始 uni の RESET_STREAM を静かに吸収し、
+        // 登録除去と StreamReset 発火を行わない
+        let mut client = wt_negotiated_client_with_session(0);
+        client
+            .register_local_wt_stream(0, 6)
+            .expect("test must succeed");
+
+        client.stream_reset(6, 0xab, 15).expect("test must succeed");
+
+        assert!(
+            client.wt_uni_streams.contains_key(&6),
+            "登録が除去されないこと"
+        );
+        assert!(client.poll_event().expect("test must succeed").is_none());
+
+        client.stop_sending(6, 0x66).expect("test must succeed");
+        let event = client
+            .poll_event()
+            .expect("test must succeed")
+            .expect("StreamStopSending イベントが存在すること");
+        assert!(matches!(
+            event,
+            Event::WebTransport(WebTransportEvent::StreamStopSending {
+                session_id: 0,
+                stream_id: 6,
+                error_code: 0x66,
+            })
+        ));
+    }
+
+    #[test]
     fn test_wt_stream_reset_subtracts_header_peer_initiated() {
         // ピア開始ストリームの RESET では final_size からヘッダー長が引かれる
         let mut conn = make_server_with_fc_small_data_wt_session(0);

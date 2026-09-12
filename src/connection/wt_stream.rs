@@ -166,9 +166,10 @@ impl Connection {
     ///   受信データは存在しない。登録することでピアからの STOP_SENDING を
     ///   `StreamStopSending` イベントとしてセッション ID 付きで通知できる
     ///   (draft-ietf-webtrans-http3-16 Section 4.4)。
-    ///   ローカル開始 uni に対する STREAM (受信データ) / FIN / RESET_STREAM の到着は
-    ///   QUIC 層で STREAM_STATE_ERROR となり sans-I/O へは到達しない
-    ///   (RFC 9000 Section 19.4 / 19.8) ため、sans-I/O 層に防御コードは持たない。
+    ///   ローカル開始 uni に対する STREAM (受信データ) / FIN の到着は QUIC 層で
+    ///   STREAM_STATE_ERROR となり sans-I/O へは到達しない (RFC 9000 Section 19.8)。
+    ///   登録済みローカル開始 uni への RESET_STREAM が統合層の不具合等で到達した場合は
+    ///   `handle_wt_stream_reset` が防御的に静かに吸収する (RFC 9000 Section 19.4)。
     ///
     /// 受信データにはストリームヘッダー (signal value + session ID) が含まれない。
     /// ヘッダーは開始側がストリーム先頭で 1 回だけ送信する

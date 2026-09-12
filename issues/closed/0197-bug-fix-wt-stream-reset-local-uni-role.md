@@ -1,7 +1,7 @@
 # `handle_wt_stream_reset` がローカル開始 uni の RESET_STREAM でクレジット回復・登録除去してしまう
 
 - Created: 2026-08-27
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-wt-stream-reset-local-uni-role
 - Polished: 2026-09-09
 
@@ -39,6 +39,23 @@
 - `cargo test --all` と `cargo fmt --all -- --check` と `cargo clippy --all-targets --all-features -- -D warnings` が通る
 
 ## 解決方法
+
+### 修正内容
+
+- `Connection::handle_wt_stream_reset` で `session_id` を解決した後、WT データストリームとして登録済みのローカル開始 uni (`is_local_initiated_uni(kind)` が true) への RESET_STREAM は早期 return して静かに吸収する。`account_wt_stream_reset` のデータ FC 計上、`on_remote_stream_closed` の WT_MAX_STREAMS クレジット回復、`remove_stream_received_data` / `disassociate_stream`、`wt_uni_streams` の登録除去、`WebTransportEvent::StreamReset` の発火をいずれも行わない
+- 早期 return により `account_wt_stream_reset` にはローカル開始 uni が到達しなくなるため、ヘッダー減算のコメントにその旨を補足する
+- `register_local_wt_stream` の doc を更新し、RESET_STREAM が統合層の不具合等で到達した場合は `handle_wt_stream_reset` が防御的に吸収することを明記する
+
+### テスト
+
+- `src/connection/mod.rs` に 2 件追加する
+  - `test_wt_local_uni_stream_reset_is_ignored_on_server`: フロー制御有効のサーバーでローカル開始 uni (stream_id=7) を登録し、受信数がしきい値を超えた状態で RESET_STREAM する。MaxStreams カプセルが生成されないこと、データ FC が計上されないこと、登録が維持されること、`StreamReset` が発火しないこと、その後の STOP_SENDING が `StreamStopSending` として通知されることを検証する
+  - `test_wt_local_uni_stream_reset_is_ignored_on_client`: クライアント側でも登録維持・`StreamReset` 非発火・STOP_SENDING 通知を検証する
+- 早期 return を外すと 2 テストが失敗する (MaxStreams 生成・登録除去) ことを確認し、回帰検知が機能することを確かめる
+
+### 検証結果
+
+- `cargo test --workspace --tests` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` が通る
 
 ### 関連ファイル
 
