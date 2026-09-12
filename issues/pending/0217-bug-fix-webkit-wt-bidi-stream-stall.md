@@ -52,7 +52,14 @@ INFO wt_server: [127.0.0.1:56590] CONNECT stream received 9 bytes: [00, 07, 68, 
 
 1. WebKit が送信する QUIC パケットを捕捉し、双方向ストリームの STREAM フレームが送出されているかを確認する。送出されていれば WebKit 側の送信待ち、送出されていなければこのリポジトリ側の広告内容を疑う
 2. WebKit が `createBidirectionalStream()` の直後に何を待っているかを実測する (DevTools 等で内部状態を観察する)
-3. サーバーの `WT_MAX_STREAMS` / `WT_MAX_DATA` カプセルを WebKit がどう解釈しているかを確認する。カプセルを送らない場合・値を変えた場合の挙動差を測る
+3. サーバーの SETTINGS の内容と、WebKit が CONNECT 直後に送るカプセル (`WT_STREAMS_BLOCKED` / `WT_DATA_BLOCKED` 等) を確認する
+
+### 実施済みで原因ではなかったこと
+
+- サーバーがセッション確立直後に送る `WT_MAX_STREAMS` / `WT_MAX_DATA` カプセルの値を変える。閾値は変化しなかった (1 KiB 成功 / 4 KiB 停止のまま)
+- 初期クレジットを SETTINGS とは独立に指定できるようにする変更 (0216 で実装)。閾値は変化しなかった
+
+このため、少なくとも WebTransport のフロー制御の値は停止の有無に影響していない。
 
 ### 原因判明後の分岐
 
@@ -84,3 +91,7 @@ INFO wt_server: [127.0.0.1:56590] CONNECT stream received 9 bytes: [00, 07, 68, 
 - `docs/WEBKIT_WT.md` (実測の記録)
 - `docs/SAFARI_WT.md` (Safari の制約と、ブラウザ側問題の前例)
 - 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-14.txt` Section 5 (カプセルベースフロー制御)
+
+### 関連 issue
+
+- 0216 (同じ症状を「WebTransport のデータフロー制御が原因」として起票したが、実測で診断が誤りと判明したため本 issue に統合して closed にした)
