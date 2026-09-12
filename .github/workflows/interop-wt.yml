@@ -24,6 +24,19 @@ jobs:
         run: |
           cargo test --manifest-path interop/wt/Cargo.toml --test ngtcp2_client_s2n_server
           cargo test --manifest-path interop/wt/Cargo.toml --test s2n_client_ngtcp2_server
+      # 実ブラウザ (Chromium / WebKit) から wt_server へ接続できることを確認する。
+      # WebKit は Safari 相当であり、Safari 固有の SETTINGS 制約を検証できる。
+      - name: Install Playwright browsers
+        run: |
+          npm ci --prefix interop/browser
+          npx --prefix interop/browser playwright install chromium webkit
+      - name: Build WebTransport server
+        run: cargo build --manifest-path examples/wt_server/Cargo.toml
+      - name: Run browser WebTransport interop tests
+        run: node interop/browser/run.mjs
+        env:
+          # Playwright 未導入を失敗として扱う (skip で CI が緑になるのを防ぐ)
+          WT_FORCE: "1"
 
   slack_notify:
     needs: [interop-wt]

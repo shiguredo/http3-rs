@@ -11,6 +11,7 @@
 
 ## develop
 
+- [TEST] `interop/browser` を追加し、Chromium と WebKit (Safari 相当) から `examples/wt_server` へ接続できることを Playwright で自動検証する。セッション確立・双方向ストリームのエコー・双方向ストリームの複数本・クライアント起点の単方向ストリーム送信を検証し、`interop-wt.yml` (macos-26) で実行する
 - [REFACTOR] ソースコードのコメントに残っていた issue 番号参照を除去し、理由そのもの (仕様節番号・設計意図) に書き換える
 - [TEST] interop テストの空振り (assert なし・全分岐パス) を修正する: レスポンスボディの厳密検証、WT セッション確立の成功のみパス (draft バージョン不一致を想定内にしない)
 - [REFACTOR] 死にコードと未使用の公開 API を削除する: QPACK ストリームゲッター 8 本、`writable_streams` / `peer_goaway_received` フィールド、`ControlStreamRecv::peer_settings` の二重管理、`Event::ConnectionError` バリアント、到達不能な Post-Base エンコード分岐、未使用エラーバリアント群

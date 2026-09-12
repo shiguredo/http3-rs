@@ -1,0 +1,13 @@
+{
+  "name": "interop-browser",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Chromium / WebKit との WebTransport 相互運用テスト",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.63.0"
+  }
+}
