@@ -410,7 +410,15 @@ fn decode_string_with_prefix(data: &[u8], prefix_bits: u8) -> Result<(Vec<u8>, u
     let is_huffman = (data[0] & huffman_flag) != 0;
     let (length, prefix_len) = integer::decode_integer(data, prefix_bits)?;
 
-    let total_len = prefix_len + length as usize;
+    // `length` は 2^62-1 まで許容されるため、32bit 環境では `as usize` が
+    // 切り詰められて加算がラップし、`&data[prefix_len..total_len]` が panic する。
+    // `try_from` で明示的に拒否する (RFC 9204 Section 4.1.1)。
+    let Ok(length) = usize::try_from(length) else {
+        return Err(QpackError::DecodeFailed);
+    };
+    let Some(total_len) = prefix_len.checked_add(length) else {
+        return Err(QpackError::DecodeFailed);
+    };
     if data.len() < total_len {
         return Err(QpackError::BufferTooShort);
     }

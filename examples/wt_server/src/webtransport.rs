@@ -4,18 +4,15 @@
 //! draft-ietf-webtrans-http3 の draft-02 / 07 / 14 / 15 に対応する。
 //! ドラフト判定は `Settings::webtransport_draft_pattern()`、CONNECT 拒否は `WtSessionRequest::reject()` を利用する。
 
-#![allow(dead_code)]
-
 use std::sync::{Arc, Mutex as StdMutex};
 
 use bytes::Bytes;
 use s2n_quic::connection::BidirectionalStreamAcceptor;
 use s2n_quic::stream::{ReceiveStream, SendStream};
-use shiguredo_http3::webtransport::capsule::Capsule;
 use shiguredo_http3::webtransport::connect::DraftVersion;
 use shiguredo_http3::webtransport::connect::{ConnectRequest, ConnectResponse};
 use shiguredo_http3::webtransport::stream::{
-    ClassifiedUniStream, StreamHeader, StreamHeaderDecodeError, classify_uni_stream_checked,
+    ClassifiedUniStream, StreamHeaderDecodeError, classify_uni_stream_checked,
 };
 use shiguredo_http3::{
     Event, ServerConnection, Setting, Settings as H3Settings, SettingsPayload, VarInt,
@@ -142,6 +139,12 @@ impl ServerConnectionState {
 pub struct WtSessionRequest {
     path: String,
     authority: String,
+    /// Origin ヘッダー (ブラウザクライアントのみ設定される)
+    ///
+    /// ブラウザからの WebTransport セッションでは Origin の検証が MUST のため
+    /// (draft-ietf-webtrans-http3-16 Section 3.2)、呼び出し側が
+    /// [`WtSessionRequest::origin`] で取得して検証すること。
+    origin: Option<String>,
     draft: DraftVersion,
     stream_id: u64,
     state: Arc<StdMutex<ServerConnectionState>>,
@@ -295,8 +298,14 @@ impl WtSessionRequest {
         // reset_stream_at はピアがサポートしている場合のみ true (draft-02 では不要)
         {
             let mut s = state.lock().expect("mutex should not be poisoned");
-            // TODO: ピアの transport parameters から reset_stream_at サポートを確認する
-            let reset_stream_at_supported = false;
+            // s2n-quic は RESET_STREAM_AT (RFC 9221 / reliable-stream-reset) を
+            // サポートするため true を渡す。draft-14 以降のクライアントは
+            // この transport parameter を必須とするため、false のままだと
+            // セッション確立が H3_MESSAGE_ERROR で失敗する
+            // (draft-ietf-webtrans-http3-16 Section 3.1)。
+            // 将来 s2n-quic 側の対応が変わった場合はピアの transport parameters を
+            // 確認して判定すること。
+            let reset_stream_at_supported = true;
             // s2n-quic は DATAGRAM (RFC 9221) をサポートするため max_datagram_frame_size > 0
             s.h3_conn
                 .set_webtransport_transport_verified(true, reset_stream_at_supported)
@@ -543,9 +552,14 @@ impl WtSessionRequest {
             connect_request.authority
         );
 
+        let origin = connect_request.origin.clone();
+        if let Some(ref origin) = origin {
+            tracing::info!("WebTransport: CONNECT origin={origin}");
+        }
         Ok(Self {
             path: connect_request.path,
             authority: connect_request.authority,
+            origin,
             draft,
             stream_id: connect_stream_id,
             state,
@@ -569,6 +583,15 @@ impl WtSessionRequest {
 
     pub fn draft(&self) -> DraftVersion {
         self.draft
+    }
+
+    /// Origin ヘッダーの値を取得する (ブラウザクライアントのみ)
+    ///
+    /// 値が設定されている場合、WebTransport サーバーはこの Origin を検証し、
+    /// 許可できない場合は 403 を返さなければならない
+    /// (draft-ietf-webtrans-http3-16 Section 3.2)。
+    pub fn origin(&self) -> Option<&str> {
+        self.origin.as_deref()
     }
 
     /// セッションリクエストを受け入れる
@@ -655,7 +678,6 @@ pub struct WtSession {
 /// bidi acceptor と uni receiver を独立に使用し、デッドロックを防ぐ。
 pub struct WtSessionParts {
     pub session_id: u64,
-    pub draft: DraftVersion,
     pub handle: s2n_quic::connection::Handle,
     pub bidi_acceptor: BidirectionalStreamAcceptor,
     pub uni_rx: mpsc::Receiver<WtRecvStream>,
@@ -680,143 +702,12 @@ impl WtSession {
     pub fn into_parts(self) -> WtSessionParts {
         WtSessionParts {
             session_id: self.session_id,
-            draft: self.draft,
             handle: self.handle,
             bidi_acceptor: self.bidi_acceptor,
             uni_rx: self.uni_rx,
             _connect_send: self.connect_send,
             _connect_recv: self._connect_recv,
         }
-    }
-
-    /// 単方向送信ストリームを開く
-    pub async fn open_uni_stream(&mut self) -> Result<WtSendStream> {
-        let stream = self
-            .handle
-            .open_send_stream()
-            .await
-            .map_err(Error::transport)?;
-        let stream_id: u64 = stream.id();
-        let mut send = stream;
-
-        let mut header = Vec::new();
-        StreamHeader::new(self.session_id)
-            .expect("session_id must be a client-initiated bidirectional stream id")
-            .encode_unidirectional(&mut header);
-        send.send(Bytes::from(header))
-            .await
-            .map_err(Error::transport)?;
-
-        tracing::debug!(
-            "WebTransport: opened uni send stream {} (0x{:x})",
-            stream_id,
-            stream_id
-        );
-
-        Ok(WtSendStream { stream_id, send })
-    }
-
-    /// 単方向受信ストリームを受け付ける
-    pub async fn accept_uni_stream(&mut self) -> Result<WtRecvStream> {
-        let stream = self.uni_rx.recv().await.ok_or(Error::StreamClosed)?;
-        tracing::debug!(
-            "WebTransport: accepted uni recv stream {} (0x{:x})",
-            stream.stream_id(),
-            stream.stream_id()
-        );
-        Ok(stream)
-    }
-
-    /// 双方向ストリームを受け付ける
-    pub async fn accept_bi_stream(&mut self) -> Result<WtBiStream> {
-        let stream: s2n_quic::stream::BidirectionalStream = self
-            .bidi_acceptor
-            .accept_bidirectional_stream()
-            .await
-            .map_err(Error::transport)?
-            .ok_or(Error::StreamClosed)?;
-
-        let stream_id: u64 = stream.id();
-        let (mut recv, send) = stream.split();
-
-        let mut header_buf: Vec<u8> = Vec::new();
-        let pending = loop {
-            let data = recv
-                .receive()
-                .await
-                .map_err(Error::transport)?
-                .ok_or(Error::StreamClosed)?;
-            header_buf.extend_from_slice(&data);
-            match StreamHeader::decode_bidirectional_checked(&header_buf) {
-                Ok((_, consumed)) => break header_buf[consumed..].to_vec(),
-                Err(StreamHeaderDecodeError::BufferTooShort) => continue,
-                Err(e) => return Err(Error::Internal(format!("bidi header decode error: {e:?}"))),
-            }
-        };
-
-        tracing::debug!(
-            "WebTransport: accepted bidi stream {} (0x{:x})",
-            stream_id,
-            stream_id
-        );
-
-        Ok(WtBiStream {
-            stream_id,
-            recv,
-            send,
-            pending,
-        })
-    }
-
-    /// 双方向ストリームを開く
-    pub async fn open_bi_stream(&mut self) -> Result<WtBiStream> {
-        let stream = self
-            .handle
-            .open_bidirectional_stream()
-            .await
-            .map_err(Error::transport)?;
-        let stream_id: u64 = stream.id();
-        let (recv, mut send) = stream.split();
-
-        let mut header = Vec::new();
-        StreamHeader::new(self.session_id)
-            .expect("session_id must be a client-initiated bidirectional stream id")
-            .encode_bidirectional(&mut header);
-        send.send(Bytes::from(header))
-            .await
-            .map_err(Error::transport)?;
-
-        tracing::debug!(
-            "WebTransport: opened bidi stream {} (0x{:x})",
-            stream_id,
-            stream_id
-        );
-
-        Ok(WtBiStream {
-            stream_id,
-            recv,
-            send,
-            pending: Vec::new(),
-        })
-    }
-
-    /// セッションをクローズする
-    pub async fn close(&mut self, code: u32, reason: &str) -> Result<()> {
-        tracing::info!(
-            "WebTransport: closing session (code={}, reason={})",
-            code,
-            reason
-        );
-        let capsule = Capsule::CloseSession {
-            error_code: code,
-            message: reason.to_string(),
-        };
-        let mut buf = Vec::new();
-        capsule.encode(&mut buf);
-        self.connect_send
-            .send(Bytes::from(buf))
-            .await
-            .map_err(Error::transport)
     }
 }
 
@@ -897,17 +788,6 @@ impl WtBiStream {
             send: send.send,
             pending: recv.pending,
         }
-    }
-
-    /// 双方向ストリームを送信側と受信側に分解する
-    pub fn into_parts(self) -> (WtSendStream, WtRecvStream) {
-        (
-            WtSendStream {
-                stream_id: self.stream_id,
-                send: self.send,
-            },
-            WtRecvStream::new(self.stream_id, self.recv, self.pending),
-        )
     }
 
     pub async fn send(&mut self, data: &[u8]) -> Result<()> {
@@ -1021,7 +901,7 @@ fn build_server_wt_settings(draft: DraftVersion) -> shiguredo_http3::webtranspor
     tracing::info!("WebTransport: building server settings for {draft:?}");
     let v = |value: u64| VarInt::new(value).expect("WT settings value must fit VarInt");
     match draft {
-        DraftVersion::Draft15 => shiguredo_http3::webtransport::Settings::new()
+        DraftVersion::Draft16 => shiguredo_http3::webtransport::Settings::new()
             .wt_enabled(VarInt::from_static(1))
             .wt_initial_max_streams_uni(v(1000))
             .wt_initial_max_streams_bidi(v(1000)),

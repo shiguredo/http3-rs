@@ -1184,6 +1184,17 @@ impl ServerWebTransportSession {
             return;
         }
 
+        // DoS 対策: 接続数の上限を設ける。ngtcp2 経路は送信元アドレス検証 (Retry) を
+        // 行わないため、送信元を偽装した Initial を撒くだけで接続状態が積み上がる。
+        // idle timeout で回収されるが、その間のメモリ消費を抑える。
+        const MAX_CONNECTIONS: usize = 1024;
+        if self.connections.len() >= MAX_CONNECTIONS {
+            eprintln!(
+                "[webtransport server] connection limit reached ({MAX_CONNECTIONS}), dropping new connection"
+            );
+            return;
+        }
+
         let server_scid = match ConnectionId::random(SERVER_SCID_LEN) {
             Some(cid) => cid,
             None => {

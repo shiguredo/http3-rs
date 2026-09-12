@@ -2,7 +2,7 @@
 //!
 //! WebTransport の単方向・双方向ストリームとデータグラムの処理を担う
 //! `Connection` メソッド群。
-//! (draft-ietf-webtrans-http3-15 Section 4.2, 4.3, 4.5, 4.6)
+//! (draft-ietf-webtrans-http3-16 Section 4.2, 4.3, 4.5, 4.6)
 
 use crate::error::{Error, ErrorCode};
 use crate::event::{Event, WebTransportEvent};
@@ -18,14 +18,14 @@ impl Connection {
     /// Sans I/O パターンに基づき、QUIC スタックから受信した DATAGRAM フレームの
     /// ペイロードを Connection に注入する。セッション ID によるルーティング、
     /// バッファリング (Section 4.6)、セッション終了後の破棄を行う。
-    /// (draft-ietf-webtrans-http3-15 Section 4.5)
+    /// (draft-ietf-webtrans-http3-16 Section 4.5)
     pub fn feed_datagram(&mut self, data: &[u8]) -> Result<(), Error> {
         if let Some(ref err) = self.error {
             return Err(err.clone());
         }
 
         // WebTransport ネゴシエーション完了を bidi / uni stream 経路と同じ
-        // 一次関数で確認する (draft-ietf-webtrans-http3-15 Section 4.2 / 7.1)。
+        // 一次関数で確認する (draft-ietf-webtrans-http3-16 Section 4.2 / 7.1)。
         // SETTINGS_H3_DATAGRAM の両端合意も `is_wt_fully_negotiated()` の中で
         // 確認している。未確立で受信した datagram は静かに破棄する (RFC 9297 と整合)。
         if !self.is_wt_fully_negotiated() {
@@ -46,7 +46,7 @@ impl Connection {
         let session_id = datagram.session_id;
 
         // session_id は client-initiated bidirectional stream ID でなければならない
-        // (draft-ietf-webtrans-http3-15 Section 4.5)
+        // (draft-ietf-webtrans-http3-16 Section 4.5)
         if session_id & 0x03 != 0x00 {
             return Err(Error::ConnectionError(ErrorCode::H3DatagramError));
         }
@@ -56,7 +56,7 @@ impl Connection {
             match session.state {
                 WtSessionState::Established | WtSessionState::Draining => {
                     // Draining 状態でも既存セッションのデータグラム受信は許可する
-                    // (draft-ietf-webtrans-http3-15 Section 6)
+                    // (draft-ietf-webtrans-http3-16 Section 6)
                     self.events
                         .push_back(Event::WebTransport(WebTransportEvent::Datagram {
                             session_id,
@@ -82,7 +82,7 @@ impl Connection {
                 return Ok(());
             }
             // クライアントは自身が開始していない session_id を拒否する
-            // (draft-ietf-webtrans-http3-15 Section 4.6)
+            // (draft-ietf-webtrans-http3-16 Section 4.6)
             if self.role == Role::Client {
                 // 破棄 (ストリームと異なりデータグラムは RESET 不要)
             } else if let Some(last_id) = self.last_sent_goaway_id
@@ -90,11 +90,11 @@ impl Connection {
             {
                 // サーバーが GOAWAY を送信済みの場合、その境界以降の session_id に
                 // 対する新規 WebTransport セッションは受け入れない
-                // (draft-ietf-webtrans-http3-15 Section 4.7 / nghttp3
+                // (draft-ietf-webtrans-http3-16 Section 4.7 / nghttp3
                 //  lib/nghttp3_conn.c と整合)。datagram は破棄するだけでよい。
             } else if self.count_pending_wt_sessions() >= WT_MAX_PENDING_SESSIONS {
                 // 接続単位の Pending セッション上限を超過: 破棄
-                // (draft-ietf-webtrans-http3-15 Section 4.6 / DoS 対策)
+                // (draft-ietf-webtrans-http3-16 Section 4.6 / DoS 対策)
             } else {
                 // サーバー側: セッション未登録だがデータグラムが先に到着
                 // 新規 Pending セッションを作成してバッファリング (Section 4.6)
@@ -111,7 +111,7 @@ impl Connection {
     ///
     /// 指定されたセッションのデータグラムを HTTP Datagram フォーマットにエンコードして返す。
     /// 呼び出し側は返されたバイト列を QUIC DATAGRAM フレームで送信すること。
-    /// (draft-ietf-webtrans-http3-15 Section 4.5)
+    /// (draft-ietf-webtrans-http3-16 Section 4.5)
     ///
     /// セッションが存在しないか Established でない場合はエラーを返す。
     pub fn send_datagram(&self, session_id: u64, payload: &[u8]) -> Result<Vec<u8>, Error> {
@@ -137,7 +137,7 @@ impl Connection {
             .ok_or(Error::ConnectionError(ErrorCode::GeneralProtocolError))?;
 
         // Draining 状態では新規データグラム送信を拒否する
-        // (draft-ietf-webtrans-http3-15 Section 6)
+        // (draft-ietf-webtrans-http3-16 Section 6)
         if session.state == WtSessionState::Draining {
             return Err(Error::WtSessionDraining(session_id));
         }
@@ -282,7 +282,7 @@ impl Connection {
     ///
     /// ストリームタイプ (0x54) が確定した後、セッション ID (varint) をパースする。
     /// varint が不完全な場合は `pending_wt_uni_streams` にバッファリングする。
-    /// (draft-ietf-webtrans-http3-15 Section 4.2)
+    /// (draft-ietf-webtrans-http3-16 Section 4.2)
     pub(crate) fn resolve_wt_uni_stream_session_id(
         &mut self,
         stream_id: u64,
@@ -305,7 +305,7 @@ impl Connection {
             Ok((session_id, id_len)) => {
                 let session_id = session_id.get();
                 // session_id は client-initiated bidirectional stream ID でなければならない
-                // (draft-ietf-webtrans-http3-15 Section 4.2)
+                // (draft-ietf-webtrans-http3-16 Section 4.2)
                 // RFC 9000 Section 2.1: client-initiated bidi は stream_id % 4 == 0
                 if session_id & 0x03 != 0x00 {
                     return Err(Error::ConnectionError(ErrorCode::IdError));
@@ -313,7 +313,7 @@ impl Connection {
                 self.pending_wt_uni_streams.remove(&stream_id);
                 self.wt_uni_streams.insert(stream_id, session_id);
 
-                // セッション関連付けとバッファリング (draft-ietf-webtrans-http3-15 Section 4.6)
+                // セッション関連付けとバッファリング (draft-ietf-webtrans-http3-16 Section 4.6)
                 let outcome = match self.associate_or_buffer_stream(stream_id, session_id, false) {
                     Ok(o) => o,
                     Err(()) => {
@@ -343,7 +343,7 @@ impl Connection {
 
                 if outcome == AssocOutcome::Buffered {
                     // Pending セッション: Open / Data はセッション確立まで保留する
-                    // (draft-ietf-webtrans-http3-15 Section 4.6)
+                    // (draft-ietf-webtrans-http3-16 Section 4.6)
                     if !remaining.is_empty()
                         && let Some(session) = self.wt_sessions.get_mut(&session_id)
                         && !session.append_buffered_stream_data(stream_id, remaining)
@@ -419,7 +419,7 @@ impl Connection {
     /// server-initiated (または client-initiated で signal value 0x41 付き) の
     /// bidi stream を処理する。先頭の signal value (0x41) と session_id (varint) を
     /// パースし、確定後はアプリケーションペイロードをイベントで通知する。
-    /// (draft-ietf-webtrans-http3-15 Section 4.3)
+    /// (draft-ietf-webtrans-http3-16 Section 4.3)
     pub(crate) fn handle_wt_bidi_stream(
         &mut self,
         stream_id: u64,
@@ -429,7 +429,7 @@ impl Connection {
         // 既に確定済みの WT bidi stream: データ/FIN を処理
         if let Some(&session_id) = self.wt_bidi_streams.get(&stream_id) {
             // Pending セッション中はバッファに記録するだけ
-            // (draft-ietf-webtrans-http3-15 Section 4.6)
+            // (draft-ietf-webtrans-http3-16 Section 4.6)
             let pending = self
                 .wt_sessions
                 .get(&session_id)
@@ -543,7 +543,7 @@ impl Connection {
 
     /// WebTransport データストリームの stream header エンコード長を計算する
     ///
-    /// (draft-ietf-webtrans-http3-15 Section 4.2 / 5.4)
+    /// (draft-ietf-webtrans-http3-16 Section 4.2 / 5.4)
     ///
     /// - 双方向ストリーム: signal value (0x41) varint + session_id varint
     /// - 単方向ストリーム: stream type (0x54) varint + session_id varint
@@ -574,7 +574,7 @@ impl Connection {
     ///
     /// 先頭の signal value (0x41) と session_id (varint) をパースする。
     /// varint が不完全な場合は `pending_wt_bidi_streams` にバッファリングする。
-    /// (draft-ietf-webtrans-http3-15 Section 4.3)
+    /// (draft-ietf-webtrans-http3-16 Section 4.3)
     pub(crate) fn resolve_wt_bidi_stream_header(
         &mut self,
         stream_id: u64,
@@ -603,7 +603,7 @@ impl Connection {
         };
 
         // signal value は 0x41 (WT_STREAM) でなければならない
-        // (draft-ietf-webtrans-http3-15 Section 4.3)
+        // (draft-ietf-webtrans-http3-16 Section 4.3)
         if signal_value.get() != 0x41 {
             // 0x41 以外の signal value はリクエストストリームの先頭以外での WT_STREAM 受信、
             // または不正な signal value。H3_FRAME_ERROR として接続エラー。
@@ -616,14 +616,14 @@ impl Connection {
             Ok((session_id, id_len)) => {
                 let session_id = session_id.get();
                 // session_id は client-initiated bidirectional stream ID でなければならない
-                // (draft-ietf-webtrans-http3-15 Section 4.2)
+                // (draft-ietf-webtrans-http3-16 Section 4.2)
                 if session_id & 0x03 != 0x00 {
                     return Err(Error::ConnectionError(ErrorCode::IdError));
                 }
                 self.pending_wt_bidi_streams.remove(&stream_id);
                 self.wt_bidi_streams.insert(stream_id, session_id);
 
-                // セッション関連付けとバッファリング (draft-ietf-webtrans-http3-15 Section 4.6)
+                // セッション関連付けとバッファリング (draft-ietf-webtrans-http3-16 Section 4.6)
                 let outcome = match self.associate_or_buffer_stream(stream_id, session_id, true) {
                     Ok(o) => o,
                     Err(()) => {
@@ -653,7 +653,7 @@ impl Connection {
 
                 if outcome == AssocOutcome::Buffered {
                     // Pending セッション: Open / Data はセッション確立まで保留する
-                    // (draft-ietf-webtrans-http3-15 Section 4.6)
+                    // (draft-ietf-webtrans-http3-16 Section 4.6)
                     if !payload.is_empty()
                         && let Some(session) = self.wt_sessions.get_mut(&session_id)
                         && !session.append_buffered_stream_data(stream_id, payload)
@@ -725,7 +725,7 @@ impl Connection {
 
     /// WebTransport 単方向ストリームのデータ処理 WebTransport 混在関数の抽出
     ///
-    /// (draft-ietf-webtrans-http3-15 Section 4.6, 5.4)
+    /// (draft-ietf-webtrans-http3-16 Section 4.6, 5.4)
     /// Pending セッション中はバッファに追記、Established 後はイベント発火。
     /// 登録済みローカル開始 uni への STREAM は防御的に静かに吸収し `Ok(true)` を
     /// 返す (RFC 9000 Section 19.8)。非 WT ストリームは `false` を返す。
@@ -791,7 +791,7 @@ impl Connection {
 
     /// WebTransport 単方向ストリームの FIN 処理 WebTransport 混在関数の抽出
     ///
-    /// (draft-ietf-webtrans-http3-15 Section 4.6, 5.6)
+    /// (draft-ietf-webtrans-http3-16 Section 4.6, 5.6)
     /// Pending セッション中はバッファに記録、Established 後はイベント発火。
     /// 登録済みローカル開始 uni への FIN は登録を維持したまま防御的に静かに吸収し
     /// `true` を返す (RFC 9000 Section 19.8)。非 WT ストリームは `false` を返す。

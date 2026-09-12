@@ -1,5 +1,5 @@
 //! ConnectRequest / ConnectResponse のバリデーションとプロトコルネゴシエーション
-//! (draft-ietf-webtrans-http3-15 Section 3.2, 3.3)
+//! (draft-ietf-webtrans-http3-16 Section 3.2, 3.3)
 
 use pbt::strategies::sample_len;
 use shiguredo_http3::webtransport::{ConnectRequest, ConnectResponse};
@@ -29,7 +29,7 @@ fn safe_protocol_name(ctx: &mut noprop::TestCaseContext) -> String {
 }
 
 // =============================================================================
-// ConnectRequest バリデーション (draft-ietf-webtrans-http3-15 Section 3.2)
+// ConnectRequest バリデーション (draft-ietf-webtrans-http3-16 Section 3.2)
 // =============================================================================
 
 /// Property: 有効なリクエストは validate() が Ok を返す
@@ -144,11 +144,11 @@ fn prop_connect_response_no_protocol_with_negotiation_invalid() -> noprop::TestR
 }
 
 // =============================================================================
-// プロトコルネゴシエーション (draft-ietf-webtrans-http3-15 Section 3.3)
+// プロトコルネゴシエーション (draft-ietf-webtrans-http3-16 Section 3.3)
 // =============================================================================
 
 /// Property: selected_protocol が available_protocols に含まれる場合は valid、
-/// 含まれない場合は invalid (draft-ietf-webtrans-http3-15 Section 3.3)
+/// 含まれない場合は invalid (draft-ietf-webtrans-http3-16 Section 3.3)
 #[test]
 fn prop_connect_response_protocol_selection() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_CONNECT_SEED")?;

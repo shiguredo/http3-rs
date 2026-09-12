@@ -65,7 +65,7 @@ pub enum Setting {
     /// H3 Datagram 有効化 (RFC 9297 §2.1.1, ID = 0x33)
     H3Datagram(bool),
 
-    /// SETTINGS_WT_ENABLED (draft-ietf-webtrans-http3-15 §3.1, §9.2, ID = 0x2c7cf000)
+    /// SETTINGS_WT_ENABLED (draft-ietf-webtrans-http3-16 §3.1, §9.2, ID = 0x2c7cf000)
     ///
     /// 将来のドラフトで変更される可能性がある。
     WtEnabled(VarInt),
@@ -388,13 +388,13 @@ impl Settings {
     ///
     /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` は CONNECT 拡張の受諾を広告する
     /// サーバー側の設定であり、クライアントが送る項目ではない
-    /// (RFC 8441 / RFC 9220, draft-ietf-webtrans-http3-15 Section 3.1)。
+    /// (RFC 8441 / RFC 9220, draft-ietf-webtrans-http3-16 Section 3.1)。
     /// クライアント側では `enable_webtransport_client()` を使うこと。
     ///
     /// WebTransport 固有の設定 (ストリーム上限、データ上限、ドラフトバージョン等) は
     /// `webtransport::Settings` のビルダーメソッドで事前に構築して渡す。
     ///
-    /// # バージョンネゴシエーション (draft-ietf-webtrans-http3-15 Section 7.1)
+    /// # バージョンネゴシエーション (draft-ietf-webtrans-http3-16 Section 7.1)
     ///
     /// - 各ドラフトバージョンは異なる SETTINGS_WT_ENABLED コードポイントを使用する
     /// - 複数バージョン対応時、各バージョンのコードポイントでそれぞれ送信する
@@ -415,10 +415,10 @@ impl Settings {
     ///
     /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` はサーバーが広告する設定であり、
     /// クライアントは送信しない
-    /// (draft-ietf-webtrans-http3-15 Section 3.1 のクライアント送信項目リスト参照)。
+    /// (draft-ietf-webtrans-http3-16 Section 3.1 のクライアント送信項目リスト参照)。
     ///
     /// draft バージョンの場合は `SETTINGS_WT_ENABLED` もクライアントから送信する
-    /// 必要がある (draft-ietf-webtrans-http3-15 Section 7.1 の MUST)。これは
+    /// 必要がある (draft-ietf-webtrans-http3-16 Section 7.1 の MUST)。これは
     /// `wt` の中身で表現する。
     ///
     /// 将来のドラフトで変更される可能性がある

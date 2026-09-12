@@ -1,5 +1,5 @@
 //! Property-Based Testing for WebTransport Datagram
-//! (RFC 9297, draft-ietf-webtrans-http3-15 Section 4.5)
+//! (RFC 9297, draft-ietf-webtrans-http3-16 Section 4.5)
 
 use pbt::strategies::{sample_len, sample_varint_raw_in};
 use shiguredo_http3::VarInt;

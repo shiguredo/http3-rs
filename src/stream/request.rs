@@ -10,6 +10,13 @@ use crate::webtransport::stream::BIDIRECTIONAL_SIGNAL_VALUE;
 
 use super::{RecvBuffer, SendBuffer, StreamState};
 
+/// content-length 検証のために保持する受信ボディの上限 (バイト)
+///
+/// 検証に必要なのは合計バイト数のみのため、内容は先頭からこの上限までしか
+/// 保持しない。転送量に比例したメモリ消費を防ぐ (RFC 9114 Section 4.1.2 は
+/// 合計値の一致のみを要求する)。
+const MAX_TRACKED_BODY_BYTES: usize = 64 * 1024;
+
 /// リクエストストリーム送信状態
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RequestSendState {
@@ -57,8 +64,13 @@ pub struct RequestStream {
     state: StreamState,
     /// 受信済みヘッダー
     recv_headers: Vec<Header>,
-    /// 受信済みボディ
+    /// 受信済みボディ (content-length 検証用)
+    ///
+    /// 合計バイト数の検証にしか使わないため、`MAX_TRACKED_BODY_BYTES` を超えた分は
+    /// 保持しない (転送量に比例したメモリ消費を防ぐ)。
     recv_body: Vec<u8>,
+    /// 受信した DATA の総バイト数 (保持の有無に関わらず計上する)
+    recv_body_len: u64,
     /// HEAD リクエストかどうか (クライアントが HEAD を送信した場合 true)
     ///
     /// Content-Length 検証でレスポンスの body チェックをスキップするために使用する。
@@ -118,6 +130,7 @@ impl RequestStream {
             state: StreamState::Open,
             recv_headers: Vec::new(),
             recv_body: Vec::new(),
+            recv_body_len: 0,
             is_head_request: false,
             is_connect_request: false,
             is_connect: false,
@@ -391,7 +404,14 @@ impl RequestStream {
                     // WebTransport CONNECT ストリームの DATA は Capsule データであり、
                     // recv_body に累積しない (転送量に比例したメモリ消費を防ぐ)
                     if !self.is_wt_connect {
-                        self.recv_body.extend_from_slice(&data);
+                        // 合計バイト数は常に計上し、保持は上限までに抑える
+                        // (content-length 検証には合計値のみが必要)
+                        self.recv_body_len = self.recv_body_len.saturating_add(data.len() as u64);
+                        if self.recv_body.len() < MAX_TRACKED_BODY_BYTES {
+                            let remaining = MAX_TRACKED_BODY_BYTES - self.recv_body.len();
+                            let take = remaining.min(data.len());
+                            self.recv_body.extend_from_slice(&data[..take]);
+                        }
                     }
                     return Ok(Some(RawReceivedData::Data(data)));
                 }
@@ -506,9 +526,17 @@ impl RequestStream {
         &self.recv_headers
     }
 
-    /// 受信済みボディを取得
+    /// 保持済みの受信ボディを取得する
+    ///
+    /// 保持は [`MAX_TRACKED_BODY_BYTES`] までに限られるため、内容の完全性は
+    /// 保証しない。content-length 検証には [`RequestStream::received_body_len`] を使う。
     pub fn received_body(&self) -> &[u8] {
         &self.recv_body
+    }
+
+    /// 受信した DATA の総バイト数を取得する
+    pub fn received_body_len(&self) -> u64 {
+        self.recv_body_len
     }
 
     /// HEAD リクエストかどうかを設定 (Content-Length 検証用)

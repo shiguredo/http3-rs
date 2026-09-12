@@ -20,7 +20,7 @@ pub enum UniStreamType {
     QpackEncoder = 0x02,
     /// QPACK Decoder Stream (0x03)
     QpackDecoder = 0x03,
-    /// WebTransport Stream (0x54) - draft-ietf-webtrans-http3-15
+    /// WebTransport Stream (0x54) - draft-ietf-webtrans-http3-16
     WebTransport = 0x54,
 }
 
@@ -192,7 +192,10 @@ impl SendBuffer {
 
     /// データを消費
     pub fn consume(&mut self, len: usize) {
-        self.consumed += len;
+        // `len` が残量を超える場合は末尾へ丸める。`consume` は公開 API のため
+        // 呼び出し側の誤った長さで `Vec::drain` の範囲外 panic を起こさない。
+        let available = self.data.len().saturating_sub(self.consumed);
+        self.consumed += len.min(available);
         if self.consumed >= self.data.len() / 2 {
             self.data.drain(..self.consumed);
             self.consumed = 0;
@@ -279,7 +282,10 @@ impl RecvBuffer {
 
     /// データを消費
     pub fn consume(&mut self, len: usize) {
-        self.consumed += len;
+        // `len` が残量を超える場合は末尾へ丸める。`consume` は公開 API のため
+        // 呼び出し側の誤った長さで `Vec::drain` の範囲外 panic を起こさない。
+        let available = self.data.len().saturating_sub(self.consumed);
+        self.consumed += len.min(available);
         if self.consumed >= self.data.len() / 2 {
             self.data.drain(..self.consumed);
             self.consumed = 0;

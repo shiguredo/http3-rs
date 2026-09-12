@@ -1,28 +1,34 @@
-//! WebTransport Capsule Protocol (draft-ietf-webtrans-http3-15 Section 5.6, 6)
+//! WebTransport Capsule Protocol (draft-ietf-webtrans-http3-16 Section 5.6, 6)
 //!
 //! WebTransport セッション管理とフロー制御のための Capsule を定義。
 //!
-//! # Panics
+//! # 値域の保証
 //!
-//! 本モジュールの `Capsule` 各 variant の `u64` フィールド
-//! (`MaxData::maximum`, `MaxStreams::maximum`, `DataBlocked::maximum`,
-//! `StreamsBlocked::maximum`, `Unknown::payload.len()` 等) は RFC 9000 Section 16 の
-//! VarInt 範囲 (`0..=2^62 - 1`) を超えると `encode` / `encode_as_data_frame` で
-//! panic する。これらの値域検査は現時点では未対応だが Capsule の構築時検査型化を行う際に
-//! 構造的に保証する予定。それまでは利用側で範囲外値を渡さないこと。
+//! フロー制御系の `maximum` フィールドは [`crate::varint::VarInt`] 型のため、
+//! RFC 9000 Section 16 の値域 (`0..=2^62 - 1`) が構築時に保証される。
+//! `encode` / `encode_as_data_frame` は panic しない。
+//!
+//! `Unknown` の `capsule_type` と `payload.len()` は wire から復号した値または
+//! 利用者が与えた生値で、VarInt 範囲外なら `encode` が何も書かずに戻る
+//! (`Capsule::encode` の説明を参照)。
 
 use crate::varint::{self, VarInt};
 
 /// Maximum Streams の上限値 (2^60)
-/// draft-ietf-webtrans-http3-15 Section 5.6.2
+///
+/// WT_MAX_STREAMS の `Maximum Streams` は 2^60 を超えてはならない。
+/// 超過は `WT_FLOW_CONTROL_ERROR` として扱う。
+/// draft-ietf-webtrans-http3-16 Section 5.6.2
 /// 将来のドラフトで変更される可能性がある
 pub const MAX_STREAMS_LIMIT: u64 = 1u64 << 60;
 
 /// H3_DATAGRAM_ERROR エラーコード (RFC 9297 Section 5.2)
 ///
 /// HTTP/3 datagram / capsule プロトコルのパースエラーを示す接続レベルエラー。
-/// WT_MAX_STREAMS の値が 2^60 を超えた場合に使用する。
-/// (draft-ietf-webtrans-http3-15 Section 5.6.2)
+/// draft-16 では WT_MAX_STREAMS の超過は `WT_FLOW_CONTROL_ERROR` に変更されたため、
+/// 本定数は draft-15 以前の相手との相互運用のために残す。
+/// (draft-ietf-webtrans-http3-16 Section 5.6.2)
+/// 将来のドラフトで変更される可能性がある
 pub const H3_DATAGRAM_ERROR: u64 = 0x33;
 
 /// Capsule デコードエラー
@@ -35,6 +41,29 @@ pub enum CapsuleDecodeError {
     /// 受信済み payload が定義されたフィールドと一致しない
     Malformed,
 }
+
+/// Capsule エンコードエラー
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapsuleEncodeError {
+    /// wire 表現にできない値 (RFC 9000 Section 16 の VarInt 範囲外)
+    ///
+    /// `Unknown` の `capsule_type` / ペイロード長が該当する。フロー制御系の
+    /// `maximum` は `VarInt` 型のため本エラーにはならない。
+    ValueOutOfVarIntRange,
+}
+
+impl core::fmt::Display for CapsuleEncodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ValueOutOfVarIntRange => write!(
+                f,
+                "capsule field cannot be encoded as a QUIC varint (RFC 9000 Section 16)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CapsuleEncodeError {}
 
 /// 正確に payload 全体を消費する varint デコード
 ///
@@ -163,20 +192,23 @@ pub enum Capsule {
     },
 }
 
-/// 可変長整数を Vec にエンコード
+/// 可変長整数を Vec にエンコードする
 ///
-/// 呼び出し側は値が VarInt 範囲内 (RFC 9000 Section 16) であることを保証する。
-/// 範囲外の値が渡された場合は panic する。
-fn encode_varint(buf: &mut Vec<u8>, value: u64) {
-    let value = VarInt::new(value).expect("capsule field value fits in VarInt");
+/// RFC 9000 Section 16 の値域外 (`> 2^62 - 1`) の場合は何も書かずに `false` を返す。
+/// 呼び出し側は戻り値を確認し、書けなかった場合はエンコード全体を破棄すること。
+fn encode_varint(buf: &mut Vec<u8>, value: u64) -> bool {
+    let Ok(value) = VarInt::new(value) else {
+        return false;
+    };
     varint::encode_into_vec(buf, value);
+    true
 }
 
 /// 可変長整数をエンコードしたサイズを返す
-fn varint_encoded_len(value: u64) -> usize {
-    VarInt::new(value)
-        .expect("capsule field value fits in VarInt")
-        .encoded_len()
+///
+/// 値域外の場合は `None` を返す。
+fn varint_encoded_len(value: u64) -> Option<usize> {
+    VarInt::new(value).ok().map(|v| v.encoded_len())
 }
 
 /// 可変長整数をデコード (生の `u64` 値を返す)
@@ -188,7 +220,7 @@ impl Capsule {
     /// Capsule タイプが HTTP/3 で禁止されるかどうか
     ///
     /// WebTransport over HTTP/3 では WT_MAX_STREAM_DATA と WT_STREAM_DATA_BLOCKED の
-    /// 受信は禁止される (draft-ietf-webtrans-http3-15 Section 5.4)。
+    /// 受信は禁止される (draft-ietf-webtrans-http3-16 Section 5.4)。
     pub fn is_prohibited_in_http3_type(capsule_type: u64) -> bool {
         matches!(
             capsule_type,
@@ -206,39 +238,51 @@ impl Capsule {
     ///
     /// 1 カプセル = 1 DATA フレームとして buf に追記する。
     /// CONNECT ストリーム上での WebTransport カプセル送信に使用する。
-    pub fn encode_as_data_frame(&self, buf: &mut Vec<u8>) {
+    ///
+    /// wire 表現にできない値の場合は [`CapsuleEncodeError`] を返し、
+    /// `buf` は変更しない。
+    pub fn encode_as_data_frame(&self, buf: &mut Vec<u8>) -> Result<(), CapsuleEncodeError> {
         let mut capsule_bytes = Vec::new();
-        self.encode(&mut capsule_bytes);
+        self.encode(&mut capsule_bytes)?;
+        let Ok(capsule_len) = VarInt::new(capsule_bytes.len() as u64) else {
+            return Err(CapsuleEncodeError::ValueOutOfVarIntRange);
+        };
         // DATA フレーム: タイプ (0x00) + ペイロード長 + ペイロード
         varint::encode_into_vec(buf, VarInt::ZERO);
-        encode_varint(buf, capsule_bytes.len() as u64);
+        varint::encode_into_vec(buf, capsule_len);
         buf.extend_from_slice(&capsule_bytes);
+        Ok(())
     }
 
     /// Capsule をエンコード
-    pub fn encode(&self, buf: &mut Vec<u8>) {
+    ///
+    /// wire 表現にできない値の場合は [`CapsuleEncodeError`] を返し、
+    /// `buf` は変更しない。
+    pub fn encode(&self, buf: &mut Vec<u8>) -> Result<(), CapsuleEncodeError> {
+        let mut out = Vec::new();
         match self {
             Self::CloseSession {
                 error_code,
                 message,
             } => {
                 Self::encode_capsule_header(
-                    buf,
+                    &mut out,
                     CapsuleType::CloseSession as u64,
                     4 + message.len(),
-                );
-                buf.extend_from_slice(&error_code.to_be_bytes());
-                buf.extend_from_slice(message.as_bytes());
+                )?;
+                out.extend_from_slice(&error_code.to_be_bytes());
+                out.extend_from_slice(message.as_bytes());
             }
 
             Self::DrainSession => {
-                Self::encode_capsule_header(buf, CapsuleType::DrainSession as u64, 0);
+                Self::encode_capsule_header(&mut out, CapsuleType::DrainSession as u64, 0)?;
             }
 
             Self::MaxData { maximum } => {
-                let payload_len = varint_encoded_len(*maximum);
-                Self::encode_capsule_header(buf, CapsuleType::MaxData as u64, payload_len);
-                encode_varint(buf, *maximum);
+                let payload_len = varint_encoded_len(*maximum)
+                    .ok_or(CapsuleEncodeError::ValueOutOfVarIntRange)?;
+                Self::encode_capsule_header(&mut out, CapsuleType::MaxData as u64, payload_len)?;
+                encode_varint(&mut out, *maximum);
             }
 
             Self::MaxStreams {
@@ -250,15 +294,21 @@ impl Capsule {
                 } else {
                     CapsuleType::MaxStreamsUni as u64
                 };
-                let payload_len = varint_encoded_len(*maximum);
-                Self::encode_capsule_header(buf, capsule_type, payload_len);
-                encode_varint(buf, *maximum);
+                let payload_len = varint_encoded_len(*maximum)
+                    .ok_or(CapsuleEncodeError::ValueOutOfVarIntRange)?;
+                Self::encode_capsule_header(&mut out, capsule_type, payload_len)?;
+                encode_varint(&mut out, *maximum);
             }
 
             Self::DataBlocked { maximum } => {
-                let payload_len = varint_encoded_len(*maximum);
-                Self::encode_capsule_header(buf, CapsuleType::DataBlocked as u64, payload_len);
-                encode_varint(buf, *maximum);
+                let payload_len = varint_encoded_len(*maximum)
+                    .ok_or(CapsuleEncodeError::ValueOutOfVarIntRange)?;
+                Self::encode_capsule_header(
+                    &mut out,
+                    CapsuleType::DataBlocked as u64,
+                    payload_len,
+                )?;
+                encode_varint(&mut out, *maximum);
             }
 
             Self::StreamsBlocked {
@@ -270,25 +320,40 @@ impl Capsule {
                 } else {
                     CapsuleType::StreamsBlockedUni as u64
                 };
-                let payload_len = varint_encoded_len(*maximum);
-                Self::encode_capsule_header(buf, capsule_type, payload_len);
-                encode_varint(buf, *maximum);
+                let payload_len = varint_encoded_len(*maximum)
+                    .ok_or(CapsuleEncodeError::ValueOutOfVarIntRange)?;
+                Self::encode_capsule_header(&mut out, capsule_type, payload_len)?;
+                encode_varint(&mut out, *maximum);
             }
 
             Self::Unknown {
                 capsule_type,
                 payload,
             } => {
-                Self::encode_capsule_header(buf, *capsule_type, payload.len());
-                buf.extend_from_slice(payload);
+                Self::encode_capsule_header(&mut out, *capsule_type, payload.len())?;
+                out.extend_from_slice(payload);
             }
         }
+        buf.extend_from_slice(&out);
+        Ok(())
     }
 
     /// Capsule ヘッダーをエンコード
-    fn encode_capsule_header(buf: &mut Vec<u8>, capsule_type: u64, length: usize) {
-        encode_varint(buf, capsule_type);
-        encode_varint(buf, length as u64);
+    ///
+    /// wire 表現にできない値の場合は `ValueOutOfVarIntRange` を返す。
+    fn encode_capsule_header(
+        buf: &mut Vec<u8>,
+        capsule_type: u64,
+        length: usize,
+    ) -> Result<(), CapsuleEncodeError> {
+        let Ok(length) = VarInt::new(length as u64) else {
+            return Err(CapsuleEncodeError::ValueOutOfVarIntRange);
+        };
+        if !encode_varint(buf, capsule_type) {
+            return Err(CapsuleEncodeError::ValueOutOfVarIntRange);
+        }
+        varint::encode_into_vec(buf, length);
+        Ok(())
     }
 
     /// Capsule をデコード
@@ -351,7 +416,7 @@ impl Capsule {
                 );
                 let message_bytes = &payload[4..];
                 // メッセージ長は 1024 バイトを超えてはならない
-                // (draft-ietf-webtrans-http3-15 Section 6)
+                // (draft-ietf-webtrans-http3-16 Section 6)
                 if message_bytes.len() > 1024 {
                     return Err(CapsuleDecodeError::Malformed);
                 }
@@ -501,6 +566,45 @@ mod tests {
     fn test_decode_empty_buffer() {
         let result = Capsule::decode(&[]);
         assert!(matches!(result, Ok(None)));
+    }
+
+    #[test]
+    fn test_encode_rejects_out_of_range_unknown_type() {
+        // Unknown の capsule_type は生の u64 のため VarInt 範囲外があり得る。
+        // encode は panic せずエラーを返し、buf を変更しない。
+        let capsule = Capsule::Unknown {
+            capsule_type: u64::MAX,
+            payload: vec![0x01],
+        };
+        let mut buf = Vec::new();
+        assert_eq!(
+            capsule.encode(&mut buf),
+            Err(CapsuleEncodeError::ValueOutOfVarIntRange)
+        );
+        assert!(buf.is_empty(), "失敗時に buf が変更されている: {buf:?}");
+
+        assert_eq!(
+            capsule.encode_as_data_frame(&mut buf),
+            Err(CapsuleEncodeError::ValueOutOfVarIntRange)
+        );
+        assert!(buf.is_empty(), "失敗時に buf が変更されている: {buf:?}");
+    }
+
+    #[test]
+    fn test_encode_accepts_max_varint() {
+        // VarInt の最大値は wire 表現できる
+        let maximum = VarInt::MAX.get();
+        let capsule = Capsule::MaxData { maximum };
+        let mut buf = Vec::new();
+        capsule
+            .encode(&mut buf)
+            .expect("VarInt 最大値は符号化できる");
+        assert!(!buf.is_empty());
+        let mut framed = Vec::new();
+        capsule
+            .encode_as_data_frame(&mut framed)
+            .expect("VarInt 最大値は DATA フレーム化できる");
+        assert!(framed.len() > buf.len());
     }
 
     #[test]

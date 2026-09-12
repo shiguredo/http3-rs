@@ -31,7 +31,7 @@ async fn main() {
 
     let args = parse_args();
 
-    if let Err(e) = run_server(&args.listen, args.reject_connect).await {
+    if let Err(e) = run_server(&args.listen, args.reject_connect, &args.allow_origin).await {
         tracing::error!("Server error: {e}");
     }
 }
@@ -39,7 +39,11 @@ async fn main() {
 /// WebTransport サーバーを起動する
 ///
 /// HTTP/3 over QUIC (ALPN: h3) で WebTransport セッションを受け付ける。
-async fn run_server(listen: &str, reject_connect: bool) -> Result<(), Error> {
+async fn run_server(
+    listen: &str,
+    reject_connect: bool,
+    allow_origin: &[String],
+) -> Result<(), Error> {
     tracing::info!("Loading TLS certificate...");
     let tls = tls::generate_tls_server()?;
     tracing::info!("TLS certificate ready");
@@ -102,9 +106,16 @@ async fn run_server(listen: &str, reject_connect: bool) -> Result<(), Error> {
                         tracing::info!("[{remote}] New WebTransport connection");
                         let settings = h3_settings;
                         let reject = reject_connect;
+                        let allow_origin = allow_origin.to_vec();
                         tokio::spawn(async move {
-                            match handle_connection(connection, settings, remote.clone(), reject)
-                                .await
+                            match handle_connection(
+                                connection,
+                                settings,
+                                remote.clone(),
+                                reject,
+                                allow_origin,
+                            )
+                            .await
                             {
                                 Ok(()) => tracing::info!("[{remote}] Connection closed"),
                                 Err(e) => tracing::error!("[{remote}] Connection error: {e}"),
@@ -135,6 +146,7 @@ async fn handle_connection(
     h3_settings: shiguredo_http3::Settings,
     remote: String,
     reject_connect: bool,
+    allow_origin: Vec<String>,
 ) -> Result<(), Error> {
     tracing::info!("[{remote}] Starting WebTransport handshake...");
 
@@ -150,6 +162,21 @@ async fn handle_connection(
     if reject_connect {
         tracing::warn!("[{remote}] Rejecting WebTransport session (405, --reject-connect demo)");
         request.reject(405).await?;
+        return Ok(());
+    }
+
+    // ブラウザクライアント (Origin 付き) の Origin を検証する。
+    // WebTransport サーバーは指定された Origin がアクセスを許可されているか
+    // 検証しなければならず、失敗した場合は 403 を返す SHOULD がある
+    // (draft-ietf-webtrans-http3-16 Section 3.2)。許可リストが空の場合は
+    // ブラウザからの接続をすべて拒否する。
+    if let Some(origin) = request.origin()
+        && !allow_origin.iter().any(|allowed| allowed == origin)
+    {
+        tracing::warn!(
+            "[{remote}] Rejecting WebTransport session (403, origin not allowed: {origin})"
+        );
+        request.reject(403).await?;
         return Ok(());
     }
 
@@ -200,7 +227,9 @@ async fn handle_connection(
         let mut buf = Vec::new();
         for capsule in &capsules {
             let mut capsule_bytes = Vec::new();
-            capsule.encode(&mut capsule_bytes);
+            capsule
+                .encode(&mut capsule_bytes)
+                .expect("フロー制御カプセルの値は VarInt 範囲内");
 
             // H3 DATA フレーム: type=0x00, length=varint, payload
             buf.push(0x00);
@@ -558,6 +587,8 @@ struct Args {
     listen: String,
     /// `WtSessionRequest::reject()` のデモ用: 全 CONNECT を 405 で拒否する
     reject_connect: bool,
+    /// 許可する Origin (カンマ区切り)。空なら Origin 付きリクエストを拒否する
+    allow_origin: Vec<String>,
 }
 
 fn parse_args() -> Args {
@@ -585,6 +616,21 @@ fn parse_args() -> Args {
         .take(&mut args)
         .is_present();
 
+    // Origin ヘッダー付き (ブラウザ) のリクエストを許可するかどうか。
+    // WebTransport サーバーは Origin を検証しなければならないため
+    // (draft-ietf-webtrans-http3-16 Section 3.2)、既定では許可しない。
+    let allow_origin: String = noargs::opt("allow-origin")
+        .ty("ORIGIN[,ORIGIN...]")
+        .doc("Comma separated list of allowed Origin values (browser clients are rejected when empty)")
+        .take(&mut args)
+        .then(|o| Ok::<_, std::convert::Infallible>(o.value().to_string()))
+        .unwrap_or_default();
+    let allow_origin: Vec<String> = allow_origin
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
     if let Ok(Some(help)) = args.finish() {
         print!("{help}");
         std::process::exit(0);
@@ -593,5 +639,6 @@ fn parse_args() -> Args {
     Args {
         listen,
         reject_connect,
+        allow_origin,
     }
 }

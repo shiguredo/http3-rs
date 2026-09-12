@@ -1,4 +1,4 @@
-//! WebTransport エラーコード (draft-ietf-webtrans-http3-15 Section 9.5)
+//! WebTransport エラーコード (draft-ietf-webtrans-http3-16 Section 9.5)
 //!
 //! HTTP/3 エラーコードの WebTransport 拡張を定義。
 
@@ -26,7 +26,7 @@ pub enum ErrorCode {
     /// ALPN ネゴシエーションエラー
     ///
     /// アプリケーションプロトコルネゴシエーションに失敗した。
-    /// draft-ietf-webtrans-http3-15 Section 3.3, Section 9.5
+    /// draft-ietf-webtrans-http3-16 Section 3.3, Section 9.5
     /// 将来のドラフトで変更される可能性がある
     AlpnError = 0x0817b3dd,
 
@@ -34,7 +34,7 @@ pub enum ErrorCode {
     ///
     /// WebTransport に必要な SETTINGS やトランスポートパラメータが揃っていない。
     /// クライアントが HTTP/3 接続を閉じる際に使用する。
-    /// draft-ietf-webtrans-http3-15 Section 3.1, Section 9.5
+    /// draft-ietf-webtrans-http3-16 Section 3.1, Section 9.5
     /// 将来のドラフトで変更される可能性がある
     ///
     /// `from_code` による受信エラーコード変換網羅性のため維持する
@@ -160,7 +160,7 @@ pub enum Error {
     ///
     /// WT_APPLICATION_ERROR 範囲外のエラーコードによる RESET_STREAM/STOP_SENDING の場合、
     /// ストリームはリセットされたものとして扱い、アプリケーションエラーコードへの
-    /// マッピングは行わない (draft-ietf-webtrans-http3-15 Section 4.4)。
+    /// マッピングは行わない (draft-ietf-webtrans-http3-16 Section 4.4)。
     /// 将来のドラフトで変更される可能性がある
     Unknown(u64),
 }
@@ -204,7 +204,7 @@ impl Error {
     ///
     /// WT_APPLICATION_ERROR 範囲外のエラーコードで RESET_STREAM/STOP_SENDING を受信した場合に
     /// `true` を返す。この場合、アプリケーションには「エラーコードなしのストリームリセット」
-    /// として通知する (draft-ietf-webtrans-http3-15 Section 4.4)。
+    /// として通知する (draft-ietf-webtrans-http3-16 Section 4.4)。
     /// 将来のドラフトで変更される可能性がある
     pub fn is_out_of_range_reset(&self) -> bool {
         matches!(self, Self::Unknown(_))

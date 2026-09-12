@@ -106,11 +106,6 @@ impl DynamicEncoder {
         self.peer_max_blocked_streams = max;
     }
 
-    /// ピアの SETTINGS_QPACK_BLOCKED_STREAMS を取得
-    pub fn peer_max_blocked_streams(&self) -> u64 {
-        self.peer_max_blocked_streams
-    }
-
     /// 動的テーブル容量を設定
     ///
     /// `capacity` が `max_table_capacity` を超える場合は `CapacityExceeded` を返す。
@@ -371,20 +366,10 @@ impl DynamicEncoder {
             self.encode_indexed_field_static(buf, index)
         } else if let Some(index) = name_match {
             // Literal with Name Reference (静的テーブル)
-            self.encode_literal_with_name_ref_static(
-                buf,
-                index,
-                header.value(),
-                header.never_indexed(),
-            )
+            self.encode_literal_with_name_ref_static(buf, index, header.value())
         } else {
             // Literal with Literal Name
-            self.encode_literal_with_literal_name(
-                buf,
-                header.name(),
-                header.value(),
-                header.never_indexed(),
-            )
+            self.encode_literal_with_literal_name(buf, header.name(), header.value())
         }
     }
 
@@ -410,29 +395,13 @@ impl DynamicEncoder {
             self.encode_indexed_field_static(buf, index)
         } else if let Some(abs_index) = dyn_name {
             // Literal with Name Reference (動的テーブル)
-            self.encode_literal_with_name_ref_dynamic(
-                buf,
-                abs_index,
-                header.value(),
-                base,
-                header.never_indexed(),
-            )
+            self.encode_literal_with_name_ref_dynamic(buf, abs_index, header.value(), base)
         } else if let Some(index) = static_name {
             // Literal with Name Reference (静的テーブル)
-            self.encode_literal_with_name_ref_static(
-                buf,
-                index,
-                header.value(),
-                header.never_indexed(),
-            )
+            self.encode_literal_with_name_ref_static(buf, index, header.value())
         } else {
             // Literal with Literal Name
-            self.encode_literal_with_literal_name(
-                buf,
-                header.name(),
-                header.value(),
-                header.never_indexed(),
-            )
+            self.encode_literal_with_literal_name(buf, header.name(), header.value())
         }
     }
 
@@ -476,10 +445,10 @@ impl DynamicEncoder {
         buf: &mut [u8],
         index: usize,
         value: &[u8],
-        never_indexed: bool,
     ) -> Option<usize> {
-        // 0x50 = 01010000 (N=0, T=1), never_indexed 時は 0x20 を OR して N=1 (0x70)
-        let prefix = if never_indexed { 0x70 } else { 0x50 };
+        // 0x50 = 01010000 (N=0, T=1)。N ビットは常に 0
+        // (never-indexed 表現は未使用。RFC 9204 Section 4.5.4)
+        let prefix = 0x50;
         let mut offset = integer::encode_integer(buf, index as u64, 4, prefix)?;
 
         // Value
@@ -504,15 +473,14 @@ impl DynamicEncoder {
         absolute_index: u64,
         value: &[u8],
         base: u64,
-        never_indexed: bool,
     ) -> Option<usize> {
         debug_assert!(
             absolute_index < base,
             "absolute_index >= base の Post-Base Name Reference 表現は未対応 (RFC 9204 Section 4.5.5)"
         );
         let relative_index = base - absolute_index - 1;
-        // 0x40 = 01000000 (N=0, T=0), never_indexed 時は 0x20 を OR して N=1 (0x60)
-        let prefix = if never_indexed { 0x60 } else { 0x40 };
+        // 0x40 = 01000000 (N=0, T=0)。N ビットは常に 0
+        let prefix = 0x40;
         let mut offset = integer::encode_integer(buf, relative_index, 4, prefix)?;
 
         // Value
@@ -542,14 +510,13 @@ impl DynamicEncoder {
         buf: &mut [u8],
         name: &[u8],
         value: &[u8],
-        never_indexed: bool,
     ) -> Option<usize> {
         let mut offset = 0;
 
         // 名前のエンコード (3-bit prefix)
-        // Prefix: 001N (N=never_indexed), never_indexed 時は 0x10 を OR して N=1 (0x30)
+        // Prefix: 001 (N=0)。N ビットは常に 0
         // H ビット (bit 3) と Name Length (bits 0-2)
-        let prefix = if never_indexed { 0x30 } else { 0x20 };
+        let prefix = 0x20;
         let name_len = self.encode_string_with_prefix(buf, name, 3, prefix)?;
         offset += name_len;
 

@@ -1,11 +1,21 @@
-//! WebTransport フロー制御 (draft-ietf-webtrans-http3-15 Section 5)
+//! WebTransport フロー制御 (draft-ietf-webtrans-http3-16 Section 5)
 //!
 //! セッションレベルのフロー制御 (ストリーム数・データ量) を管理する。
-//! session.rs から分離したモジュール。
+//! セッション単位の計上状態と、ピアから受信した上限を扱う純粋なロジックのみを
+//! 置く (カプセルのエンコードやイベント生成は上位層の責務)。
+//! 将来のドラフトで変更される可能性がある
 
-use super::super::capsule::MAX_STREAMS_LIMIT;
+use super::capsule::MAX_STREAMS_LIMIT;
 
-/// # 運用ガイダンス (draft-ietf-webtrans-http3-15 Section 5.6)
+/// セッション確立前にバッファリングするストリームの上限
+/// (draft-ietf-webtrans-http3-16 Section 4.6)
+pub const MAX_BUFFERED_STREAMS: usize = 100;
+
+/// セッション確立前にバッファリングするデータグラムの上限
+/// (draft-ietf-webtrans-http3-16 Section 4.6)
+pub const MAX_BUFFERED_DATAGRAMS: usize = 100;
+
+/// # 運用ガイダンス (draft-ietf-webtrans-http3-16 Section 5.6)
 ///
 /// - WT_DATA_BLOCKED / WT_STREAMS_BLOCKED を待ってから WT_MAX_DATA / WT_MAX_STREAMS を
 ///   送信してはならない (MUST NOT)。待つと少なくとも 1 RTT のブロックが発生する。
@@ -39,7 +49,7 @@ pub struct FlowControlState {
     ///
     /// カウント対象: セッションに関連する全ストリームの Stream Body データ長の合計。
     /// カウント対象外: カプセル、Signal Value、Stream Type、Session ID フィールド。
-    /// draft-ietf-webtrans-http3-15 Section 5.4
+    /// draft-ietf-webtrans-http3-16 Section 5.4
     /// 将来のドラフトで変更される可能性がある
     pub data_sent: u64,
     /// 受信した単方向ストリーム数
@@ -50,12 +60,12 @@ pub struct FlowControlState {
     ///
     /// カウント対象/対象外は `data_sent` と同一。
     /// ピアが `local_limits.max_data` を超過した場合は WT_FLOW_CONTROL_ERROR。
-    /// draft-ietf-webtrans-http3-15 Section 5.4
+    /// draft-ietf-webtrans-http3-16 Section 5.4
     /// 将来のドラフトで変更される可能性がある
     pub data_received: u64,
     /// 受信したデータグラム数 (DoS 監視用)
     ///
-    /// draft-ietf-webtrans-http3-15 Section 4.5
+    /// draft-ietf-webtrans-http3-16 Section 4.5
     /// 将来のドラフトで変更される可能性がある
     pub datagrams_received: u64,
 }
@@ -72,10 +82,10 @@ impl FlowControlState {
 /// ピアが開くストリームに対するウィンドウ管理を行う。
 /// RFC 9000 Section 4.6 と同様のウィンドウ方式で、
 /// ストリームの close に応じて WT_MAX_STREAMS の更新を判定する。
-/// draft-ietf-webtrans-http3-15 Section 5.6
+/// draft-ietf-webtrans-http3-16 Section 5.6
 /// 将来のドラフトで変更される可能性がある
 #[derive(Debug, Clone)]
-pub(crate) struct DirectionalStreamFlowControl {
+pub struct DirectionalStreamFlowControl {
     /// 同時許可数 (しきい値計算用)
     concurrent_limit: u64,
     /// ピアに最後に通知した累積上限 (減少不可)
@@ -90,7 +100,7 @@ impl DirectionalStreamFlowControl {
     /// 新しいフロー制御を作成
     ///
     /// `concurrent_limit` が初期の `advertised_max` になる。
-    pub(crate) fn new(concurrent_limit: u64) -> Self {
+    pub fn new(concurrent_limit: u64) -> Self {
         Self {
             concurrent_limit,
             advertised_max: concurrent_limit,
@@ -100,12 +110,12 @@ impl DirectionalStreamFlowControl {
     }
 
     /// ピアがストリームを開く余地があるかどうか
-    pub(crate) fn check_received(&self) -> bool {
+    pub fn check_received(&self) -> bool {
         self.total_received < self.advertised_max
     }
 
     /// ピアがストリームを開いたことを記録
-    pub(crate) fn on_stream_received(&mut self) {
+    pub fn on_stream_received(&mut self) {
         self.total_received = self.total_received.saturating_add(1);
     }
 
@@ -113,7 +123,7 @@ impl DirectionalStreamFlowControl {
     ///
     /// しきい値を下回った場合、新しい `advertised_max` を返す。
     /// 呼び出し側は返された値で WT_MAX_STREAMS カプセルを生成する。
-    pub(crate) fn on_stream_closed(&mut self) -> Option<u64> {
+    pub fn on_stream_closed(&mut self) -> Option<u64> {
         self.total_closed = self.total_closed.saturating_add(1);
 
         // concurrent_limit が 0 の場合はウィンドウ更新不要
@@ -143,10 +153,10 @@ impl DirectionalStreamFlowControl {
 ///
 /// RFC 9000 Section 4.2 と同様のウィンドウ方式で、
 /// データ消費に応じて WT_MAX_DATA の更新を判定する。
-/// draft-ietf-webtrans-http3-15 Section 5.6
+/// draft-ietf-webtrans-http3-16 Section 5.6
 /// 将来のドラフトで変更される可能性がある
 #[derive(Debug, Clone)]
-pub(crate) struct DataFlowControl {
+pub struct DataFlowControl {
     /// 初期ウィンドウサイズ (しきい値計算用)
     initial_window: u64,
     /// ピアに最後に通知した max_data (累積値、減少不可)
@@ -159,7 +169,7 @@ pub(crate) struct DataFlowControl {
 
 impl DataFlowControl {
     /// 新しいデータフロー制御を作成
-    pub(crate) fn new(initial_window: u64) -> Self {
+    pub fn new(initial_window: u64) -> Self {
         Self {
             initial_window,
             advertised_max: initial_window,
@@ -169,13 +179,13 @@ impl DataFlowControl {
     }
 
     /// ピアが送信するデータを受信可能かどうか
-    pub(crate) fn check_received(&self, bytes: u64) -> bool {
+    pub fn check_received(&self, bytes: u64) -> bool {
         // checked_sub でオーバーフローを回避: advertised_max - total_received の残り枠と比較
         self.advertised_max.saturating_sub(self.total_received) >= bytes
     }
 
     /// ピアからのデータ受信を記録
-    pub(crate) fn on_data_received(&mut self, bytes: u64) {
+    pub fn on_data_received(&mut self, bytes: u64) {
         self.total_received = self.total_received.saturating_add(bytes);
     }
 
@@ -183,7 +193,7 @@ impl DataFlowControl {
     ///
     /// しきい値を下回った場合、新しい `advertised_max` を返す。
     /// 呼び出し側は返された値で WT_MAX_DATA カプセルを生成する。
-    pub(crate) fn on_data_consumed(&mut self, bytes: u64) -> Option<u64> {
+    pub fn on_data_consumed(&mut self, bytes: u64) -> Option<u64> {
         self.total_consumed = self.total_consumed.saturating_add(bytes);
 
         // initial_window が 0 の場合はウィンドウ更新不要
@@ -210,7 +220,7 @@ impl DataFlowControl {
 ///
 /// WT_STREAMS_BLOCKED / WT_DATA_BLOCKED の重複送信を防止する。
 /// 同じ maximum に対しては 1 回だけカプセルを送信する。
-/// draft-ietf-webtrans-http3-15 Section 5.6
+/// draft-ietf-webtrans-http3-16 Section 5.6.2, 5.6.4
 /// 将来のドラフトで変更される可能性がある
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SendBlockedState {

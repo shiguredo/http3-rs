@@ -11,8 +11,8 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc;
 
 use super::session::{
-    ConnectCommand, WtRecvStream, WtSession, is_forwardable_wt_event, run_connect_send_task,
-    synthesized_session_closed,
+    ConnectCommand, WtRecvStream, WtSession, WtSessionParts, flush_flow_control_capsules,
+    is_forwardable_wt_event, run_connect_send_task, synthesized_session_closed,
 };
 use crate::config::ClientConfig;
 use crate::internal::classify_uni_recv;
@@ -24,6 +24,18 @@ pub struct WtClient;
 impl WtClient {
     /// WebTransport セッションを確立する
     pub async fn connect(config: ClientConfig, path: &str) -> crate::Result<WtSession> {
+        // WebTransport は QUIC DATAGRAM (RFC 9221) を要求する。datagram provider を
+        // 設定しないと max_datagram_frame_size transport parameter が 0 のままになり、
+        // WebTransport 対応のサーバーが接続を拒否する
+        // (draft-ietf-webtrans-http3-16 Section 3.1)。
+        let datagram = s2n_quic::provider::datagram::default::Endpoint::builder()
+            .with_send_capacity(16)
+            .map_err(|e| crate::Error::Internal(format!("datagram send capacity: {e}")))?
+            .with_recv_capacity(16)
+            .map_err(|e| crate::Error::Internal(format!("datagram recv capacity: {e}")))?
+            .build()
+            .map_err(|e| crate::Error::Internal(format!("datagram provider: {e}")))?;
+
         let client = if config.disable_cert_validation {
             let tls = s2n_quic::provider::tls::default::Client::builder()
                 .build()
@@ -33,6 +45,8 @@ impl WtClient {
                 .map_err(crate::Error::transport)?
                 .with_io("0.0.0.0:0")
                 .map_err(crate::Error::transport)?
+                .with_datagram(datagram)
+                .map_err(crate::Error::transport)?
                 .start()
                 .map_err(crate::Error::transport)?
         } else if let Some(ref ca_pem) = config.ca_cert_pem {
@@ -40,6 +54,8 @@ impl WtClient {
                 .with_tls(ca_pem.as_str())
                 .map_err(crate::Error::transport)?
                 .with_io("0.0.0.0:0")
+                .map_err(crate::Error::transport)?
+                .with_datagram(datagram)
                 .map_err(crate::Error::transport)?
                 .start()
                 .map_err(crate::Error::transport)?
@@ -132,7 +148,7 @@ impl WtClient {
 
         // peer SETTINGS の受信を待つ (WebTransport CONNECT の送信に必要)
         // uni_task がサーバーの制御ストリームを処理して SETTINGS を注入するまで待機する
-        // (draft-ietf-webtrans-http3-15 Section 3.1)
+        // (draft-ietf-webtrans-http3-16 Section 3.1)
         loop {
             {
                 let s = state.lock().expect("mutex should not be poisoned");
@@ -276,6 +292,19 @@ impl WtClient {
         let (connect_tx, connect_rx) = mpsc::unbounded_channel::<ConnectCommand>();
         // 送信タスクは connect_tx が全て drop されると終了するため detach する
         tokio::spawn(run_connect_send_task(send_stream, connect_rx));
+
+        // セッション確立時に生成された初期フロー制御カプセル
+        // (WT_MAX_STREAMS / WT_MAX_DATA) を送出する。ピアがカプセルベースの
+        // フロー制御を要求している場合、これが無いとピアは初期クレジット 0 のまま
+        // ストリームを開けない (Safari 26.4 互換。
+        // draft-ietf-webtrans-http3-14 Section 5)。
+        // (draft-ietf-webtrans-http3-16 Section 5.6)
+        flush_flow_control_capsules(
+            &mut *state.lock().expect("mutex should not be poisoned"),
+            connect_stream_id,
+            &connect_tx,
+        );
+
         let recv_task = tokio::spawn(run_client_connect_recv_task(
             connect_stream_id,
             recv_stream,
@@ -285,15 +314,16 @@ impl WtClient {
             connect_tx.clone(),
         ));
 
-        Ok(WtSession::new(
-            connect_stream_id,
+        Ok(WtSession::new(WtSessionParts {
+            session_id: connect_stream_id,
             bidi_acceptor,
             handle,
             connect_tx,
             uni_rx,
             event_rx,
             recv_task,
-        ))
+            state: Arc::clone(&state),
+        }))
     }
 }
 
@@ -511,6 +541,15 @@ async fn run_client_connect_recv_task_inner(
                 }
             }
         }
+
+        // 受信したフロー制御カプセルで送信側上限が更新された場合、および
+        // 受信ウィンドウの更新が必要になった場合は、生成されたカプセルを
+        // CONNECT ストリームへ送出する (draft-ietf-webtrans-http3-16 Section 5.6)。
+        flush_flow_control_capsules(
+            &mut *state.lock().expect("mutex should not be poisoned"),
+            session_id,
+            connect_tx,
+        );
 
         // SessionClosed を転送しても、ピアの FIN を読み切るまでは return しない。
         // 早期に recv_stream を drop すると STOP_SENDING が送出され、ピアの送信

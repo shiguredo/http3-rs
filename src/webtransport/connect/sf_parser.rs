@@ -7,7 +7,7 @@
 ///
 /// - 全アイテムがクォート文字列の場合のみ結果を返す
 /// - 文字列型以外 (Integer, Token, Boolean 等) を含む場合はフィールド全体を無視する
-///   (draft-ietf-webtrans-http3-15 Section 3.3)
+///   (draft-ietf-webtrans-http3-16 Section 3.3)
 /// - パラメータ (`;` 以降) は無視
 /// - DoS 対策: 入力長・要素数・制御文字の制限 (RFC 9651 Section 4.2.5 推奨)
 pub(crate) fn parse_sf_list_strings(value: &str) -> Vec<String> {
@@ -35,7 +35,7 @@ pub(crate) fn parse_sf_list_strings(value: &str) -> Vec<String> {
             Some(s) => result.push(s),
             None => {
                 // 非 String 要素を検出: フィールド全体を無視
-                // (draft-ietf-webtrans-http3-15 Section 3.3)
+                // (draft-ietf-webtrans-http3-16 Section 3.3)
                 return Vec::new();
             }
         }

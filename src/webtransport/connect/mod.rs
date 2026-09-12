@@ -1,4 +1,4 @@
-//! WebTransport CONNECT リクエスト/レスポンス (draft-ietf-webtrans-http3-15 Section 3)
+//! WebTransport CONNECT リクエスト/レスポンス (draft-ietf-webtrans-http3-16 Section 3)
 //!
 //! 拡張 CONNECT (RFC 8441, RFC 9220) を使用した WebTransport セッションの
 //! 確立リクエストのバリデーションとプロトコルネゴシエーションを提供。
@@ -8,8 +8,8 @@
 //!
 //! - RFC 8441: Bootstrapping WebSockets with HTTP/2 (拡張 CONNECT の定義)
 //! - RFC 9220: Bootstrapping WebSockets with HTTP/3 (HTTP/3 への適用)
-//! - draft-ietf-webtrans-http3-15 Section 3.2: Creating a New Session
-//! - draft-ietf-webtrans-http3-15 Section 3.3: Application Protocol Negotiation
+//! - draft-ietf-webtrans-http3-16 Section 3.2: Creating a New Session
+//! - draft-ietf-webtrans-http3-16 Section 3.3: Application Protocol Negotiation
 
 mod connect_error;
 mod draft;
@@ -24,7 +24,7 @@ pub use response::ConnectResponse;
 
 use core::fmt;
 
-/// `:protocol` 疑似ヘッダーの値 (draft-ietf-webtrans-http3-15 Section 3.2)
+/// `:protocol` 疑似ヘッダーの値 (draft-ietf-webtrans-http3-16 Section 3.2)
 ///
 /// draft-15 で定義された native QUIC モードのプロトコル識別子。
 pub const PROTOCOL_WEBTRANSPORT_H3: &str = "webtransport-h3";
@@ -49,7 +49,7 @@ pub const PROTOCOL_WEBTRANSPORT_DRAFT02: &str = "webtransport";
 ///
 /// 各フィールドは VarInt (RFC 9000 §16) に制約される。
 ///
-/// CONNECT リクエスト検証エラー (draft-ietf-webtrans-http3-15 Section 3.2)
+/// CONNECT リクエスト検証エラー (draft-ietf-webtrans-http3-16 Section 3.2)
 impl fmt::Display for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -69,7 +69,7 @@ impl fmt::Display for ConnectError {
     }
 }
 
-/// WebTransport セッション開始前提の検証エラー (draft-ietf-webtrans-http3-15 Section 3.1)
+/// WebTransport セッション開始前提の検証エラー (draft-ietf-webtrans-http3-16 Section 3.1)
 impl fmt::Display for CapabilityError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -100,7 +100,7 @@ impl fmt::Display for CapabilityError {
 ///
 /// 呼び出し側が SETTINGS / transport parameters から値を埋めて検証する。
 ///
-/// WebTransport CONNECT リクエスト (draft-ietf-webtrans-http3-15 Section 3.2)
+/// WebTransport CONNECT リクエスト (draft-ietf-webtrans-http3-16 Section 3.2)
 ///
 /// クライアントが新しい WebTransport セッションを確立するための拡張 CONNECT リクエスト。
 /// `:protocol` ヘッダーの値はドラフトバージョンに依存する。
@@ -118,7 +118,7 @@ impl fmt::Display for CapabilityError {
 /// - `Origin` = クライアントオリジン (ブラウザクライアントの場合は MUST)
 /// - `WT-Available-Protocols` = 利用可能なアプリケーションプロトコルリスト
 ///
-/// WebTransport CONNECT レスポンス (draft-ietf-webtrans-http3-15 Section 3.2)
+/// WebTransport CONNECT レスポンス (draft-ietf-webtrans-http3-16 Section 3.2)
 ///
 /// サーバーが CONNECT リクエストに対して返すレスポンス。
 /// 2xx ステータスコードでセッション確立成功。
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn test_parse_available_protocols_ignores_non_strings() {
         // 非 String 要素を含む場合はフィールド全体を無視する
-        // (draft-ietf-webtrans-http3-15 Section 3.3)
+        // (draft-ietf-webtrans-http3-16 Section 3.3)
         let result = ConnectRequest::parse_available_protocols("\"foo\", token, 42");
         assert!(result.is_empty());
     }
@@ -353,7 +353,7 @@ mod tests {
             (b":path", b"/wt"),
         ];
         let req = ConnectRequest::from_headers(&headers).expect("test must succeed");
-        assert_eq!(req.draft_version, DraftVersion::Draft15);
+        assert_eq!(req.draft_version, DraftVersion::Draft16);
         assert_eq!(req.scheme, "https");
         assert_eq!(req.authority, "example.com");
         assert_eq!(req.path, "/wt");
@@ -495,7 +495,7 @@ mod tests {
             initial_max_streams_bidi: vi(300),
             ..Default::default()
         };
-        let s = DraftVersion::Draft15.build_server_settings(&params);
+        let s = DraftVersion::Draft16.build_server_settings(&params);
         assert_eq!(s.wt_enabled, vi(1));
         assert_eq!(s.wt_initial_max_streams_uni, vi(500));
         assert_eq!(s.wt_initial_max_streams_bidi, vi(300));
@@ -566,7 +566,7 @@ mod tests {
         assert!(!DraftVersion::Draft02.requires_initial_capsule_flow_control());
         assert!(!DraftVersion::Draft07.requires_initial_capsule_flow_control());
         assert!(DraftVersion::Draft14.requires_initial_capsule_flow_control());
-        assert!(!DraftVersion::Draft15.requires_initial_capsule_flow_control());
+        assert!(!DraftVersion::Draft16.requires_initial_capsule_flow_control());
     }
 
     #[test]
@@ -574,7 +574,7 @@ mod tests {
         assert!(!DraftVersion::Draft02.requires_enable_connect_protocol());
         assert!(DraftVersion::Draft07.requires_enable_connect_protocol());
         assert!(DraftVersion::Draft14.requires_enable_connect_protocol());
-        assert!(DraftVersion::Draft15.requires_enable_connect_protocol());
+        assert!(DraftVersion::Draft16.requires_enable_connect_protocol());
     }
 
     #[test]
@@ -582,13 +582,13 @@ mod tests {
         assert!(!DraftVersion::Draft02.requires_reset_stream_at());
         assert!(!DraftVersion::Draft07.requires_reset_stream_at());
         assert!(DraftVersion::Draft14.requires_reset_stream_at());
-        assert!(DraftVersion::Draft15.requires_reset_stream_at());
+        assert!(DraftVersion::Draft16.requires_reset_stream_at());
     }
 
     #[test]
     fn test_build_client_settings_draft15() {
         let params = ServerSettingsParams::default();
-        let s = DraftVersion::Draft15.build_client_settings(&params);
+        let s = DraftVersion::Draft16.build_client_settings(&params);
         assert_eq!(s.wt_enabled, vi(1));
         assert_eq!(s.wt_initial_max_streams_uni, params.initial_max_streams_uni);
         assert_eq!(
@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(s.wt_initial_max_data, params.initial_max_data);
         assert_eq!(s.webtransport_max_sessions_draft07, None);
         assert_eq!(s.wt_max_sessions_draft14, None);
-        assert_eq!(s.detect_draft_pattern(), Some(DraftVersion::Draft15));
+        assert_eq!(s.detect_draft_pattern(), Some(DraftVersion::Draft16));
     }
 
     #[test]

@@ -1311,3 +1311,73 @@ fn test_protocol_space_is_malformed() {
     let headers = ext_connect_headers(b"web transport");
     assert!(validate_request_headers(&headers).is_err());
 }
+
+// =========================================================================
+// Extended CONNECT の :path 構文検証 (RFC 8441 Section 4)
+// =========================================================================
+
+/// Extended CONNECT の :path が path-absolute でない場合は malformed
+#[test]
+fn test_extended_connect_relative_path_is_malformed() {
+    // :protocol を持つ CONNECT の :path は対象 URI の path を表すため、
+    // http/https では path-absolute ("/" 始まり) でなければならない
+    // (RFC 8441 Section 4, RFC 9114 Section 4.3.1)
+    let headers = vec![
+        Header::new(b":method", b"CONNECT").expect("test must succeed"),
+        Header::new(b":protocol", b"websocket").expect("test must succeed"),
+        Header::new(b":scheme", b"https").expect("test must succeed"),
+        Header::new(b":authority", b"example.com").expect("test must succeed"),
+        Header::new(b":path", b"chat").expect("test must succeed"),
+    ];
+    assert!(
+        validate_request_headers(&headers).is_err(),
+        "相対 :path が受理されている"
+    );
+}
+
+/// Extended CONNECT の :path が "/" 始まりなら受理される
+#[test]
+fn test_extended_connect_absolute_path_is_valid() {
+    let headers = vec![
+        Header::new(b":method", b"CONNECT").expect("test must succeed"),
+        Header::new(b":protocol", b"websocket").expect("test must succeed"),
+        Header::new(b":scheme", b"https").expect("test must succeed"),
+        Header::new(b":authority", b"example.com").expect("test must succeed"),
+        Header::new(b":path", b"/chat").expect("test must succeed"),
+    ];
+    assert!(
+        validate_request_headers(&headers).is_ok(),
+        "path-absolute が拒否されている"
+    );
+}
+
+/// IPv6 リテラルのポート部が空の :authority は malformed
+#[test]
+fn test_authority_ipv6_empty_port_is_malformed() {
+    // port = 1*DIGIT のため ":" のみは不正 (RFC 3986 Section 3.2.3)
+    let headers = vec![
+        Header::new(b":method", b"GET").expect("test must succeed"),
+        Header::new(b":scheme", b"https").expect("test must succeed"),
+        Header::new(b":authority", b"[::1]:").expect("test must succeed"),
+        Header::new(b":path", b"/").expect("test must succeed"),
+    ];
+    assert!(
+        validate_request_headers(&headers).is_err(),
+        "空ポートが受理されている"
+    );
+}
+
+/// IPv6 リテラルのポート付き :authority は受理される
+#[test]
+fn test_authority_ipv6_with_port_is_valid() {
+    let headers = vec![
+        Header::new(b":method", b"GET").expect("test must succeed"),
+        Header::new(b":scheme", b"https").expect("test must succeed"),
+        Header::new(b":authority", b"[::1]:443").expect("test must succeed"),
+        Header::new(b":path", b"/").expect("test must succeed"),
+    ];
+    assert!(
+        validate_request_headers(&headers).is_ok(),
+        "IPv6 + ポートが拒否されている"
+    );
+}

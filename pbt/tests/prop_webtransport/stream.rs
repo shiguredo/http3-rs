@@ -2,7 +2,8 @@
 //! (draft-ietf-webtrans-http3-15 Section 4)
 
 use pbt::strategies::sample_varint_raw_in;
-use shiguredo_http3::webtransport::{StreamHeader, stream_type};
+use shiguredo_http3::stream::StreamKind;
+use shiguredo_http3::webtransport::StreamHeader;
 
 /// 有効なセッション ID (client-initiated bidirectional stream ID: id % 4 == 0)
 fn valid_session_id(ctx: &mut noprop::TestCaseContext) -> u64 {
@@ -159,12 +160,11 @@ fn prop_stream_id_client_server_initiated() -> noprop::TestResult {
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
         let stream_id = noprop::sample_u64(ctx);
-        let is_client = stream_type::is_client_initiated(stream_id);
-        let is_server = stream_type::is_server_initiated(stream_id);
+        let kind = StreamKind::from_stream_id(stream_id);
 
         assert!(
-            is_client != is_server,
-            "Stream ID must be either client or server initiated"
+            kind.is_client_initiated() != kind.is_server_initiated(),
+            "Stream ID must be either client or server initiated: {stream_id}"
         );
         Ok(())
     })?;
@@ -178,12 +178,11 @@ fn prop_stream_id_bidirectional_unidirectional() -> noprop::TestResult {
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
         let stream_id = noprop::sample_u64(ctx);
-        let is_bidi = stream_type::is_bidirectional(stream_id);
-        let is_uni = stream_type::is_unidirectional(stream_id);
+        let kind = StreamKind::from_stream_id(stream_id);
 
         assert!(
-            is_bidi != is_uni,
-            "Stream ID must be either bidirectional or unidirectional"
+            kind.is_bidirectional() != kind.is_unidirectional(),
+            "Stream ID must be either bidirectional or unidirectional: {stream_id}"
         );
         Ok(())
     })?;
@@ -198,24 +197,20 @@ fn prop_stream_id_all_combinations() -> noprop::TestResult {
     runner.run(256, |ctx| {
         let base_id = sample_varint_raw_in(ctx, 0..=999_999);
         // クライアント開始双方向 (0b00)
-        let id_00 = base_id * 4;
-        assert!(stream_type::is_client_initiated(id_00));
-        assert!(stream_type::is_bidirectional(id_00));
+        let kind = StreamKind::from_stream_id(base_id * 4);
+        assert!(kind.is_client_initiated() && kind.is_bidirectional());
 
         // サーバー開始双方向 (0b01)
-        let id_01 = base_id * 4 + 1;
-        assert!(stream_type::is_server_initiated(id_01));
-        assert!(stream_type::is_bidirectional(id_01));
+        let kind = StreamKind::from_stream_id(base_id * 4 + 1);
+        assert!(kind.is_server_initiated() && kind.is_bidirectional());
 
         // クライアント開始単方向 (0b10)
-        let id_10 = base_id * 4 + 2;
-        assert!(stream_type::is_client_initiated(id_10));
-        assert!(stream_type::is_unidirectional(id_10));
+        let kind = StreamKind::from_stream_id(base_id * 4 + 2);
+        assert!(kind.is_client_initiated() && kind.is_unidirectional());
 
         // サーバー開始単方向 (0b11)
-        let id_11 = base_id * 4 + 3;
-        assert!(stream_type::is_server_initiated(id_11));
-        assert!(stream_type::is_unidirectional(id_11));
+        let kind = StreamKind::from_stream_id(base_id * 4 + 3);
+        assert!(kind.is_server_initiated() && kind.is_unidirectional());
         Ok(())
     })?;
     Ok(())

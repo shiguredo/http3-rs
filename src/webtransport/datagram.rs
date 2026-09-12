@@ -1,4 +1,4 @@
-//! WebTransport Datagram (RFC 9297, draft-ietf-webtrans-http3-15 Section 4.5)
+//! WebTransport Datagram (RFC 9297, draft-ietf-webtrans-http3-16 Section 4.5)
 //!
 //! HTTP Datagram の Quarter Stream ID を使った WebTransport データグラムの
 //! エンコード・デコードを提供。
@@ -31,7 +31,7 @@ pub enum DatagramError {
     /// `session_id` が client-initiated bidirectional stream ID ではない
     /// (`session_id % 4 != 0`)
     ///
-    /// (draft-ietf-webtrans-http3-15 Section 4.5 / RFC 9000 Section 2.1:
+    /// (draft-ietf-webtrans-http3-16 Section 4.5 / RFC 9000 Section 2.1:
     /// クライアント開始双方向ストリームの ID は 4 の倍数)
     InvalidSessionId,
 

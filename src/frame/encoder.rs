@@ -58,7 +58,15 @@ pub fn encoded_frame_len(frame: &Frame) -> Option<usize> {
             VarInt::from_static(FrameType::MaxPushId as u64),
             VarInt::from_static(id.encoded_len() as u64),
         ),
-        Frame::Unknown(p) => (p.frame_type(), VarInt::new(p.payload().len() as u64).ok()?),
+        Frame::Unknown(p) => {
+            // WT_STREAM (0x41) は長さを持たないため HTTP/3 フレームとして送信できない。
+            // `encode_unknown_frame` も拒否するため、長さを返すと「嘘の長さ」になる
+            // (draft-ietf-webtrans-http3-16 Section 4.3)。
+            if p.frame_type().get() == 0x41 {
+                return None;
+            }
+            (p.frame_type(), VarInt::new(p.payload().len() as u64).ok()?)
+        }
     };
 
     let header_len = frame_type.encoded_len() + payload_len.encoded_len();

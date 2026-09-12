@@ -2,7 +2,7 @@
 //!
 //! WebTransport CONNECT ストリーム上の Capsule デコード・処理を担う
 //! `Connection` メソッド群。
-//! (draft-ietf-webtrans-http3-15 Section 5.6, 6)
+//! (draft-ietf-webtrans-http3-16 Section 5.6, 6)
 
 use crate::error::{Error, ErrorCode};
 use crate::event::{Event, WebTransportEvent};
@@ -16,14 +16,20 @@ impl Connection {
     ///
     /// DATA フレームのペイロードを Capsule デコードバッファに追加し、
     /// 完全な Capsule が得られるまでデコードを試みる。
-    /// (draft-ietf-webtrans-http3-15 Section 5.6)
+    /// (draft-ietf-webtrans-http3-16 Section 5.6)
     pub(crate) fn process_wt_capsule_data(
         &mut self,
         session_id: u64,
         data: &[u8],
     ) -> Result<(), Error> {
-        // セッションの capsule_buf にデータを追加
+        // セッションの capsule_buf にデータを追加する。
+        // ピアが巨大な length を宣言したまま少しずつ送るとバッファが増え続けるため
+        // 上限を設ける (セッション確立後の経路にも DoS 対策が必要)。
+        const MAX_ESTABLISHED_CAPSULE_BUF: usize = 64 * 1024;
         if let Some(session) = self.wt_sessions.get_mut(&session_id) {
+            if session.capsule_buf.len() + data.len() > MAX_ESTABLISHED_CAPSULE_BUF {
+                return Err(Error::StreamError(ErrorCode::MessageError));
+            }
             session.capsule_buf.extend_from_slice(data);
         } else {
             return Ok(());
@@ -34,16 +40,25 @@ impl Connection {
             if session.capsule_buf.is_empty() {
                 break;
             }
-            let buf = session.capsule_buf.clone();
+            // 毎回クローンすると O(n^2) になるため、消費済みバイトだけを
+            // 取り出してデコードする (バッファ全体のコピーを避ける)。
+            let start = session.capsule_buf_start;
+            let buf = session.capsule_buf[start..].to_vec();
 
             match crate::webtransport::Capsule::decode(&buf) {
                 Ok(Some((capsule, consumed))) => {
                     let has_trailing = buf.len() > consumed;
                     let is_close_session =
                         matches!(capsule, crate::webtransport::Capsule::CloseSession { .. });
-                    // バッファから消費済み部分を除去
+                    // バッファから消費済み部分を除去する。
+                    // drain を毎回行うと O(n^2) になるため、読み出し位置を進め、
+                    // 半分割以上を消費した時点でまとめて切り詰める。
                     if let Some(session) = self.wt_sessions.get_mut(&session_id) {
-                        session.capsule_buf.drain(..consumed);
+                        session.capsule_buf_start += consumed;
+                        if session.capsule_buf_start * 2 >= session.capsule_buf.len() {
+                            session.capsule_buf.drain(..session.capsule_buf_start);
+                            session.capsule_buf_start = 0;
+                        }
                     }
 
                     // Capsule を処理してイベントに変換
@@ -58,6 +73,14 @@ impl Connection {
                 }
                 Ok(None) => {
                     // バッファ不足: 次の DATA フレームを待つ
+                    // 未消費分が上限に近づいたら切り詰めてメモリを解放する
+                    if let Some(session) = self.wt_sessions.get_mut(&session_id)
+                        && session.capsule_buf_start > 0
+                        && session.capsule_buf.len() > MAX_ESTABLISHED_CAPSULE_BUF
+                    {
+                        session.capsule_buf.drain(..session.capsule_buf_start);
+                        session.capsule_buf_start = 0;
+                    }
                     break;
                 }
                 Err(_) => {
@@ -85,7 +108,7 @@ impl Connection {
                 message,
             } => {
                 // WT_CLOSE_SESSION: セッションを終了し、error_code / message を通知する
-                // (draft-ietf-webtrans-http3-15 Section 6)
+                // (draft-ietf-webtrans-http3-16 Section 6)
                 //
                 // 終了後は tombstone (`closed_wt_sessions`) 経由で追加データを
                 // H3_MESSAGE_ERROR として拒否する (draft-ietf-webtrans-http3-16 Section 6)
@@ -98,7 +121,7 @@ impl Connection {
             }
             Capsule::DrainSession => {
                 // WT_DRAIN_SESSION: 内部状態を Draining へ遷移し、イベントで通知する
-                // (draft-ietf-webtrans-http3-15 Section 4.7)
+                // (draft-ietf-webtrans-http3-16 Section 4.7)
                 // セッションは即座に終了しないが、Connection 層は以後の新規
                 // ストリーム/データグラム送信を拒否する。
                 if let Some(session) = self.wt_sessions.get_mut(&session_id)
@@ -111,30 +134,102 @@ impl Connection {
                     ));
                 }
             }
-            Capsule::MaxData { .. }
-            | Capsule::MaxStreams { .. }
-            | Capsule::DataBlocked { .. }
-            | Capsule::StreamsBlocked { .. } => {
-                // フロー制御カプセル: セッションのフロー制御有効性を確認
+            Capsule::MaxData { maximum } => {
+                // ピアが広告した送信側データ上限を自層に反映する
+                // (draft-ietf-webtrans-http3-16 Section 5.6.4)。
+                // 増加しない値は WT_FLOW_CONTROL_ERROR でセッションを閉じる。
+                // フロー制御が有効でないセッションではカプセル自体を無視する
+                // (draft-ietf-webtrans-http3-16 Section 5.1)。
                 let fc_enabled = self
                     .wt_sessions
                     .get(&session_id)
                     .is_some_and(|s| s.flow_control_enabled);
-
                 if fc_enabled {
-                    // フロー制御有効: 上位層に通知して Session::process_capsule で処理
-                    self.events
-                        .push_back(Event::WebTransport(WebTransportEvent::Capsule {
+                    let accepted = self
+                        .wt_sessions
+                        .get_mut(&session_id)
+                        .is_some_and(|s| s.apply_max_data(*maximum));
+                    if !accepted {
+                        self.terminate_wt_session_with(
                             session_id,
-                            capsule: capsule.clone(),
-                        }));
+                            WtErrorCode::FlowControlError as u64,
+                            0,
+                            String::new(),
+                        );
+                        return Ok(());
+                    }
+                    self.notify_wt_flow_control_capsule(session_id, capsule);
                 }
-                // フロー制御無効時は無視 (Section 5.1)
+            }
+            Capsule::MaxStreams {
+                bidirectional,
+                maximum,
+            } => {
+                // ピアが広告した送信側ストリーム上限を自層に反映する
+                // (draft-ietf-webtrans-http3-16 Section 5.6.2)。
+                // 2^60 超過と増加しない値は WT_FLOW_CONTROL_ERROR でセッションを閉じる。
+                let fc_enabled = self
+                    .wt_sessions
+                    .get(&session_id)
+                    .is_some_and(|s| s.flow_control_enabled);
+                if fc_enabled {
+                    let accepted = self
+                        .wt_sessions
+                        .get_mut(&session_id)
+                        .is_some_and(|s| s.apply_max_streams(*bidirectional, *maximum));
+                    if !accepted {
+                        self.terminate_wt_session_with(
+                            session_id,
+                            WtErrorCode::FlowControlError as u64,
+                            0,
+                            String::new(),
+                        );
+                        return Ok(());
+                    }
+                    self.notify_wt_flow_control_capsule(session_id, capsule);
+                }
+            }
+            Capsule::DataBlocked { maximum } => {
+                // ピアが「データ送信でブロックしている」と通知してきた。
+                // 自層の送信上限の判定には影響しないため、記録して通知するだけにする
+                // (draft-ietf-webtrans-http3-16 Section 5.6.4)。
+                let _ = maximum;
+                let fc_enabled = self
+                    .wt_sessions
+                    .get(&session_id)
+                    .is_some_and(|s| s.flow_control_enabled);
+                if fc_enabled {
+                    self.notify_wt_flow_control_capsule(session_id, capsule);
+                }
+            }
+            Capsule::StreamsBlocked { maximum, .. } => {
+                // ピアが「ストリーム開設でブロックしている」と通知してきた。
+                // 2^60 を超える値はセッションエラー
+                // (draft-ietf-webtrans-http3-16 Section 5.6.3: "MUST close the
+                // WebTransport session with a WT_FLOW_CONTROL_ERROR error code")。
+                // それ以外は自層の送信上限の判定に影響しないため通知のみ行う。
+                // 将来のドラフトで変更される可能性がある
+                let fc_enabled = self
+                    .wt_sessions
+                    .get(&session_id)
+                    .is_some_and(|s| s.flow_control_enabled);
+                if fc_enabled {
+                    if *maximum > crate::webtransport::MAX_STREAMS_LIMIT {
+                        self.terminate_wt_session_with(
+                            session_id,
+                            WtErrorCode::FlowControlError as u64,
+                            0,
+                            String::new(),
+                        );
+                        return Ok(());
+                    }
+                    self.notify_wt_flow_control_capsule(session_id, capsule);
+                }
             }
             Capsule::Unknown { .. } => {
                 // 禁止 Capsule (WT_MAX_STREAM_DATA / WT_STREAM_DATA_BLOCKED) は
                 // セッションエラーとして扱う
-                // (draft-ietf-webtrans-http3-15 Section 5.4: "Endpoints MUST treat
+                // (draft-ietf-webtrans-http3-16 Section 5.4: "Endpoints MUST treat
                 // receipt of a WT_MAX_STREAM_DATA or a WT_STREAM_DATA_BLOCKED
                 // capsule as a session error.")
                 // 将来のドラフトで変更される可能性がある
@@ -146,16 +241,33 @@ impl Connection {
                         "prohibited capsule received".to_string(),
                     );
                 }
-                // その他の不明な Capsule は無視 (draft-ietf-webtrans-http3-15)
+                // その他の不明な Capsule は無視 (draft-ietf-webtrans-http3-16)
             }
         }
 
         Ok(())
     }
 
+    /// フロー制御カプセルを上位層へ通知する
+    ///
+    /// 送信側上限の反映は接続層で完了しているため、この通知は
+    /// アプリケーションが観測・ログ用途で使うためのもの
+    /// (draft-ietf-webtrans-http3-16 Section 5.6)。
+    fn notify_wt_flow_control_capsule(
+        &mut self,
+        session_id: u64,
+        capsule: &crate::webtransport::Capsule,
+    ) {
+        self.events
+            .push_back(Event::WebTransport(WebTransportEvent::Capsule {
+                session_id,
+                capsule: capsule.clone(),
+            }));
+    }
+
     /// WebTransport CONNECT ストリーム上の DATA フレーム処理 WebTransport 混在関数の抽出
     ///
-    /// (draft-ietf-webtrans-http3-15 Section 5.6)
+    /// (draft-ietf-webtrans-http3-16 Section 5.6)
     /// WT セッションの DATA フレームを処理する。非 WT ストリームは `false` を返す。
     ///
     /// draft 別の扱い:
@@ -232,7 +344,7 @@ impl Connection {
 
     /// WebTransport CONNECT ストリームの StreamEnd 処理 WebTransport 混在関数の抽出
     ///
-    /// (draft-ietf-webtrans-http3-15 Section 5.6, 6)
+    /// (draft-ietf-webtrans-http3-16 Section 5.6, 6)
     /// FIN 到着時に未完成 Capsule が残っていれば malformed。
     /// WT セッションの FIN はセッション終了を意味する。
     pub(crate) fn handle_wt_stream_end(&mut self, stream_id: u64) -> Result<bool, Error> {

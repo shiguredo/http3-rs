@@ -75,7 +75,7 @@ pub struct ClientConfig {
     pub disable_cert_validation: bool,
     /// HTTP/3 設定
     pub h3_settings: H3Settings,
-    /// WebTransport ドラフトバージョン (デフォルト: Draft15)
+    /// WebTransport ドラフトバージョン (デフォルト: Draft16)
     pub draft_version: DraftVersion,
 }
 
@@ -91,7 +91,7 @@ impl ClientConfig {
             disable_cert_validation: false,
             h3_settings: H3Settings::from_limits(&Limits::default())
                 .expect("Limits::default() values must fit VarInt (RFC 9000 Section 16)"),
-            draft_version: DraftVersion::Draft15,
+            draft_version: DraftVersion::Draft16,
         }
     }
 

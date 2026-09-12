@@ -13,8 +13,8 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::session::{
-    ConnectCommand, WtRecvStream, WtSession, is_forwardable_wt_event, run_connect_send_task,
-    synthesized_session_closed,
+    ConnectCommand, WtRecvStream, WtSession, WtSessionParts, flush_flow_control_capsules,
+    is_forwardable_wt_event, run_connect_send_task, synthesized_session_closed,
 };
 use crate::config::ServerConfig;
 use crate::internal::classify_uni_recv;
@@ -31,10 +31,24 @@ pub struct WtServer {
 impl WtServer {
     /// サーバーをバインドする
     pub fn bind(config: ServerConfig) -> crate::Result<Self> {
+        // WebTransport は QUIC DATAGRAM (RFC 9221) を要求する。datagram provider を
+        // 設定しないと max_datagram_frame_size transport parameter が 0 のままになり、
+        // WebTransport 対応ブラウザ (Chrome / Safari) が接続を拒否する
+        // (draft-ietf-webtrans-http3-16 Section 3.1)。
+        let datagram = s2n_quic::provider::datagram::default::Endpoint::builder()
+            .with_send_capacity(16)
+            .map_err(|e| crate::Error::Internal(format!("datagram send capacity: {e}")))?
+            .with_recv_capacity(16)
+            .map_err(|e| crate::Error::Internal(format!("datagram recv capacity: {e}")))?
+            .build()
+            .map_err(|e| crate::Error::Internal(format!("datagram provider: {e}")))?;
+
         let server = s2n_quic::Server::builder()
             .with_tls((config.cert_pem.as_str(), config.key_pem.as_str()))
             .map_err(crate::Error::transport)?
             .with_io(config.listen_addr)
+            .map_err(crate::Error::transport)?
+            .with_datagram(datagram)
             .map_err(crate::Error::transport)?
             .start()
             .map_err(crate::Error::transport)?;
@@ -210,7 +224,7 @@ impl WtSessionRequest {
 
         // peer SETTINGS の受信を待つ (WebTransport CONNECT の検証に必要)
         // uni_task がクライアントの制御ストリームを処理して SETTINGS を注入するまで待機する
-        // (draft-ietf-webtrans-http3-15 Section 3.1)
+        // (draft-ietf-webtrans-http3-16 Section 3.1)
         loop {
             {
                 let s = state.lock().expect("mutex should not be poisoned");
@@ -358,7 +372,9 @@ impl WtSessionRequest {
     /// `Error::Http3(StreamError(H3_MESSAGE_ERROR))` を返し、CONNECT ストリームを
     /// RESET_STREAM(H3_MESSAGE_ERROR) で閉じる
     /// (draft-ietf-webtrans-http3-16 Section 6)。
-    pub async fn accept(mut self) -> crate::Result<WtSession> {
+    pub async fn accept(
+        mut self,
+    ) -> crate::Result<WtSession<crate::internal::connection_state::ServerConnectionState>> {
         let response_headers = ConnectResponse::new(200).to_headers()?;
 
         // Sans I/O でレスポンスをエンコード
@@ -440,6 +456,20 @@ impl WtSessionRequest {
         let (connect_tx, connect_rx) = mpsc::unbounded_channel::<ConnectCommand>();
         // 送信タスクは connect_tx が全て drop されると終了するため detach する
         tokio::spawn(run_connect_send_task(send_stream, connect_rx));
+
+        // セッション確立時に生成された初期フロー制御カプセル
+        // (WT_MAX_STREAMS / WT_MAX_DATA) を送出する。ピアがカプセルベースの
+        // フロー制御を要求している場合、これが無いとピアは初期クレジット 0 のまま
+        // ストリームを開けない (Safari 26.4 互換。
+        // draft-ietf-webtrans-http3-14 Section 5)。
+        // (draft-ietf-webtrans-http3-16 Section 5.6)
+        flush_flow_control_capsules(
+            &mut *self.state.lock().expect("mutex should not be poisoned"),
+            self.stream_id,
+            &connect_tx,
+        );
+
+        let session_state = Arc::clone(&self.state);
         let recv_task = tokio::spawn(run_server_connect_recv_task(
             self.stream_id,
             self.recv_stream,
@@ -449,15 +479,16 @@ impl WtSessionRequest {
             connect_tx.clone(),
         ));
 
-        Ok(WtSession::new(
-            self.stream_id,
-            self.bidi_acceptor,
-            self.handle,
+        Ok(WtSession::new(WtSessionParts {
+            session_id: self.stream_id,
+            bidi_acceptor: self.bidi_acceptor,
+            handle: self.handle,
             connect_tx,
-            self.uni_rx,
+            uni_rx: self.uni_rx,
             event_rx,
             recv_task,
-        ))
+            state: session_state,
+        }))
     }
 
     /// セッションリクエストを拒否する

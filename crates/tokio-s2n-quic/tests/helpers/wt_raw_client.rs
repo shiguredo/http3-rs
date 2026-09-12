@@ -180,7 +180,7 @@ impl RawWtClient {
             .expect("CONNECT ストリームの登録に成功すること");
 
         let request =
-            ConnectRequest::new("https", "localhost", "/").draft_version(DraftVersion::Draft15);
+            ConnectRequest::new("https", "localhost", "/").draft_version(DraftVersion::Draft16);
         let headers = request
             .to_headers()
             .expect("CONNECT リクエストのヘッダー生成に成功すること");

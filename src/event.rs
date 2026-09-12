@@ -6,7 +6,7 @@ use crate::varint::VarInt;
 
 /// WebTransport セッション終了時にリセットすべきストリームの情報
 ///
-/// (draft-ietf-webtrans-http3-15 Section 6 / Section 4.4 / Section 5.4)
+/// (draft-ietf-webtrans-http3-16 Section 6 / Section 4.4 / Section 5.4)
 ///
 /// `reliable_size` は draft-ietf-quic-reliable-stream-reset の `RESET_STREAM_AT`
 /// に渡す reliable size。WebTransport データストリームの場合は stream header
@@ -29,7 +29,7 @@ pub struct WtStreamReset {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WebTransportEvent {
     /// 双方向ストリーム開始
-    /// (draft-ietf-webtrans-http3-15 Section 4.3)
+    /// (draft-ietf-webtrans-http3-16 Section 4.3)
     BidiStreamOpen {
         /// QUIC ストリーム ID
         stream_id: u64,
@@ -49,7 +49,7 @@ pub enum WebTransportEvent {
         stream_id: u64,
     },
     /// 単方向ストリーム開始
-    /// (draft-ietf-webtrans-http3-15 Section 4.2)
+    /// (draft-ietf-webtrans-http3-16 Section 4.2)
     UniStreamOpen {
         /// QUIC ストリーム ID
         stream_id: u64,
@@ -69,7 +69,7 @@ pub enum WebTransportEvent {
         stream_id: u64,
     },
     /// セッション終了
-    /// (draft-ietf-webtrans-http3-15 Section 6)
+    /// (draft-ietf-webtrans-http3-16 Section 6)
     ///
     /// セッションが終了した。`reset_streams` に含まれる全ストリームに対して
     /// `error_code` を使用して `RESET_STREAM_AT` (reliable_size を伴う) と
@@ -84,16 +84,16 @@ pub enum WebTransportEvent {
         /// (WT_SESSION_GONE / WT_ALPN_ERROR 等)
         error_code: u64,
         /// WT_CLOSE_SESSION カプセルのアプリケーションエラーコード
-        /// (draft-ietf-webtrans-http3-15 Section 6)
+        /// (draft-ietf-webtrans-http3-16 Section 6)
         /// WT_CLOSE_SESSION なしの終了 (FIN / RESET_STREAM) の場合は 0
         close_error_code: u32,
         /// WT_CLOSE_SESSION カプセルのエラーメッセージ
-        /// (draft-ietf-webtrans-http3-15 Section 6)
+        /// (draft-ietf-webtrans-http3-16 Section 6)
         /// WT_CLOSE_SESSION なしの終了の場合は空文字列
         close_message: String,
     },
     /// セッション確立
-    /// (draft-ietf-webtrans-http3-15 Section 3)
+    /// (draft-ietf-webtrans-http3-16 Section 3)
     ///
     /// CONNECT ストリームに 200 OK が返された。
     /// バッファリングされていたストリーム/データグラムがあれば配送される。
@@ -108,7 +108,7 @@ pub enum WebTransportEvent {
         flow_control_enabled: bool,
     },
     /// セッション draining
-    /// (draft-ietf-webtrans-http3-15 Section 4.7)
+    /// (draft-ietf-webtrans-http3-16 Section 4.7)
     ///
     /// WT_DRAIN_SESSION カプセルを受信した。
     /// Section 4.7 では MAY continue だが、本実装はアプリ層の早期終了を促すため
@@ -119,10 +119,14 @@ pub enum WebTransportEvent {
         session_id: u64,
     },
     /// フロー制御カプセル受信
-    /// (draft-ietf-webtrans-http3-15 Section 5.6)
+    /// (draft-ietf-webtrans-http3-16 Section 5.6)
     ///
     /// CONNECT ストリーム上でフロー制御カプセルを受信した。
-    /// 上位層は `webtransport::Session::process_capsule` に渡すこと。
+    ///
+    /// ピアの送信上限の反映は接続層で完了している。この通知はアプリケーションが
+    /// 観測・ログ用途で使うためのもの。送信側の上限判定には
+    /// `Connection::can_send_wt_data` / `Connection::can_open_wt_bidi_stream` を
+    /// 使うこと (draft-ietf-webtrans-http3-16 Section 5.6)。
     Capsule {
         /// WebTransport セッション ID
         session_id: u64,
@@ -130,7 +134,7 @@ pub enum WebTransportEvent {
         capsule: crate::webtransport::Capsule,
     },
     /// データグラム受信
-    /// (draft-ietf-webtrans-http3-15 Section 4.5)
+    /// (draft-ietf-webtrans-http3-16 Section 4.5)
     ///
     /// QUIC DATAGRAM フレームから WebTransport データグラムを受信した。
     Datagram {
@@ -140,7 +144,7 @@ pub enum WebTransportEvent {
         payload: Vec<u8>,
     },
     /// データストリームのリセット受信
-    /// (draft-ietf-webtrans-http3-15 Section 4.4)
+    /// (draft-ietf-webtrans-http3-16 Section 4.4)
     ///
     /// WebTransport セッションに属するデータストリームに対して RESET_STREAM を
     /// 受信した。アプリケーション層はセッション ID と application error code を
@@ -156,12 +160,12 @@ pub enum WebTransportEvent {
         ///
         /// `reset_stream_at` transport parameter がネゴシエートされている場合、
         /// この値は stream header (stream type / signal value + session_id varint)
-        /// のバイト数以上であることが期待される (draft-ietf-webtrans-http3-15
+        /// のバイト数以上であることが期待される (draft-ietf-webtrans-http3-16
         /// Section 4.4)。
         final_size: u64,
     },
     /// データストリームへの STOP_SENDING 受信
-    /// (draft-ietf-webtrans-http3-15 Section 4.4)
+    /// (draft-ietf-webtrans-http3-16 Section 4.4)
     StreamStopSending {
         /// WebTransport セッション ID
         session_id: u64,

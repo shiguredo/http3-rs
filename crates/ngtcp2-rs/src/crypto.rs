@@ -13,6 +13,7 @@
 
 use std::ffi::{CString, c_void};
 use std::path::Path;
+use std::sync::Arc;
 
 use aws_lc_sys::{
     SSL, SSL_CTX, SSL_CTX_free, SSL_CTX_new, SSL_CTX_set_alpn_protos, SSL_CTX_use_PrivateKey_file,
@@ -37,8 +38,12 @@ pub struct TlsContext {
     ///
     /// `add_ca_cert_pem` の有効性判定に使用する。
     verify_peer: bool,
-    // ALPN コールバックで使用するデータ (サーバー用)
-    // コールバックに渡したポインタを保持し、Drop で解放する
+    /// ALPN コールバック引数に渡した `Arc<Vec<u8>>` の生ポインタ
+    ///
+    /// `Arc::into_raw` でリークさせて安定したアドレスを得る。`TlsSession` が
+    /// 同じ `Arc` を clone して保持するため、`TlsContext` が先に drop されても
+    /// データは生存する (無条件に解放すると use-after-free になる)。
+    /// 解放は `TlsContext::drop` で `Arc::from_raw` により行う。
     alpn_data: Option<*mut Vec<u8>>,
 }
 
@@ -175,10 +180,14 @@ impl TlsContext {
                 )));
             }
 
-            // ALPN コールバックを設定 (サーバー用)
+            // ALPN コールバックを設定 (サーバー用)。
+            // `Arc<Vec<u8>>` を Box で確保し、そのポインタをコールバック引数に渡す。
+            // `TlsSession` が同じ Arc を clone して保持するため、TlsContext が
+            // 先に drop されてもデータは生存する。
             let alpn_wire = Self::encode_alpn(alpn);
-            let alpn_data = Box::new(alpn_wire);
-            let alpn_ptr = Box::into_raw(alpn_data);
+            let alpn_arc = Arc::new(alpn_wire);
+            // コールバック引数用に生ポインタを取り出す (参照カウントは保持)
+            let alpn_ptr = Arc::into_raw(alpn_arc);
 
             aws_lc_sys::SSL_CTX_set_alpn_select_cb(
                 ctx,
@@ -190,7 +199,7 @@ impl TlsContext {
                 ctx,
                 is_server: true,
                 verify_peer: false,
-                alpn_data: Some(alpn_ptr),
+                alpn_data: Some(alpn_ptr as *mut Vec<u8>),
             })
         }
     }
@@ -272,9 +281,21 @@ impl TlsContext {
                 SSL_set_connect_state(ssl);
             }
 
+            // ALPN データの所有権をセッションにも共有する。`TlsContext` が先に
+            // drop されてもコールバック引数が解放済みメモリを指さないようにする。
             Ok(TlsSession {
                 ssl,
                 is_server: self.is_server,
+                _alpn_data: self.alpn_data.map(|ptr| {
+                    // SAFETY: ptr は new_server が Arc::into_raw で作ったポインタ。
+                    // ここで clone して参照カウントを増やす。
+                    let arc = Arc::from_raw(ptr as *const Vec<u8>);
+                    let cloned = Arc::clone(&arc);
+                    // from_raw で作った Arc はスコープ終了で参照カウントを戻すため、
+                    // 元のポインタの分は維持される。
+                    std::mem::forget(arc);
+                    cloned
+                }),
             })
         }
     }
@@ -301,9 +322,10 @@ impl Drop for TlsContext {
     fn drop(&mut self) {
         if !self.ctx.is_null() {
             unsafe {
-                // ALPN コールバックで設定したデータを解放
-                if let Some(alpn_ptr) = self.alpn_data {
-                    let _ = Box::from_raw(alpn_ptr);
+                // ALPN データの参照カウントを 1 つ解放する。`TlsSession` が clone を
+                // 保持している場合はデータは生存し続け、最後の 1 つが解放される。
+                if let Some(alpn_ptr) = self.alpn_data.take() {
+                    let _ = Arc::from_raw(alpn_ptr as *const Vec<u8>);
                 }
                 SSL_CTX_free(self.ctx);
             }
@@ -317,6 +339,10 @@ impl Drop for TlsContext {
 pub struct TlsSession {
     ssl: *mut SSL,
     is_server: bool,
+    /// ALPN コールバック引数の生存を保証するための共有所有権
+    ///
+    /// `TlsContext` の Drop 後もコールバックが有効なデータを参照できるようにする。
+    _alpn_data: Option<Arc<Vec<u8>>>,
 }
 
 // SAFETY: SSL は適切にロックされて使用される
@@ -454,7 +480,10 @@ unsafe extern "C" fn alpn_select_callback(
         return SSL_TLSEXT_ERR_NOACK;
     }
 
-    // SAFETY: arg は TlsContext::new_server で作成した Vec<u8> へのポインタ
+    // SAFETY: arg は TlsContext::new_server が Arc::into_raw で作った
+    // `Arc<Vec<u8>>` のポインタ。`TlsSession` も同じ Arc を保持するため、
+    // TlsContext の Drop 後もデータは生存する。
+    // 参照カウントを増やさずに参照する (増やすと減算漏れの原因になる)。
     let server_alpn = unsafe { &*(arg as *const Vec<u8>) };
     let client_alpn_slice =
         unsafe { std::slice::from_raw_parts(client_alpn, client_alpn_len as usize) };

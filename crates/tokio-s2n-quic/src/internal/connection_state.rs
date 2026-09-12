@@ -8,8 +8,172 @@ use shiguredo_http3::{
 
 use super::UniRecvAction;
 
+/// WebTransport フロー制御の状態操作をロール非依存に扱うための trait
+///
+/// `ClientConnectionState` / `ServerConnectionState` は保持する sans-I/O 接続の
+/// 型だけが異なり、WebTransport フロー制御の操作は同一である。統合層の
+/// カプセル送出ヘルパーをロールで二重化しないために本 trait を使う。
+/// (draft-ietf-webtrans-http3-16 Section 5.6)
+pub trait WtFlowControl {
+    /// 送信待ちのフロー制御カプセルを取り出す
+    fn take_wt_flow_control_capsules(
+        &mut self,
+        session_id: u64,
+    ) -> Vec<shiguredo_http3::webtransport::Capsule>;
+
+    /// セッションのデータ消費を通知する
+    fn wt_data_consumed(&mut self, session_id: u64, bytes: u64);
+
+    /// ストリーム開設を計上する
+    fn wt_stream_opened(&mut self, session_id: u64, bidirectional: bool) -> bool;
+
+    /// データ送信を計上する
+    fn wt_data_sent(&mut self, session_id: u64, bytes: u64) -> bool;
+
+    /// 単方向ストリームを開設可能かどうか
+    fn can_open_wt_uni_stream(&self, session_id: u64) -> bool;
+
+    /// 双方向ストリームを開設可能かどうか
+    fn can_open_wt_bidi_stream(&self, session_id: u64) -> bool;
+
+    /// データを送信可能かどうか
+    fn can_send_wt_data(&self, session_id: u64, bytes: u64) -> bool;
+
+    /// セッションのフロー制御が有効かどうか
+    fn wt_session_flow_control_enabled(&self, session_id: u64) -> bool;
+
+    /// セッションが終了済みかどうか
+    fn wt_session_closed(&self, session_id: u64) -> bool;
+}
+
+/// `MutexGuard` 越しでも同じ操作を行えるようにする
+///
+/// 統合層のヘルパーは `MutexGuard` をそのまま受け取るため、参照実装が要る。
+impl<T: WtFlowControl + ?Sized> WtFlowControl for &mut T {
+    fn take_wt_flow_control_capsules(
+        &mut self,
+        session_id: u64,
+    ) -> Vec<shiguredo_http3::webtransport::Capsule> {
+        (**self).take_wt_flow_control_capsules(session_id)
+    }
+
+    fn wt_data_consumed(&mut self, session_id: u64, bytes: u64) {
+        (**self).wt_data_consumed(session_id, bytes);
+    }
+
+    fn wt_stream_opened(&mut self, session_id: u64, bidirectional: bool) -> bool {
+        (**self).wt_stream_opened(session_id, bidirectional)
+    }
+
+    fn wt_data_sent(&mut self, session_id: u64, bytes: u64) -> bool {
+        (**self).wt_data_sent(session_id, bytes)
+    }
+
+    fn can_open_wt_uni_stream(&self, session_id: u64) -> bool {
+        (**self).can_open_wt_uni_stream(session_id)
+    }
+
+    fn can_open_wt_bidi_stream(&self, session_id: u64) -> bool {
+        (**self).can_open_wt_bidi_stream(session_id)
+    }
+
+    fn can_send_wt_data(&self, session_id: u64, bytes: u64) -> bool {
+        (**self).can_send_wt_data(session_id, bytes)
+    }
+
+    fn wt_session_flow_control_enabled(&self, session_id: u64) -> bool {
+        (**self).wt_session_flow_control_enabled(session_id)
+    }
+
+    fn wt_session_closed(&self, session_id: u64) -> bool {
+        (**self).wt_session_closed(session_id)
+    }
+}
+
+impl WtFlowControl for ServerConnectionState {
+    fn take_wt_flow_control_capsules(
+        &mut self,
+        session_id: u64,
+    ) -> Vec<shiguredo_http3::webtransport::Capsule> {
+        self.h3_conn.take_wt_flow_control_capsules(session_id)
+    }
+
+    fn wt_data_consumed(&mut self, session_id: u64, bytes: u64) {
+        self.h3_conn.wt_data_consumed(session_id, bytes);
+    }
+
+    fn wt_stream_opened(&mut self, session_id: u64, bidirectional: bool) -> bool {
+        self.h3_conn.wt_stream_opened(session_id, bidirectional)
+    }
+
+    fn wt_data_sent(&mut self, session_id: u64, bytes: u64) -> bool {
+        self.h3_conn.wt_data_sent(session_id, bytes)
+    }
+
+    fn can_open_wt_uni_stream(&self, session_id: u64) -> bool {
+        self.h3_conn.can_open_wt_uni_stream(session_id)
+    }
+
+    fn can_open_wt_bidi_stream(&self, session_id: u64) -> bool {
+        self.h3_conn.can_open_wt_bidi_stream(session_id)
+    }
+
+    fn can_send_wt_data(&self, session_id: u64, bytes: u64) -> bool {
+        self.h3_conn.can_send_wt_data(session_id, bytes)
+    }
+
+    fn wt_session_flow_control_enabled(&self, session_id: u64) -> bool {
+        self.h3_conn.wt_session_flow_control_enabled(session_id)
+    }
+
+    fn wt_session_closed(&self, session_id: u64) -> bool {
+        self.h3_conn.wt_session_closed(session_id)
+    }
+}
+
+impl WtFlowControl for ClientConnectionState {
+    fn take_wt_flow_control_capsules(
+        &mut self,
+        session_id: u64,
+    ) -> Vec<shiguredo_http3::webtransport::Capsule> {
+        self.h3_conn.take_wt_flow_control_capsules(session_id)
+    }
+
+    fn wt_data_consumed(&mut self, session_id: u64, bytes: u64) {
+        self.h3_conn.wt_data_consumed(session_id, bytes);
+    }
+
+    fn wt_stream_opened(&mut self, session_id: u64, bidirectional: bool) -> bool {
+        self.h3_conn.wt_stream_opened(session_id, bidirectional)
+    }
+
+    fn wt_data_sent(&mut self, session_id: u64, bytes: u64) -> bool {
+        self.h3_conn.wt_data_sent(session_id, bytes)
+    }
+
+    fn can_open_wt_uni_stream(&self, session_id: u64) -> bool {
+        self.h3_conn.can_open_wt_uni_stream(session_id)
+    }
+
+    fn can_open_wt_bidi_stream(&self, session_id: u64) -> bool {
+        self.h3_conn.can_open_wt_bidi_stream(session_id)
+    }
+
+    fn can_send_wt_data(&self, session_id: u64, bytes: u64) -> bool {
+        self.h3_conn.can_send_wt_data(session_id, bytes)
+    }
+
+    fn wt_session_flow_control_enabled(&self, session_id: u64) -> bool {
+        self.h3_conn.wt_session_flow_control_enabled(session_id)
+    }
+
+    fn wt_session_closed(&self, session_id: u64) -> bool {
+        self.h3_conn.wt_session_closed(session_id)
+    }
+}
+
 /// サーバー側 HTTP/3 接続状態
-pub(crate) struct ServerConnectionState {
+pub struct ServerConnectionState {
     /// HTTP/3 接続 (Sans I/O)
     pub(crate) h3_conn: ServerConnection,
     /// 制御ストリーム ID (送信側)
@@ -178,7 +342,7 @@ impl ServerConnectionState {
 }
 
 /// クライアント側 HTTP/3 接続状態
-pub(crate) struct ClientConnectionState {
+pub struct ClientConnectionState {
     /// HTTP/3 接続 (Sans I/O)
     pub(crate) h3_conn: ClientConnection,
     /// 制御ストリーム ID (送信側)

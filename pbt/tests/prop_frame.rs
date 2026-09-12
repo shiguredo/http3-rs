@@ -389,3 +389,50 @@ fn prop_goaway_from_static_matches_new() -> noprop::TestResult {
     })?;
     Ok(())
 }
+
+/// Property: encoded_frame_len が返す長さは encode_frame の実際の書き込み量と一致する
+///
+/// `Frame::Unknown(0x41)` はエンコードできないため `None` を返し、
+/// 長さの不一致 (嘘の長さ) を起こさないこと (draft-ietf-webtrans-http3-16 Section 4.3)。
+#[test]
+fn prop_encoded_len_matches_actual_encode() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_FRAME_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let payload_len = sample_len(ctx, 0..=4096);
+        let payload = vec![0xABu8; payload_len];
+        let frames = [
+            Frame::Data(DataPayload::new(payload.clone())),
+            Frame::Headers(HeadersPayload::new(payload.clone())),
+            Frame::Unknown(
+                UnknownFrame::new(VarInt::from_static(0x21), payload.clone())
+                    .expect("GREASE フレームは構築できる"),
+            ),
+        ];
+
+        for frame in &frames {
+            let Some(len) = encoded_frame_len(frame) else {
+                continue;
+            };
+            let mut buf = vec![0u8; len];
+            let written = encode_frame(&mut buf, frame).expect("長さが一致するので書き込める");
+            assert_eq!(
+                written, len,
+                "encoded_frame_len と encode_frame の長さが一致しない"
+            );
+        }
+
+        // WT_STREAM (0x41) は長さを返さない (エンコードも拒否する)
+        let wt_stream = Frame::Unknown(
+            UnknownFrame::new(VarInt::from_static(0x41), payload).expect("WT_STREAM は構築できる"),
+        );
+        assert!(
+            encoded_frame_len(&wt_stream).is_none(),
+            "WT_STREAM (0x41) に長さを返している"
+        );
+        let mut buf = vec![0u8; 64];
+        assert!(encode_frame(&mut buf, &wt_stream).is_none());
+        Ok(())
+    })?;
+    Ok(())
+}

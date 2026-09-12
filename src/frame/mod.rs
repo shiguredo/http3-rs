@@ -190,11 +190,6 @@ impl UnknownFrame {
         &self.payload
     }
 
-    /// ペイロードバイト列を所有権付きで取り出す
-    pub fn into_payload(self) -> Vec<u8> {
-        self.payload
-    }
-
     /// ペイロードバイト数を返す
     pub fn len(&self) -> usize {
         self.payload.len()

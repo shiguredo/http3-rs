@@ -75,8 +75,17 @@ impl Decoder {
         if offset >= data.len() {
             return Err(QpackError::BufferTooShort);
         }
-        let (_, delta_len) = integer::decode_integer(&data[offset..], 7)?;
+        let sign = (data[offset] & 0x80) != 0;
+        let (delta_base, delta_len) = integer::decode_integer(&data[offset..], 7)?;
         offset += delta_len;
+
+        // RFC 9204 Section 4.5.1.2: Required Insert Count が Delta Base 以下の場合、
+        // Sign ビット 1 のフィールドブロックは不正 (MUST)。静的テーブルのみを扱う
+        // 本デコーダーでは Required Insert Count は常に 0 なので、Sign ビット 1 は
+        // すべて不正となる。
+        if sign && ric <= delta_base {
+            return Err(QpackError::DecodeFailed);
+        }
 
         // ヘッダーをデコード
         let mut headers = Vec::new();
@@ -191,8 +200,9 @@ impl Decoder {
         // Decode name
         // Re-read to get huffman flag
         let is_huffman = (data[0] & 0x08) != 0;
+        let name_len = usize::try_from(name_len_value).map_err(|_| QpackError::DecodeFailed)?;
         let (name, name_bytes) =
-            self.decode_string_with_len(&data[offset..], name_len_value as usize, is_huffman)?;
+            self.decode_string_with_len(&data[offset..], name_len, is_huffman)?;
         offset += name_bytes;
 
         // Decode value
@@ -585,8 +595,8 @@ impl DynamicDecoder {
 
         // Decode name
         let is_huffman = (data[0] & 0x08) != 0;
-        let (name, name_bytes) =
-            decode_string_with_len(&data[offset..], name_len_value as usize, is_huffman)?;
+        let name_len = usize::try_from(name_len_value).map_err(|_| QpackError::DecodeFailed)?;
+        let (name, name_bytes) = decode_string_with_len(&data[offset..], name_len, is_huffman)?;
         offset += name_bytes;
 
         // Decode value
@@ -726,6 +736,30 @@ mod tests {
         let data = [0x00, 0x00, 0xff, 0x24]; // 0xc0 | 63 + continuation
         let result = decoder.decode(&data);
         assert!(result.is_err());
+    }
+
+    /// RFC 9204 Section 4.5.1.2: Required Insert Count=0 で Sign=1 の
+    /// フィールドブロックは不正 (MUST)
+    #[test]
+    fn test_static_decoder_rejects_sign_bit_with_zero_ric() {
+        let decoder = Decoder::new();
+        // Required Insert Count=0, Sign=1, Delta Base=0, Indexed Field (static :method GET)
+        // 0x80 = Sign=1 + Delta Base=0
+        let data = [0x00, 0x80, 0xd1];
+        assert!(
+            decoder.decode(&data).is_err(),
+            "Sign=1 / Required Insert Count=0 が受理されている"
+        );
+    }
+
+    /// Required Insert Count=0 で Sign=0 は正常に受理されること
+    #[test]
+    fn test_static_decoder_accepts_sign_bit_zero() {
+        let decoder = Decoder::new();
+        let data = [0x00, 0x00, 0xd1];
+        let headers = decoder.decode(&data).expect("Sign=0 は受理される");
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].name(), b":method");
     }
 
     #[test]

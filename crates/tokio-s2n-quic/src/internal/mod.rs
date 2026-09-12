@@ -1,8 +1,12 @@
-//! 内部モジュール (pub(crate))
+//! 内部モジュール
+//!
+//! 原則として crate 内に閉じるが、`connection_state` の接続状態型は
+//! `webtransport::WtSession` の型引数として公開 API に現れるため `pub` とする
+//! (Rust の private-in-public 検査を満たすため)。
 
 use bytes::Bytes;
 
-pub(crate) mod connection_state;
+pub mod connection_state;
 
 /// 単方向ストリーム受信結果に応じた sans-I/O 層への伝達方法
 #[derive(Debug, PartialEq, Eq)]

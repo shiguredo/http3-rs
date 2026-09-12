@@ -57,8 +57,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "fuzz_webtransport_session"
-path = "fuzz_targets/fuzz_webtransport_session.rs"
+name = "fuzz_wt_flow_control"
+path = "fuzz_targets/fuzz_wt_flow_control.rs"
 test = false
 doc = false
 bench = false

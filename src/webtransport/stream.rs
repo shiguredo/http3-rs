@@ -1,4 +1,4 @@
-//! WebTransport ストリーム (draft-ietf-webtrans-http3-15 Section 4.2, 4.3, 9.3, 9.4)
+//! WebTransport ストリーム (draft-ietf-webtrans-http3-16 Section 4.2, 4.3, 9.3, 9.4)
 //!
 //! WebTransport データストリームの管理を提供。
 
@@ -55,7 +55,7 @@ pub enum StreamHeaderDecodeError {
     InvalidFormat,
     /// Session ID が client-initiated bidirectional stream ID ではない
     ///
-    /// 呼び出し側は H3_ID_ERROR で接続を閉じる (draft-ietf-webtrans-http3-15 Section 4)。
+    /// 呼び出し側は H3_ID_ERROR で接続を閉じる (draft-ietf-webtrans-http3-16 Section 4)。
     /// 将来のドラフトで変更される可能性がある
     InvalidSessionId,
     /// Session ID が QUIC ストリーム ID 空間の上限 (`2^62 - 1`) を超えている
@@ -141,7 +141,7 @@ impl StreamHeader {
         offset += len;
 
         // session_id は client-initiated bidirectional stream ID でなければならない
-        // (draft-ietf-webtrans-http3-15 Section 4)
+        // (draft-ietf-webtrans-http3-16 Section 4)
         if !session_id.is_multiple_of(4) {
             return Err(StreamHeaderDecodeError::InvalidSessionId);
         }
@@ -179,7 +179,7 @@ impl StreamHeader {
         offset += len;
 
         // session_id は client-initiated bidirectional stream ID でなければならない
-        // (draft-ietf-webtrans-http3-15 Section 4)
+        // (draft-ietf-webtrans-http3-16 Section 4)
         if !session_id.is_multiple_of(4) {
             return Err(StreamHeaderDecodeError::InvalidSessionId);
         }
@@ -302,36 +302,11 @@ pub enum ClassifiedUniStream {
     },
 }
 
-/// 単方向ストリームの先頭バイトからストリームタイプを分類する
-///
-/// バッファ不足の場合は `Err(varint::DecodeError::BufferTooShort)` を返す。
-/// WebTransport ストリームの場合は session_id もデコードする必要があるため、
-/// session_id のデコードにもバッファが不足している場合は `Err` を返す。
-///
-/// この関数は最小限のパースのみ行い、session_id の正当性 (`session_id % 4 == 0`) は
-/// 検証しない。呼び出し側で検証する必要がある
-/// (draft-ietf-webtrans-http3-15 Section 4)。
-pub fn classify_uni_stream(buf: &[u8]) -> Result<ClassifiedUniStream, varint::DecodeError> {
-    let (stream_type, type_len) = varint::decode(buf)?;
-    if stream_type.get() == UNIDIRECTIONAL_STREAM_TYPE {
-        let (session_id, session_id_len) = varint::decode(&buf[type_len..])?;
-        Ok(ClassifiedUniStream::WebTransport {
-            session_id: session_id.get(),
-            data_offset: type_len + session_id_len,
-        })
-    } else {
-        Ok(ClassifiedUniStream::Http3 {
-            stream_type: stream_type.get(),
-            data_offset: type_len,
-        })
-    }
-}
-
 /// 単方向ストリームの先頭バイトからストリームタイプを分類する (session_id 検証付き)
 ///
-/// `classify_uni_stream()` と同様だが、WebTransport ストリームの場合に
+/// WebTransport ストリームの場合に
 /// session_id が client-initiated bidirectional stream ID (`session_id % 4 == 0`)
-/// であることを検証する (draft-ietf-webtrans-http3-15 Section 4)。
+/// であることを検証する (draft-ietf-webtrans-http3-16 Section 4)。
 ///
 /// 不正な session_id の場合は `Err(StreamHeaderDecodeError::InvalidSessionId)` を返す。
 /// 呼び出し側は H3_ID_ERROR で接続を閉じる必要がある。
@@ -356,29 +331,6 @@ pub fn classify_uni_stream_checked(
             stream_type: stream_type.get(),
             data_offset: type_len,
         })
-    }
-}
-
-/// ストリームタイプを判定する補助関数
-pub mod stream_type {
-    /// QUIC ストリーム ID がクライアント開始かどうか
-    pub fn is_client_initiated(stream_id: u64) -> bool {
-        stream_id & 0x01 == 0
-    }
-
-    /// QUIC ストリーム ID がサーバー開始かどうか
-    pub fn is_server_initiated(stream_id: u64) -> bool {
-        stream_id & 0x01 != 0
-    }
-
-    /// QUIC ストリーム ID が双方向かどうか
-    pub fn is_bidirectional(stream_id: u64) -> bool {
-        stream_id & 0x02 == 0
-    }
-
-    /// QUIC ストリーム ID が単方向かどうか
-    pub fn is_unidirectional(stream_id: u64) -> bool {
-        stream_id & 0x02 != 0
     }
 }
 
@@ -451,25 +403,6 @@ mod tests {
 
         stream.add_bytes_sent(200);
         assert_eq!(stream.bytes_sent(), 300);
-    }
-
-    #[test]
-    fn test_stream_type_helpers() {
-        // Client-initiated bidirectional (0b00)
-        assert!(stream_type::is_client_initiated(0));
-        assert!(stream_type::is_bidirectional(0));
-
-        // Server-initiated bidirectional (0b01)
-        assert!(stream_type::is_server_initiated(1));
-        assert!(stream_type::is_bidirectional(1));
-
-        // Client-initiated unidirectional (0b10)
-        assert!(stream_type::is_client_initiated(2));
-        assert!(stream_type::is_unidirectional(2));
-
-        // Server-initiated unidirectional (0b11)
-        assert!(stream_type::is_server_initiated(3));
-        assert!(stream_type::is_unidirectional(3));
     }
 
     #[test]

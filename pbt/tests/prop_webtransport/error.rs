@@ -1,5 +1,5 @@
 //! ApplicationErrorCode / Error のプロパティと CloseSession メッセージ長制約
-//! (draft-ietf-webtrans-http3-15 Section 6, 9.5)
+//! (draft-ietf-webtrans-http3-16 Section 6, 9.5)
 
 use pbt::strategies::sample_len;
 use shiguredo_http3::webtransport::{ApplicationErrorCode, Error, ErrorCode};
@@ -25,7 +25,7 @@ fn long_message(ctx: &mut noprop::TestCaseContext) -> String {
 }
 
 // =============================================================================
-// ApplicationErrorCode (draft-ietf-webtrans-http3-15 Section 9.5)
+// ApplicationErrorCode (draft-ietf-webtrans-http3-16 Section 9.5)
 // =============================================================================
 
 /// Property: アプリケーションエラーコードのラウンドトリップ
@@ -155,7 +155,7 @@ fn prop_error_from_http3_code_protocol() -> noprop::TestResult {
 }
 
 // =============================================================================
-// CloseSession メッセージ長制約 (draft-ietf-webtrans-http3-15 Section 6)
+// CloseSession メッセージ長制約 (draft-ietf-webtrans-http3-16 Section 6)
 // =============================================================================
 
 /// Property: 1024 バイト以下のメッセージはそのまま保存
@@ -227,7 +227,7 @@ fn prop_close_session_message_utf8_boundary() -> noprop::TestResult {
 }
 
 // =============================================================================
-// 予約コードポイント衝突回避 (draft-ietf-webtrans-http3-15 Section 9.5)
+// 予約コードポイント衝突回避 (draft-ietf-webtrans-http3-16 Section 9.5)
 // =============================================================================
 
 /// Property: to_http3_code() の結果が予約コードポイント (x - 0x21) % 0x1f == 0 でない

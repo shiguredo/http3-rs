@@ -157,14 +157,14 @@ impl ServerConnection {
 
     /// QUIC DATAGRAM フレームのペイロードを受信
     ///
-    /// (draft-ietf-webtrans-http3-15 Section 4.5)
+    /// (draft-ietf-webtrans-http3-16 Section 4.5)
     pub fn feed_datagram(&mut self, data: &[u8]) -> Result<(), Error> {
         self.inner.feed_datagram(data)
     }
 
     /// WebTransport データグラムを送信用にエンコードする
     ///
-    /// (draft-ietf-webtrans-http3-15 Section 4.5)
+    /// (draft-ietf-webtrans-http3-16 Section 4.5)
     pub fn send_datagram(&self, session_id: u64, payload: &[u8]) -> Result<Vec<u8>, Error> {
         self.inner.send_datagram(session_id, payload)
     }
@@ -192,10 +192,87 @@ impl ServerConnection {
         self.inner.register_local_wt_stream(session_id, stream_id)
     }
 
+    /// WebTransport セッションの送信待ちフロー制御カプセルを取り出す
+    ///
+    /// 取り出したカプセルは CONNECT ストリーム上へ HTTP/3 DATA フレームとして
+    /// 送出する (`Capsule::encode_as_data_frame` を使うこと)。
+    /// セッション確立直後は、ピアがカプセルベースのフロー制御を要求している場合の
+    /// 初期 `WT_MAX_STREAMS` / `WT_MAX_DATA` が含まれる (Safari 26.4 互換)。
+    /// (draft-ietf-webtrans-http3-16 Section 5.6)
+    pub fn take_wt_flow_control_capsules(
+        &mut self,
+        session_id: u64,
+    ) -> Vec<crate::webtransport::Capsule> {
+        self.inner.take_wt_flow_control_capsules(session_id)
+    }
+
+    /// WebTransport セッションのデータ消費を通知する
+    ///
+    /// 受信ウィンドウが半分を下回っていれば `WT_MAX_DATA` カプセルが生成される。
+    /// (draft-ietf-webtrans-http3-16 Section 5.6.4)
+    pub fn wt_data_consumed(&mut self, session_id: u64, bytes: u64) {
+        self.inner.wt_data_consumed(session_id, bytes);
+    }
+
+    /// WebTransport の単方向ストリームを開設してよいかどうかを取得する
+    /// (draft-ietf-webtrans-http3-16 Section 5.6.2)
+    pub fn can_open_wt_uni_stream(&self, session_id: u64) -> bool {
+        self.inner.can_open_wt_uni_stream(session_id)
+    }
+
+    /// WebTransport の双方向ストリームを開設してよいかどうかを取得する
+    /// (draft-ietf-webtrans-http3-16 Section 5.6.2)
+    pub fn can_open_wt_bidi_stream(&self, session_id: u64) -> bool {
+        self.inner.can_open_wt_bidi_stream(session_id)
+    }
+
+    /// WebTransport データストリームを開設したことを計上する
+    ///
+    /// 上限に達している場合は `false` を返し `WT_STREAMS_BLOCKED` を生成する。
+    /// (draft-ietf-webtrans-http3-16 Section 5.6.2)
+    pub fn wt_stream_opened(&mut self, session_id: u64, bidirectional: bool) -> bool {
+        self.inner.wt_stream_opened(session_id, bidirectional)
+    }
+
+    /// WebTransport データを送信したことを計上する
+    ///
+    /// 上限に達している場合は `false` を返し `WT_DATA_BLOCKED` を生成する。
+    /// (draft-ietf-webtrans-http3-16 Section 5.6.4)
+    pub fn wt_data_sent(&mut self, session_id: u64, bytes: u64) -> bool {
+        self.inner.wt_data_sent(session_id, bytes)
+    }
+
+    /// WebTransport データを送信してよいかどうかを取得する
+    /// (draft-ietf-webtrans-http3-16 Section 5.6.4)
+    pub fn can_send_wt_data(&self, session_id: u64, bytes: u64) -> bool {
+        self.inner.can_send_wt_data(session_id, bytes)
+    }
+
+    /// WebTransport セッションのフロー制御が有効かどうかを取得する
+    pub fn wt_session_flow_control_enabled(&self, session_id: u64) -> bool {
+        self.inner.wt_session_flow_control_enabled(session_id)
+    }
+
+    /// WebTransport セッションが終了済みかどうかを取得する
+    ///
+    /// フロー制御違反 (増加しない `WT_MAX_DATA` 等) でセッションが閉じたことを
+    /// 観測するために使う (draft-ietf-webtrans-http3-16 Section 5.6.2, 5.6.4)。
+    pub fn wt_session_closed(&self, session_id: u64) -> bool {
+        self.inner.wt_session_closed(session_id)
+    }
+
+    /// ピアが広告した送信側データ上限を取得する
+    ///
+    /// フロー制御が有効でない場合、またはピアから未受信の場合は `None`。
+    /// (draft-ietf-webtrans-http3-16 Section 5.6.4)
+    pub fn wt_remote_max_data(&self, session_id: u64) -> Option<u64> {
+        self.inner.wt_remote_max_data(session_id)
+    }
+
     /// QUIC transport parameter に基づく WebTransport 前提条件を注入する
     ///
     /// WebTransport CONNECT 受信処理前に呼び出す必要がある。
-    /// (draft-ietf-webtrans-http3-15 Section 3.1)
+    /// (draft-ietf-webtrans-http3-16 Section 3.1)
     pub fn set_webtransport_transport_verified(
         &mut self,
         max_datagram_frame_size_nonzero: bool,

@@ -1,7 +1,7 @@
 //! WebTransport CONNECT レスポンス connect/mod.rs からの分離
 //!
 //! 拡張 CONNECT レスポンスの構築とバリデーションを担う。
-//! (draft-ietf-webtrans-http3-15 Section 3.2)
+//! (draft-ietf-webtrans-http3-16 Section 3.2)
 
 use crate::qpack::Header;
 
@@ -12,7 +12,7 @@ use super::sf_parser::parse_sf_item_string;
 pub struct ConnectResponse {
     /// HTTP ステータスコード
     pub status: u16,
-    /// `WT-Protocol` ヘッダーで選択されたプロトコル (draft-ietf-webtrans-http3-15 Section 3.3)
+    /// `WT-Protocol` ヘッダーで選択されたプロトコル (draft-ietf-webtrans-http3-16 Section 3.3)
     pub selected_protocol: Option<String>,
 }
 
@@ -53,7 +53,7 @@ impl ConnectResponse {
         self.status / 100 == 2
     }
 
-    /// `WT-Protocol` の検証 (draft-ietf-webtrans-http3-15 Section 3.3)
+    /// `WT-Protocol` の検証 (draft-ietf-webtrans-http3-16 Section 3.3)
     ///
     /// レスポンスの `WT-Protocol` がリクエストの `WT-Available-Protocols` に
     /// 含まれているかを確認する。
@@ -84,11 +84,11 @@ impl ConnectResponse {
         }
     }
 
-    /// `WT-Protocol` ヘッダー値を解析 (draft-ietf-webtrans-http3-15 Section 3.3)
+    /// `WT-Protocol` ヘッダー値を解析 (draft-ietf-webtrans-http3-16 Section 3.3)
     ///
     /// Structured Fields Item 形式 (RFC 9651) から文字列型のみを抽出する。
-    /// 文字列型でない場合は `None` を返す (draft-ietf-webtrans-http3-15 Section 3.3)。
-    /// パラメータ (`;` 以降) は無視する (draft-ietf-webtrans-http3-15 Section 3.3)。
+    /// 文字列型でない場合は `None` を返す (draft-ietf-webtrans-http3-16 Section 3.3)。
+    /// パラメータ (`;` 以降) は無視する (draft-ietf-webtrans-http3-16 Section 3.3)。
     pub fn parse_protocol(header_value: &str) -> Option<String> {
         parse_sf_item_string(header_value)
     }

@@ -187,7 +187,7 @@ fn wt_connect_headers(draft: DraftVersion) -> Vec<Header> {
         Header::new(
             b":protocol",
             match draft {
-                DraftVersion::Draft15 => b"webtransport-h3" as &[u8],
+                DraftVersion::Draft16 => b"webtransport-h3" as &[u8],
                 _ => b"webtransport",
             },
         )
@@ -419,7 +419,7 @@ mod draft15 {
         assert!(peer.is_webtransport_enabled());
         assert_eq!(peer.enable_connect_protocol, Some(true));
 
-        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let headers = wt_connect_headers(DraftVersion::Draft16);
         let frame = build_headers_frame(&headers);
         let result = server.feed_stream(0, &frame, false);
         assert!(
@@ -431,7 +431,7 @@ mod draft15 {
     #[test]
     fn connect_accepted_without_enable_connect_protocol() {
         // ENABLE_CONNECT_PROTOCOL はサーバーが送る設定 (RFC 9220, RFC 8441 Section 3)
-        // クライアントは送信義務がない (draft-ietf-webtrans-http3-15 Section 3.1)
+        // クライアントは送信義務がない (draft-ietf-webtrans-http3-16 Section 3.1)
         let mut server = setup_server(true);
         let client_ctrl = build_draft15_client_ctrl_without_ecp();
         feed_client_settings(&mut server, &client_ctrl);
@@ -440,7 +440,7 @@ mod draft15 {
         assert!(peer.is_webtransport_enabled());
         assert_eq!(peer.enable_connect_protocol, None);
 
-        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let headers = wt_connect_headers(DraftVersion::Draft16);
         let frame = build_headers_frame(&headers);
         let result = server.feed_stream(0, &frame, false);
         assert!(
@@ -457,7 +457,7 @@ mod draft15 {
         let client_ctrl = build_draft15_client_ctrl_with_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let headers = wt_connect_headers(DraftVersion::Draft16);
         let frame = build_headers_frame(&headers);
         let err = server.feed_stream(0, &frame, false).unwrap_err();
         assert!(
@@ -475,7 +475,7 @@ mod draft15 {
         let peer = server.peer_settings().expect("test must succeed");
         assert_eq!(
             peer.webtransport_draft_pattern(),
-            Some(DraftVersion::Draft15)
+            Some(DraftVersion::Draft16)
         );
     }
 }
@@ -613,7 +613,7 @@ mod common {
 
 // =========================================================================
 // フロー制御無効時の同時セッション数制限
-// draft-ietf-webtrans-http3-15 Section 5.1, 5.2
+// draft-ietf-webtrans-http3-16 Section 5.1, 5.2
 // =========================================================================
 
 mod no_flow_control_single_session {
@@ -642,7 +642,7 @@ mod no_flow_control_single_session {
         feed_client_settings(&mut server, &client_ctrl);
 
         // 1 本目: 受理される
-        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let headers = wt_connect_headers(DraftVersion::Draft16);
         let frame = build_headers_frame(&headers);
         server
             .feed_stream(0, &frame, false)
@@ -681,7 +681,7 @@ mod no_flow_control_single_session {
         // SETTINGS イベントを消費
         while let Some(_ev) = client.poll_event().expect("test must succeed") {}
 
-        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let headers = wt_connect_headers(DraftVersion::Draft16);
 
         // 1 本目: 受理される
         client
@@ -699,7 +699,7 @@ mod no_flow_control_single_session {
 
 // =========================================================================
 // WT-Available-Protocols 未送時の WT-Protocol 検証
-// draft-ietf-webtrans-http3-15 Section 3.3
+// draft-ietf-webtrans-http3-16 Section 3.3
 // =========================================================================
 
 mod wt_protocol_without_available_protocols {
@@ -716,7 +716,7 @@ mod wt_protocol_without_available_protocols {
         feed_client_settings(&mut server, &client_ctrl);
 
         // wt-available-protocols 無しの WT CONNECT を受信
-        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let headers = wt_connect_headers(DraftVersion::Draft16);
         let frame = build_headers_frame(&headers);
         server
             .feed_stream(0, &frame, false)
@@ -776,7 +776,7 @@ mod wt_protocol_without_available_protocols {
         while let Some(_ev) = client.poll_event().expect("test must succeed") {}
 
         // wt-available-protocols を含まない WT CONNECT を送信
-        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let headers = wt_connect_headers(DraftVersion::Draft16);
         let stream_id = client
             .send_request(&headers, false)
             .expect("test must succeed");
@@ -822,7 +822,7 @@ mod wt_protocol_without_available_protocols {
 
 // =========================================================================
 // :protocol と SETTINGS でネゴシエートしたドラフトの整合性検証
-// (draft-ietf-webtrans-http3-15 Section 3.2 / 7.1)
+// (draft-ietf-webtrans-http3-16 Section 3.2 / 7.1)
 // =========================================================================
 
 mod protocol_draft_alignment {
@@ -1009,7 +1009,7 @@ mod pending_data_frame {
         let client_ctrl = build_draft15_client_ctrl_with_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let headers = wt_connect_headers(DraftVersion::Draft16);
         let frame = build_headers_then_data(&headers, &[0x00]);
         // 楽観的カプセル送信: Pending 中の DATA はバッファリングされる
         let result = server.feed_stream(0, &frame, false);
@@ -1022,7 +1022,9 @@ mod pending_data_frame {
     /// WebTransport カプセルを DATA フレームとしてエンコードするヘルパー
     fn capsule_data_frame(capsule: &webtransport::Capsule) -> Vec<u8> {
         let mut buf = Vec::new();
-        capsule.encode_as_data_frame(&mut buf);
+        capsule
+            .encode_as_data_frame(&mut buf)
+            .expect("テスト用カプセルのエンコードは成功する");
         buf
     }
 
@@ -1034,7 +1036,7 @@ mod pending_data_frame {
         let client_ctrl = build_draft15_client_ctrl_with_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let headers = wt_connect_headers(DraftVersion::Draft16);
         let frame = build_headers_frame(&headers);
         server
             .feed_stream(0, &frame, false)
@@ -1080,7 +1082,7 @@ mod pending_data_frame {
         let client_ctrl = build_draft15_client_ctrl_with_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let headers = wt_connect_headers(DraftVersion::Draft16);
         let frame = build_headers_then_data(&headers, &[0x00]);
         server
             .feed_stream(0, &frame, false)
@@ -1110,7 +1112,7 @@ mod pending_data_frame {
         let client_ctrl = build_draft15_client_ctrl_with_ecp();
         feed_client_settings(&mut server, &client_ctrl);
 
-        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let headers = wt_connect_headers(DraftVersion::Draft16);
         let frame = build_headers_then_data(&headers, &[0x00]);
         server
             .feed_stream(0, &frame, false)
@@ -1156,7 +1158,7 @@ mod close_session_capsule_framing {
         let client_ctrl = build_draft15_client_ctrl_with_ecp();
         feed_client_settings(server, &client_ctrl);
 
-        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let headers = wt_connect_headers(DraftVersion::Draft16);
         let frame = build_headers_frame(&headers);
         server
             .feed_stream(0, &frame, false)
@@ -1198,7 +1200,9 @@ mod close_session_capsule_framing {
             message: String::from("bye"),
         };
         let mut framed = Vec::new();
-        close_session.encode_as_data_frame(&mut framed);
+        close_session
+            .encode_as_data_frame(&mut framed)
+            .expect("テスト用カプセルのエンコードは成功する");
         server
             .feed_stream(session_id, &framed, false)
             .expect("DATA フレームに包んだ WT_CLOSE_SESSION 送信に成功すること");
@@ -1241,7 +1245,9 @@ mod close_session_capsule_framing {
             message: String::from("bye"),
         };
         let mut raw = Vec::new();
-        close_session.encode(&mut raw);
+        close_session
+            .encode(&mut raw)
+            .expect("テスト用カプセルのエンコードは成功する");
         // 未知フレームなのでエラーにならず、そのまま受理される (フレームボディはスキップされる)
         server
             .feed_stream(session_id, &raw, false)

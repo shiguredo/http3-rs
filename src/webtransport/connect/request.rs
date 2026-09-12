@@ -1,7 +1,7 @@
 //! WebTransport CONNECT リクエスト connect/mod.rs からの分離
 //!
 //! 拡張 CONNECT リクエストの構築とバリデーションを担う。
-//! (draft-ietf-webtrans-http3-15 Section 3.2, 3.3)
+//! (draft-ietf-webtrans-http3-16 Section 3.2, 3.3)
 
 use crate::qpack::Header;
 
@@ -12,31 +12,31 @@ use super::{PROTOCOL_WEBTRANSPORT_DRAFT02, PROTOCOL_WEBTRANSPORT_H3};
 
 #[derive(Debug, Clone)]
 pub struct ConnectRequest {
-    /// ドラフトバージョン (デフォルト: Draft15)
+    /// ドラフトバージョン (デフォルト: Draft16)
     pub draft_version: DraftVersion,
-    /// `:scheme` (MUST be `https` - draft-ietf-webtrans-http3-15 Section 3.2)
+    /// `:scheme` (MUST be `https` - draft-ietf-webtrans-http3-16 Section 3.2)
     pub scheme: String,
-    /// `:authority` (MUST be present - draft-ietf-webtrans-http3-15 Section 3.2)
+    /// `:authority` (MUST be present - draft-ietf-webtrans-http3-16 Section 3.2)
     pub authority: String,
-    /// `:path` (MUST be present - draft-ietf-webtrans-http3-15 Section 3.2)
+    /// `:path` (MUST be present - draft-ietf-webtrans-http3-16 Section 3.2)
     pub path: String,
-    /// `Origin` ヘッダー (ブラウザクライアントの場合は MUST - draft-ietf-webtrans-http3-15 Section 3.2)
+    /// `Origin` ヘッダー (ブラウザクライアントの場合は MUST - draft-ietf-webtrans-http3-16 Section 3.2)
     pub origin: Option<String>,
-    /// `WT-Available-Protocols` ヘッダーから解析したプロトコルリスト (draft-ietf-webtrans-http3-15 Section 3.3)
+    /// `WT-Available-Protocols` ヘッダーから解析したプロトコルリスト (draft-ietf-webtrans-http3-16 Section 3.3)
     ///
     /// 優先度順で列挙する。空の場合はプロトコルネゴシエーションなし。
     pub available_protocols: Vec<String>,
 }
 
 impl ConnectRequest {
-    /// 新しい CONNECT リクエストを作成 (デフォルト: Draft15)
+    /// 新しい CONNECT リクエストを作成 (デフォルト: Draft16)
     pub fn new(
         scheme: impl Into<String>,
         authority: impl Into<String>,
         path: impl Into<String>,
     ) -> Self {
         Self {
-            draft_version: DraftVersion::Draft15,
+            draft_version: DraftVersion::Draft16,
             scheme: scheme.into(),
             authority: authority.into(),
             path: path.into(),
@@ -166,7 +166,7 @@ impl ConnectRequest {
             Some(p) => {
                 let p_str = core::str::from_utf8(p).map_err(|_| ConnectError::InvalidEncoding)?;
                 if p_str == PROTOCOL_WEBTRANSPORT_H3 {
-                    DraftVersion::Draft15
+                    DraftVersion::Draft16
                 } else if p_str == PROTOCOL_WEBTRANSPORT_DRAFT02 {
                     // draft-02 と draft-07 は同じ `:protocol` 値を使用するため
                     // ヘッダーだけでは区別できない。draft-02 として扱う。
@@ -227,7 +227,7 @@ impl ConnectRequest {
         Ok(headers)
     }
 
-    /// draft-ietf-webtrans-http3-15 Section 3.2 に従いリクエストを検証
+    /// draft-ietf-webtrans-http3-16 Section 3.2 に従いリクエストを検証
     ///
     /// 以下を検証する:
     /// - `:scheme` が `https` であること
@@ -248,11 +248,11 @@ impl ConnectRequest {
         Ok(())
     }
 
-    /// `WT-Available-Protocols` ヘッダー値を解析 (draft-ietf-webtrans-http3-15 Section 3.3)
+    /// `WT-Available-Protocols` ヘッダー値を解析 (draft-ietf-webtrans-http3-16 Section 3.3)
     ///
     /// Structured Fields List 形式 (RFC 9651) から文字列型のアイテムのみを抽出する。
-    /// 文字列型以外のアイテムはエラーとして無視する (draft-ietf-webtrans-http3-15 Section 3.3)。
-    /// パラメータ (`;` 以降) は無視する (draft-ietf-webtrans-http3-15 Section 3.3)。
+    /// 文字列型以外のアイテムはエラーとして無視する (draft-ietf-webtrans-http3-16 Section 3.3)。
+    /// パラメータ (`;` 以降) は無視する (draft-ietf-webtrans-http3-16 Section 3.3)。
     pub fn parse_available_protocols(header_value: &str) -> Vec<String> {
         parse_sf_list_strings(header_value)
     }

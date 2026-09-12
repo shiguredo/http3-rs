@@ -1,5 +1,5 @@
 //! Property-Based Testing for WebTransport Capsule Protocol
-//! (draft-ietf-webtrans-http3-15 Section 5.6, 6)
+//! (draft-ietf-webtrans-http3-16 Section 5.6, 6)
 
 use pbt::strategies::{sample_len, sample_varint_raw_in, valid_varint};
 use shiguredo_http3::webtransport::{Capsule, CapsuleValidationError, MAX_STREAMS_LIMIT};
@@ -82,7 +82,9 @@ fn prop_capsule_roundtrip() -> noprop::TestResult {
     runner.run(256, |ctx| {
         let capsule = any_known_capsule(ctx);
         let mut buf = Vec::new();
-        capsule.encode(&mut buf);
+        capsule
+            .encode(&mut buf)
+            .expect("テスト用カプセルのエンコードは成功する");
 
         let (decoded, consumed) = Capsule::decode(&buf)
             .expect("decode should not error for valid encoded capsule")
@@ -108,7 +110,9 @@ fn prop_capsule_data_frame_roundtrip() -> noprop::TestResult {
     runner.run(256, |ctx| {
         let capsule = any_known_capsule(ctx);
         let mut buf = Vec::new();
-        capsule.encode_as_data_frame(&mut buf);
+        capsule
+            .encode_as_data_frame(&mut buf)
+            .expect("テスト用カプセルのエンコードは成功する");
 
         // DATA フレームとしてデコード
         let (frame, consumed) =
@@ -145,7 +149,9 @@ fn prop_capsule_consumed_equals_buffer_length() -> noprop::TestResult {
     runner.run(256, |ctx| {
         let capsule = any_known_capsule(ctx);
         let mut buf = Vec::new();
-        capsule.encode(&mut buf);
+        capsule
+            .encode(&mut buf)
+            .expect("テスト用カプセルのエンコードは成功する");
 
         let (_, consumed) = Capsule::decode(&buf)
             .expect("decode should not error")

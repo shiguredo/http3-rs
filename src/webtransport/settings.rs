@@ -1,4 +1,4 @@
-//! WebTransport SETTINGS (draft-ietf-webtrans-http3-15 Section 9.2)
+//! WebTransport SETTINGS (draft-ietf-webtrans-http3-16 Section 9.2)
 //!
 //! HTTP/3 SETTINGS パラメータの WebTransport 拡張を定義する。
 //!
@@ -17,7 +17,7 @@ use crate::varint::VarInt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     /// WebTransport 有効化 (デフォルト: 0 = WebTransport 無効, 0 より大きければ有効)
-    /// draft-ietf-webtrans-http3-15 Section 3.1, Section 9.2
+    /// draft-ietf-webtrans-http3-16 Section 3.1, Section 9.2
     /// 将来のドラフトで変更される可能性がある
     pub wt_enabled: VarInt,
     /// 初期単方向ストリーム上限 (デフォルト: 0)
@@ -56,7 +56,7 @@ impl Settings {
     }
 
     /// WebTransport 有効化を設定
-    /// draft-ietf-webtrans-http3-15 Section 3.1, Section 9.2
+    /// draft-ietf-webtrans-http3-16 Section 3.1, Section 9.2
     /// 将来のドラフトで変更される可能性がある
     pub fn wt_enabled(mut self, value: VarInt) -> Self {
         self.wt_enabled = value;
@@ -188,7 +188,7 @@ impl Settings {
     /// 将来のドラフトで変更される可能性がある
     pub fn detect_draft_pattern(&self) -> Option<DraftVersion> {
         if self.wt_enabled.get() > 0 {
-            return Some(DraftVersion::Draft15);
+            return Some(DraftVersion::Draft16);
         }
         if self
             .webtransport_max_sessions_draft07
@@ -226,7 +226,7 @@ impl Settings {
     /// - SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI != 0
     /// - SETTINGS_WT_INITIAL_MAX_DATA != 0
     ///
-    /// draft-ietf-webtrans-http3-14 Section 5.1, draft-ietf-webtrans-http3-15 Section 5.1
+    /// draft-ietf-webtrans-http3-14 Section 5.1, draft-ietf-webtrans-http3-16 Section 5.1
     /// 将来のドラフトで変更される可能性がある
     pub fn declares_flow_control(&self) -> bool {
         self.wt_max_sessions_draft14.is_some_and(|v| v.get() > 1)
@@ -237,7 +237,7 @@ impl Settings {
 
     /// ピアとのネゴシエーション結果としてフロー制御が有効かどうか
     ///
-    /// draft-ietf-webtrans-http3-15 Section 5.1:
+    /// draft-ietf-webtrans-http3-16 Section 5.1:
     /// 両端点がフロー制御を使う意図を宣言した場合のみ有効。
     /// 将来のドラフトで変更される可能性がある
     pub fn flow_control_enabled_with_peer(&self, peer: &Self) -> bool {
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn test_detect_draft_pattern_draft15() {
         let settings = Settings::new().wt_enabled(v(1));
-        assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft15));
+        assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft16));
     }
 
     #[test]
@@ -500,7 +500,7 @@ mod tests {
             .wt_enabled(v(1))
             .wt_max_sessions_draft14(v(1))
             .webtransport_max_sessions_draft07(v(1));
-        assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft15));
+        assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft16));
     }
 
     #[test]

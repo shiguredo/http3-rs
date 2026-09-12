@@ -270,12 +270,12 @@ fn is_valid_authority(value: &[u8]) -> bool {
         if rest.is_empty() {
             return true;
         }
-        // ]:port の形式
+        // ]:port の形式。port は 1*DIGIT のため空は不正 (RFC 3986 Section 3.2.3)
         if rest[0] != b':' {
             return false;
         }
         let port = &rest[1..];
-        return port.iter().all(|b| b.is_ascii_digit());
+        return !port.is_empty() && port.iter().all(|b| b.is_ascii_digit());
     }
 
     // host[:port] の形式
@@ -462,6 +462,16 @@ pub fn validate_request_headers(headers: &[Header]) -> Result<(), Error> {
         // :path は空であってはならない (RFC 9114 Section 4.3.1)
         if let Some(p) = path
             && p.is_empty()
+        {
+            return Err(Error::StreamError(ErrorCode::MessageError));
+        }
+        // :path の構文を検証する。Extended CONNECT の :path は対象 URI の path を
+        // 表すため、非 CONNECT と同じ構文 (http/https では path-absolute) を要求する
+        // (RFC 8441 Section 4, RFC 9114 Section 4.3.1)。
+        if let Some(s) = scheme
+            && (s == b"http" || s == b"https")
+            && let Some(p) = path
+            && !is_valid_http_path(p, method)
         {
             return Err(Error::StreamError(ErrorCode::MessageError));
         }

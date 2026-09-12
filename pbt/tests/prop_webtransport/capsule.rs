@@ -43,7 +43,9 @@ fn prop_unknown_capsule_roundtrip() -> noprop::TestResult {
     runner.run(256, |ctx| {
         let capsule = valid_unknown_capsule(ctx);
         let mut buf = Vec::new();
-        capsule.encode(&mut buf);
+        capsule
+            .encode(&mut buf)
+            .expect("テスト用カプセルのエンコードは成功する");
 
         let (decoded, consumed) = Capsule::decode(&buf)
             .expect("decode should not error")
@@ -124,7 +126,9 @@ fn prop_capsule_incomplete_buffer_close_session() -> noprop::TestResult {
         };
 
         let mut buf = Vec::new();
-        capsule.encode(&mut buf);
+        capsule
+            .encode(&mut buf)
+            .expect("テスト用カプセルのエンコードは成功する");
 
         let cut_at = ((buf.len() as f64) * cut_ratio) as usize;
         let incomplete = &buf[..cut_at.max(1)];
@@ -151,7 +155,9 @@ fn prop_capsule_incomplete_buffer_max_data() -> noprop::TestResult {
         let capsule = Capsule::MaxData { maximum };
 
         let mut buf = Vec::new();
-        capsule.encode(&mut buf);
+        capsule
+            .encode(&mut buf)
+            .expect("テスト用カプセルのエンコードは成功する");
 
         if buf.len() > 1 {
             let cut_at = ((buf.len() as f64) * cut_ratio) as usize;

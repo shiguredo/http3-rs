@@ -1,4 +1,4 @@
-//! WebTransport over HTTP/3 (draft-ietf-webtrans-http3-15)
+//! WebTransport over HTTP/3 (draft-ietf-webtrans-http3-16)
 //!
 //! Sans I/O WebTransport プロトコル実装。
 //!
@@ -7,7 +7,7 @@
 //! WebTransport は HTTP/3 上で動作するプロトコルで、Web アプリケーションに
 //! 双方向・単方向ストリームとデータグラムを提供する。
 //!
-//! HTTP/3 上では 2 つのモードが利用可能 (draft-ietf-webtrans-http3-15 Section 2.1.2):
+//! HTTP/3 上では 2 つのモードが利用可能 (draft-ietf-webtrans-http3-16 Section 2.1.2):
 //! - `webtransport-h3`: ネイティブ QUIC ストリーム + データグラム (本実装)
 //! - `webtransport`: カプセルベース (head-of-line blocking、unreliable delivery 不可)
 //!
@@ -22,19 +22,20 @@
 //!
 //! # 参照
 //!
-//! - [draft-ietf-webtrans-http3-15](https://datatracker.ietf.org/doc/draft-ietf-webtrans-http3/)
+//! - [draft-ietf-webtrans-http3-16](https://datatracker.ietf.org/doc/draft-ietf-webtrans-http3/)
 
 pub mod capsule;
 pub mod connect;
 pub mod datagram;
 pub mod error;
-pub mod session;
+pub mod flow_control;
 pub mod settings;
 pub mod stream;
 
 pub use capsule::{
-    Capsule, CapsuleType, CapsuleValidationError, H3_DATAGRAM_ERROR, MAX_STREAMS_LIMIT,
-    PROHIBITED_WT_MAX_STREAM_DATA_CAPSULE_TYPE, PROHIBITED_WT_STREAM_DATA_BLOCKED_CAPSULE_TYPE,
+    Capsule, CapsuleEncodeError, CapsuleType, CapsuleValidationError, H3_DATAGRAM_ERROR,
+    MAX_STREAMS_LIMIT, PROHIBITED_WT_MAX_STREAM_DATA_CAPSULE_TYPE,
+    PROHIBITED_WT_STREAM_DATA_BLOCKED_CAPSULE_TYPE,
 };
 pub use connect::{
     CapabilityError, ConnectError, ConnectRequest, ConnectResponse, DraftVersion,
@@ -43,11 +44,9 @@ pub use connect::{
 };
 pub use datagram::Datagram;
 pub use error::{ApplicationErrorCode, Error, ErrorCode};
-pub use session::{
-    BufferedStream, CapsuleProcessError, FlowControlLimits, FlowControlState, Session, SessionState,
-};
+pub use flow_control::{FlowControlLimits, FlowControlState};
 pub use settings::Settings;
 pub use stream::{
     BIDIRECTIONAL_SIGNAL_VALUE, ClassifiedUniStream, Stream, StreamHeader, StreamHeaderDecodeError,
-    UNIDIRECTIONAL_STREAM_TYPE, classify_uni_stream, classify_uni_stream_checked, stream_type,
+    UNIDIRECTIONAL_STREAM_TYPE, classify_uni_stream_checked,
 };

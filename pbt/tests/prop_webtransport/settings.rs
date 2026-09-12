@@ -1,11 +1,11 @@
 //! WebTransport Settings のプロパティ
-//! (draft-ietf-webtrans-http3-15 Section 5.1, 9.2)
+//! (draft-ietf-webtrans-http3-16 Section 5.1, 9.2)
 
 use shiguredo_http3::webtransport::Settings;
 use shiguredo_http3::{Setting, VarInt};
 
 // =============================================================================
-// フロー制御有効化判定 (draft-ietf-webtrans-http3-15 Section 5.1)
+// フロー制御有効化判定 (draft-ietf-webtrans-http3-16 Section 5.1)
 // =============================================================================
 
 /// Property: wt_enabled のみではフロー制御無効 (draft-15)

@@ -23,7 +23,8 @@ path = "examples/wt_echo_client.rs"
 
 [dependencies]
 bytes = "1.12"
-s2n-quic = "1.85"
+# WebTransport は QUIC DATAGRAM (RFC 9221) を要求するため datagram provider を有効化する
+s2n-quic = { version = "1.85", features = ["unstable-provider-datagram"] }
 shiguredo_http3.workspace = true
 tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "sync"] }
 

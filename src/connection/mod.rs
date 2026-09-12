@@ -168,9 +168,18 @@ pub struct Connection {
     /// ricnt > 現在の Insert Count のストリームに到達した時点で打ち切る (nghttp3 方式)。
     /// (ricnt, stream_id) のペアで一意性を保証する。
     blocked_by_ricnt: BTreeSet<(u64, u64)>,
-    /// 未知タイプの単方向ストリーム ID (後続データを破棄する)
+    /// 無視すると決めた単方向ストリーム ID (後続データを破棄する)
     ///
     /// RFC 9114 Section 6.2: 未知ストリームタイプの受信データは破棄する。
+    ///
+    /// 水位 (「これ以下の ID は無視する」) 方式は採らない。水位方式だと、ピアが
+    /// 未知タイプのストリームを先に開いただけで、それより小さい ID の制御ストリーム
+    /// (0x00) が後から到着した場合に SETTINGS ごと破棄してしまう。h3 (quinn) は
+    /// 制御ストリームより先に GREASE ストリームを送るため、実際に発生する。
+    ///
+    /// 集合が増え続ける経路は無い。制御ストリーム / QPACK ストリームは 1 本しか
+    /// 許容されず 2 本目で接続エラーになるため、最初の未知タイプのストリームを
+    /// 無視した後にピアがさらに未知タイプを送ることはできない。
     ignored_uni_streams: HashSet<u64>,
     /// ストリームタイプ未確定の単方向ストリーム (バッファ)
     ///
@@ -179,7 +188,7 @@ pub struct Connection {
     /// WebTransport 単方向ストリーム (ストリーム ID → セッション ID)
     ///
     /// セッション ID が確定した WT 単方向ストリームを追跡する。
-    /// (draft-ietf-webtrans-http3-15 Section 4.2)
+    /// (draft-ietf-webtrans-http3-16 Section 4.2)
     wt_uni_streams: HashMap<u64, u64>,
     /// WebTransport 単方向ストリームのセッション ID 未確定バッファ
     ///
@@ -189,26 +198,26 @@ pub struct Connection {
     /// WebTransport 双方向ストリーム (ストリーム ID → セッション ID)
     ///
     /// signal value (0x41) とセッション ID が確定した WT 双方向ストリームを追跡する。
-    /// (draft-ietf-webtrans-http3-15 Section 4.3)
+    /// (draft-ietf-webtrans-http3-16 Section 4.3)
     wt_bidi_streams: HashMap<u64, u64>,
     /// WebTransport 双方向ストリームのセッション ID 未確定バッファ
     ///
     /// WT_STREAM (0x41) 確定後、session_id の varint が
     /// 複数チャンクにまたがる場合のバッファリング用。
-    /// (draft-ietf-webtrans-http3-15 Section 4.3)
+    /// (draft-ietf-webtrans-http3-16 Section 4.3)
     pending_wt_bidi_streams: HashMap<u64, Vec<u8>>,
     /// クライアント開始の新規 bidi stream のディスパッチ保留バッファ
     ///
     /// サーバー側で WebTransport が有効な場合、先頭 varint が不完全で
     /// WT bidi (0x41) かリクエストか判定できないストリームをバッファリングする。
     /// `pending_wt_bidi_streams` とは異なり、0x41 でなければリクエストに戻す。
-    /// (draft-ietf-webtrans-http3-15 Section 4.3)
+    /// (draft-ietf-webtrans-http3-16 Section 4.3)
     pending_bidi_dispatch: HashMap<u64, Vec<u8>>,
     /// WebTransport セッション表 (セッション ID → セッション状態)
     ///
     /// CONNECT stream の stream_id がセッション ID となる。
     /// セッションのライフサイクルと関連ストリームを追跡する。
-    /// (draft-ietf-webtrans-http3-15 Section 3, 4.6, 6)
+    /// (draft-ietf-webtrans-http3-16 Section 3, 4.6, 6)
     wt_sessions: HashMap<u64, WtSession>,
     /// 終了済み WebTransport セッション ID (tombstone)
     ///
@@ -217,6 +226,11 @@ pub struct Connection {
     /// 使う (zombie Pending セッションの再生成を防ぐ)。
     /// セッション ID のみの軽量な記録であり、接続終了まで保持する
     /// (元の WtSession エントリは解放される)。
+    ///
+    /// 増加の上限は QUIC 層のストリーム数制限 (`max_streams_bidi`) で決まる。
+    /// tombstone が作られるのはピアが開始して閉じた双方向ストリームあたり 1 件で、
+    /// 同時に存在できるセッション数は QUIC が制限するため、本集合は接続あたり
+    /// 高々その本数に収まる。
     /// (draft-ietf-webtrans-http3-16 Section 6)
     closed_wt_sessions: HashSet<u64>,
     /// エンコーダーストリーム初期化前に受信した SET_CAPACITY 値
@@ -228,7 +242,7 @@ pub struct Connection {
     /// Sans I/O 設計上、Connection は QUIC transport parameter に直接アクセスできない。
     /// 上位層が `set_webtransport_transport_verified()` を呼び出すことで、
     /// transport parameter レベルの前提条件が満たされていることを注入する。
-    /// (draft-ietf-webtrans-http3-15 Section 3.1)
+    /// (draft-ietf-webtrans-http3-16 Section 3.1)
     wt_transport_verified: bool,
     /// 0-RTT 再開時の前回接続のピア WebTransport SETTINGS
     ///
@@ -241,7 +255,7 @@ pub struct Connection {
     ///
     /// draft-15 では RESET_STREAM_AT が必須だが、draft-02/07 では不要。
     /// `set_webtransport_transport_verified()` で注入される。
-    /// (draft-ietf-webtrans-http3-15 Section 3.1)
+    /// (draft-ietf-webtrans-http3-16 Section 3.1)
     /// 将来のドラフトで変更される可能性がある
     wt_reset_stream_at_supported: bool,
     deferred_encoder_set_capacity: Option<u64>,
@@ -430,7 +444,7 @@ impl Connection {
     /// クライアント受信時のみ Some を返す。サーバーが受信する GOAWAY は
     /// push ID を運ぶものであり、request stream や WebTransport セッションの
     /// 新規拒否判定には使えない。
-    /// (RFC 9114 Section 5.2 / 7.2.6, draft-ietf-webtrans-http3-15 Section 4.7)
+    /// (RFC 9114 Section 5.2 / 7.2.6, draft-ietf-webtrans-http3-16 Section 4.7)
     fn peer_goaway_request_boundary(&self) -> Option<VarInt> {
         if self.role == Role::Client {
             self.peer_goaway_last_id
@@ -660,7 +674,7 @@ impl Connection {
             // クライアントが server-initiated bidi stream を受信した場合
             if self.role == Role::Client && kind.is_server_initiated() {
                 // WebTransport の能力ネゴシエーションが完了している場合のみ受け入れる
-                // (draft-ietf-webtrans-http3-15 Section 3.1, 4.3)
+                // (draft-ietf-webtrans-http3-16 Section 3.1, 4.3)
                 if self.is_wt_fully_negotiated() {
                     self.handle_wt_bidi_stream(stream_id, data, fin)?;
                     return Ok(());
@@ -924,6 +938,14 @@ impl Connection {
                     // 確立済みセッションに関連付けられるまでの SHOULD であり
                     // MUST ではない。RFC 9114 Section 6.2 の MUST が定める
                     // 2 択 (abort / discard) のうち abort 方式を採用する。
+                    //
+                    // abort を選んだ以上、後続チャンクを新しいストリームタイプとして
+                    // 再解釈してはならない。統合層が RESET_STREAM / STOP_SENDING を
+                    // 送出する前にピアから届いた中間バイトが
+                    // `handle_new_unidirectional_stream` に流入すると、varint の
+                    // 途中をタイプとして読み直して制御ストリーム等に誤束縛する。
+                    // 未知タイプと同じく無視対象として記録する。
+                    self.ignored_uni_streams.insert(stream_id);
                     return Err(Error::StreamError(ErrorCode::StreamCreationError));
                 }
                 // セッション ID (varint) をパース
@@ -975,7 +997,7 @@ impl Connection {
     /// 先頭 varint をデコードし、WT_STREAM (0x41) なら WT bidi ストリームとして、
     /// それ以外ならリクエストストリームとして処理する。
     /// varint が不完全な場合は `pending_bidi_dispatch` にバッファリングする。
-    /// (draft-ietf-webtrans-http3-15 Section 4.3)
+    /// (draft-ietf-webtrans-http3-16 Section 4.3)
     fn dispatch_client_bidi_stream(
         &mut self,
         stream_id: u64,
@@ -1086,7 +1108,7 @@ impl Connection {
             .contains_key(&stream_id);
         if is_new
             && self.pending_wt_bidi_pre_negotiation.len()
-                >= crate::webtransport::session::MAX_BUFFERED_STREAMS
+                >= crate::webtransport::flow_control::MAX_BUFFERED_STREAMS
         {
             self.ignored_pre_negotiation_wt_bidi.insert(stream_id);
             self.events.push_back(Event::WebTransport(
@@ -1234,7 +1256,7 @@ impl Connection {
                     if !is_trailer && let Some(stream) = self.streams.get(&stream_id) {
                         let state = stream.state();
                         if matches!(state, StreamState::RemoteClosed | StreamState::Closed) {
-                            let body_size = stream.received_body().len() as u64;
+                            let body_size = stream.received_body_len();
                             let skip = self.role == Role::Client
                                 && (stream.is_head_request() || is_no_body_status(&headers));
                             crate::validation::validate_content_length(&headers, body_size, skip)?;
@@ -1414,7 +1436,7 @@ impl Connection {
                     // WebTransport セッション ID (CONNECT 要求 stream ID) とは
                     // 比較する意味がない
                     // (RFC 9114 Section 5.2 / 7.2.6)
-                    // (draft-ietf-webtrans-http3-15 Section 4.7: 新規 WT セッションを
+                    // (draft-ietf-webtrans-http3-16 Section 4.7: 新規 WT セッションを
                     //  開始できなくなるのは GOAWAY を受けたクライアント側)
                     if self.role == Role::Client {
                         let draining_sessions: Vec<u64> = self
@@ -1429,7 +1451,7 @@ impl Connection {
                             .collect();
                         for sid in draining_sessions {
                             // 内部状態を Draining に遷移させた上でイベントを発行する
-                            // (draft-ietf-webtrans-http3-15 Section 4.7 / RFC 9114 Section 5.2)
+                            // (draft-ietf-webtrans-http3-16 Section 4.7 / RFC 9114 Section 5.2)
                             if let Some(session) = self.wt_sessions.get_mut(&sid) {
                                 session.state = WtSessionState::Draining;
                             }
@@ -1596,7 +1618,7 @@ impl Connection {
                 }
                 RawReceivedData::Data(data) => {
                     // WebTransport CONNECT ストリームの場合は Capsule デコードを行う
-                    // (draft-ietf-webtrans-http3-15 Section 5.6)
+                    // (draft-ietf-webtrans-http3-16 Section 5.6)
                     // WT 分岐を wt_capsule.rs のヘルパーに委譲
                     if !self.handle_wt_data_frame(stream_id, &data)? {
                         self.events.push_back(Event::Data { stream_id, data });
@@ -1606,13 +1628,13 @@ impl Connection {
                     // content-length と受信済み DATA の整合性を検証 (RFC 9114 Section 4.1.2)
                     if let Some(stream) = self.streams.get(&stream_id) {
                         let headers = stream.received_headers();
-                        let body_size = stream.received_body().len() as u64;
+                        let body_size = stream.received_body_len();
                         let skip = self.role == Role::Client
                             && (stream.is_head_request() || is_no_body_status(headers));
                         crate::validation::validate_content_length(headers, body_size, skip)?;
                     }
                     // WebTransport セッション: FIN 到着時に未完成 Capsule が残っていれば malformed
-                    // (draft-ietf-webtrans-http3-15 Section 5.6)
+                    // (draft-ietf-webtrans-http3-16 Section 5.6)
                     // WT 分岐を wt_capsule.rs のヘルパーに委譲
                     self.handle_wt_stream_end(stream_id)?;
 
@@ -1646,7 +1668,7 @@ impl Connection {
             crate::validation::validate_headers(&headers, self.role)?;
 
             // サーバー側: WebTransport CONNECT を受信した場合の前提条件チェック
-            // (draft-ietf-webtrans-http3-15 Section 3.1, 7.1)
+            // (draft-ietf-webtrans-http3-16 Section 3.1, 7.1)
             // WT 分岐を wt_session.rs のヘルパーに委譲
             self.validate_wt_connect_request_server(stream_id, &headers)?;
 
@@ -1678,7 +1700,7 @@ impl Connection {
             }
 
             // サーバー側: WebTransport CONNECT を受信した場合、セッションを Pending で登録
-            // (draft-ietf-webtrans-http3-15 Section 3)
+            // (draft-ietf-webtrans-http3-16 Section 3)
             // WT 分岐を wt_session.rs のヘルパーに委譲
             self.register_wt_connect_session(stream_id, &headers);
 
@@ -1709,7 +1731,7 @@ impl Connection {
             }
 
             // クライアント側: WebTransport CONNECT の 2xx レスポンス受信時に
-            // セッションを Established に遷移させる (draft-ietf-webtrans-http3-15 Section 3)
+            // セッションを Established に遷移させる (draft-ietf-webtrans-http3-16 Section 3)
             // WT 分岐を wt_session.rs のヘルパーに委譲
             self.handle_wt_connect_response(stream_id, &headers)?;
         }
@@ -1964,7 +1986,7 @@ impl Connection {
         crate::validation::check_field_section_size(headers, peer_max)?;
 
         // WebTransport CONNECT の場合、peer の WebTransport サポートを確認する
-        // (draft-ietf-webtrans-http3-15 Section 3.1, 4.6)
+        // (draft-ietf-webtrans-http3-16 Section 3.1, 4.6)
         // WT 分岐を wt_session.rs のヘルパーに委譲
         self.validate_wt_connect_request(headers)?;
 
@@ -2015,7 +2037,7 @@ impl Connection {
         let has_protocol = headers.iter().any(|h| h.name() == b":protocol");
         if is_connect {
             // CONNECT ストリームは open のまま維持する必要があるため FIN は禁止
-            // (RFC 9114 Section 4.4, draft-ietf-webtrans-http3-15 Section 3)
+            // (RFC 9114 Section 4.4, draft-ietf-webtrans-http3-16 Section 3)
             if fin {
                 return Err(Error::StreamError(ErrorCode::MessageError));
             }
@@ -2034,7 +2056,7 @@ impl Connection {
         self.streams.insert(stream_id, stream);
 
         // WebTransport CONNECT の場合、セッションを Pending 状態で登録
-        // (draft-ietf-webtrans-http3-15 Section 3)
+        // (draft-ietf-webtrans-http3-16 Section 3)
         if is_wt_connect {
             let mut session = WtSession::new();
             // WT-Available-Protocols を保存 (Section 3.3)
@@ -2086,7 +2108,7 @@ impl Connection {
         crate::validation::check_field_section_size(headers, peer_max)?;
 
         // WebTransport: 2xx レスポンスの WT-Protocol がクライアントの WT-Available-Protocols に
-        // 含まれることを検証する (draft-ietf-webtrans-http3-15 Section 3.3)
+        // 含まれることを検証する (draft-ietf-webtrans-http3-16 Section 3.3)
         // WT 分岐を wt_session.rs のヘルパーに委譲
         self.validate_wt_response_protocol(stream_id, headers)?;
 
@@ -2132,7 +2154,7 @@ impl Connection {
         }
 
         // サーバー側: WebTransport CONNECT に対する 2xx レスポンス送信時に
-        // セッションを Established に遷移させる (draft-ietf-webtrans-http3-15 Section 3)
+        // セッションを Established に遷移させる (draft-ietf-webtrans-http3-16 Section 3)
         // WT 分岐を wt_session.rs のヘルパーに委譲
         // エラー時は encode 済みのレスポンスを送信バッファに残したまま呼び出し元が
         // reset するため、QPACK のセクション追跡より前に検証する
@@ -2253,7 +2275,7 @@ impl Connection {
             self.send_stream_cancellation_if_needed(stream_id);
 
             // WebTransport セッション/データストリームへのリセット伝播
-            // (draft-ietf-webtrans-http3-15 Section 4.4 / Section 6)
+            // (draft-ietf-webtrans-http3-16 Section 4.4 / Section 6)
             if !self.handle_wt_stream_reset(stream_id, error_code, final_size) {
                 // 非 WebTransport ストリーム: 汎用イベントを発行
                 self.events.push_back(Event::StreamReset {
@@ -2328,7 +2350,7 @@ impl Connection {
             self.send_stream_cancellation_if_needed(stream_id);
 
             // WebTransport セッション/データストリームへの STOP_SENDING 伝播
-            // (draft-ietf-webtrans-http3-15 Section 4.4 / Section 6)
+            // (draft-ietf-webtrans-http3-16 Section 4.4 / Section 6)
             if !self.handle_wt_stop_sending(stream_id, error_code) {
                 self.events.push_back(Event::StopSending {
                     stream_id,
@@ -2370,7 +2392,7 @@ impl Connection {
 /// ヘッダーが WebTransport CONNECT かどうか判定する
 ///
 /// `:method` = `CONNECT` かつ `:protocol` が `webtransport-h3` または `webtransport`
-/// (draft-ietf-webtrans-http3-15 Section 3.2 / draft-02 互換) の場合に true。
+/// (draft-ietf-webtrans-http3-16 Section 3.2 / draft-02 互換) の場合に true。
 fn is_webtransport_connect(headers: &[Header]) -> bool {
     let is_connect = headers
         .iter()
@@ -2725,7 +2747,7 @@ mod tests {
 
     // =========================================================================
     // WebTransport 単方向ストリーム (0x54) の処理
-    // (draft-ietf-webtrans-http3-15 Section 4.2)
+    // (draft-ietf-webtrans-http3-16 Section 4.2)
     // =========================================================================
 
     /// テスト用の VarInt 構築ショートカット
@@ -2880,11 +2902,12 @@ mod tests {
     }
 
     #[test]
-    fn test_wt_uni_stream_not_negotiated_followup_data_returns_stream_error() {
-        // ストリームエラー後の後続データは、stream_id がどのマップにも登録されて
-        // いないため再びストリームタイプとして解釈される。
-        // 後続データが 0x54 の varint エンコーディング (例: [0x40, 0x54, ...]) で
-        // 始まる場合は同じストリームエラーが返る。
+    fn test_wt_uni_stream_not_negotiated_followup_data_is_ignored() {
+        // ネゴシエーション未完了の 0x54 を拒否した後は、後続チャンクを無視する。
+        // 再びストリームタイプとして解釈すると、varint の途中をタイプとして読み直して
+        // 制御ストリーム等に誤束縛する (中間バイトが新規 varint として解釈される)。
+        // RFC 9114 Section 6.2 の MUST が定める 2 択 (abort / discard) のうち
+        // abort を選んだ以上、後続は discard する。
         let mut conn = Connection::server(Settings::default());
 
         // 1 回目: ストリームエラー
@@ -2894,12 +2917,15 @@ mod tests {
             Error::StreamError(ErrorCode::StreamCreationError)
         ));
 
-        // 2 回目: 後続データも同じストリームエラー
-        let err = conn.feed_stream(2, &[0x40, 0x54, 0x05], false).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::StreamError(ErrorCode::StreamCreationError)
-        ));
+        // 2 回目: 後続データは静かに破棄される (エラーにならない)
+        conn.feed_stream(2, &[0x40, 0x54, 0x05], false)
+            .expect("拒否後の後続チャンクは破棄される");
+
+        // 中間バイトが制御ストリーム (ストリームタイプ 0x00) として誤解釈されないこと。
+        // 誤解釈されると制御ストリームが 1 本に固定され、以後の制御ストリームが拒否される。
+        conn.feed_stream(6, &[0x00, 0x04, 0x00], false)
+            .expect("制御ストリームは正常に受理される");
+        assert_eq!(conn.control_recv.stream_id(), Some(6));
     }
 
     #[test]
@@ -2959,6 +2985,75 @@ mod tests {
             err,
             Error::StreamError(ErrorCode::StreamCreationError)
         ));
+    }
+
+    #[test]
+    fn test_unknown_uni_stream_does_not_discard_lower_id_control_stream() {
+        // 未知ストリームタイプ (GREASE) を無視したあとでも、それより小さい ID の
+        // 制御ストリームは処理しなければならない。
+        //
+        // 無視対象を水位 (「これ以下の ID は無視する」) で表すと、ピアが未知タイプの
+        // ストリームを先に開いただけで制御ストリームごと破棄され、SETTINGS が届かず
+        // セッション確立が停止する。h3 (quinn) サーバーは制御ストリームより先に
+        // GREASE ストリームを送るため、この順序は実際に発生する。
+        let mut server = Connection::server(Settings::default());
+
+        // サーバー側の制御ストリーム ID を登録する
+        // (ローカル開始 uni の ID を確定させ、ピア開始 uni との区別を成立させる)
+        server.set_control_stream_id(3).expect("test must succeed");
+
+        // クライアント (ピア) の GREASE ストリーム (未知タイプ) が先に到着する。
+        // クライアント開始 uni の最初の ID は 2 だが、制御ストリームに先立って
+        // 未知タイプのストリームが開かれる状況を作るため 6 を使う。
+        let grease_type: u64 = 0x1f * 0x21 + 0x21;
+        let mut grease = Vec::new();
+        crate::varint::encode_into_vec(&mut grease, vi(grease_type));
+        grease.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        server
+            .feed_stream(6, &grease, false)
+            .expect("test must succeed");
+        assert!(
+            server.ignored_uni_streams.contains(&6),
+            "未知タイプのストリームは無視対象として記録されること"
+        );
+
+        // 後からクライアントの制御ストリーム (id=2) が到着する。
+        // SETTINGS は QPACK_MAX_TABLE_CAPACITY=4096
+        // (type=0x04, length=3, payload=[0x01, 0x50, 0x00])
+        server
+            .feed_stream(2, &[0x00, 0x04, 0x03, 0x01, 0x50, 0x00], false)
+            .expect("test must succeed");
+
+        // 制御ストリームが無視されていれば SETTINGS は届かない
+        assert!(
+            server.peer_settings().is_some(),
+            "未知タイプのストリームより後に到着した制御ストリームが破棄されてはならない"
+        );
+        assert_eq!(
+            server.control_recv.stream_id(),
+            Some(2),
+            "ピアの制御ストリームとして登録されること"
+        );
+
+        // 無視したストリーム自身への後続データは破棄されること
+        // (ストリームタイプとして再解釈してはならない)
+        server
+            .feed_stream(6, &[0x00, 0x04, 0x00], false)
+            .expect("test must succeed");
+        assert_eq!(
+            server.control_recv.stream_id(),
+            Some(2),
+            "GREASE ストリームの後続データを制御ストリームとして誤束縛してはならない"
+        );
+
+        // 無視対象は ID 単位で記録されるため、別のストリームは影響を受けない
+        server
+            .feed_stream(10, &[0x0f, 0x00], false)
+            .expect("test must succeed");
+        assert!(
+            server.ignored_uni_streams.contains(&10),
+            "別の未知タイプのストリームも無視対象として記録されること"
+        );
     }
 
     #[test]
@@ -3038,7 +3133,7 @@ mod tests {
     #[test]
     fn test_wt_uni_stream_invalid_session_id_returns_id_error() {
         // session_id が client-initiated bidi stream ID (% 4 == 0) でない場合は
-        // H3_ID_ERROR で接続エラー (draft-ietf-webtrans-http3-15 Section 4.2)
+        // H3_ID_ERROR で接続エラー (draft-ietf-webtrans-http3-16 Section 4.2)
         let mut conn = make_server_with_established_wt_session(4);
 
         // session_id = 1 (server-initiated bidi: 不正)
@@ -3066,7 +3161,7 @@ mod tests {
 
     // =========================================================================
     // WebTransport 双方向ストリーム (server-initiated bidi)
-    // (draft-ietf-webtrans-http3-15 Section 4.3)
+    // (draft-ietf-webtrans-http3-16 Section 4.3)
     // =========================================================================
 
     #[test]
@@ -3262,7 +3357,7 @@ mod tests {
     // =========================================================================
     // WebTransport 双方向ストリーム (client-initiated bidi)
     // サーバー側でクライアント開始の WT bidi ストリームを受理する
-    // (draft-ietf-webtrans-http3-15 Section 4.3)
+    // (draft-ietf-webtrans-http3-16 Section 4.3)
     // =========================================================================
 
     #[test]
@@ -3833,7 +3928,7 @@ mod tests {
 
     // =========================================================================
     // WebTransport 能力ネゴシエーション
-    // (draft-ietf-webtrans-http3-15 Section 3.1, 4.6)
+    // (draft-ietf-webtrans-http3-16 Section 3.1, 4.6)
     // =========================================================================
 
     #[test]
@@ -3887,7 +3982,7 @@ mod tests {
     #[test]
     fn test_server_wt_connect_rejected_without_peer_settings() {
         // サーバー: peer (クライアント) SETTINGS 未受信の状態で WT CONNECT を受信
-        // (draft-ietf-webtrans-http3-15 Section 7.1)
+        // (draft-ietf-webtrans-http3-16 Section 7.1)
         let mut client = Connection::client(wt_enabled_settings());
         client.set_control_stream_id(2).expect("test must succeed");
 
@@ -4080,7 +4175,7 @@ mod tests {
     #[test]
     fn test_server_wt_connect_accepted_draft15_without_enable_connect_protocol() {
         // ENABLE_CONNECT_PROTOCOL はサーバーが送る設定 (RFC 9220, RFC 8441 Section 3)
-        // クライアントは送信義務がない (draft-ietf-webtrans-http3-15 Section 3.1)
+        // クライアントは送信義務がない (draft-ietf-webtrans-http3-16 Section 3.1)
         // サーバーはクライアントが ENABLE_CONNECT_PROTOCOL を送信しなくても受理する
 
         // サーバー: draft-15 対応
@@ -4134,7 +4229,7 @@ mod tests {
 
     // =========================================================================
     // WebTransport セッション管理
-    // (draft-ietf-webtrans-http3-15 Section 3, 4.6, 6)
+    // (draft-ietf-webtrans-http3-16 Section 3, 4.6, 6)
     // =========================================================================
 
     /// WebTransport が完全にネゴシエート済みのサーバー単体を作成するヘルパ
@@ -4176,8 +4271,7 @@ mod tests {
             .wt_sessions
             .get_mut(&session_id)
             .expect("test must succeed");
-        session.recv_data_fc =
-            Some(crate::webtransport::session::flow_control::DataFlowControl::new(100));
+        session.recv_data_fc = Some(crate::webtransport::flow_control::DataFlowControl::new(100));
         server
     }
 
@@ -4276,7 +4370,8 @@ mod tests {
             error_code: 0,
             message: String::new(),
         }
-        .encode(&mut capsule);
+        .encode(&mut capsule)
+        .expect("テスト用カプセルのエンコードは成功する");
         let mut data = vec![0x00, capsule.len() as u8];
         data.extend_from_slice(&capsule);
         data
@@ -4289,11 +4384,339 @@ mod tests {
             error_code: 0,
             message: String::new(),
         }
-        .encode(&mut capsule);
+        .encode(&mut capsule)
+        .expect("テスト用カプセルのエンコードは成功する");
         let mut data = vec![0x00, (capsule.len() + trailing.len()) as u8];
         data.extend_from_slice(&capsule);
         data.extend_from_slice(trailing);
         data
+    }
+
+    // =====================================================================
+    // WebTransport フロー制御カプセルの配線 (draft-ietf-webtrans-http3-16 Section 5.6)
+    // =====================================================================
+
+    /// Safari 26.4 形のクライアント SETTINGS を作成するヘルパー
+    ///
+    /// Safari は `:protocol = webtransport` を使い、SETTINGS では draft-07 の
+    /// `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` (0xc671706a) と draft-13/14 の
+    /// `WT_INITIAL_MAX_*` を併送するハイブリッド実装である (docs/SAFARI_WT.md)。
+    /// この形では `requires_initial_capsule_flow_control_compat()` が true になり、
+    /// セッション確立直後の WT_MAX_STREAMS / WT_MAX_DATA 送出が必要になる。
+    fn safari_shape_client_settings() -> Settings {
+        let wt = crate::webtransport::Settings::new()
+            .webtransport_max_sessions_draft07(vi(100))
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(100))
+            .wt_initial_max_data(vi(8 * 1024 * 1024));
+        Settings::new().enable_webtransport_client(wt)
+    }
+
+    /// WebTransport カプセルを 1 つの HTTP/3 DATA フレームとしてエンコードするヘルパー
+    fn capsule_data_frame(capsule: &crate::webtransport::Capsule) -> Vec<u8> {
+        let mut data = Vec::new();
+        capsule
+            .encode_as_data_frame(&mut data)
+            .expect("テスト用カプセルのエンコードは成功する");
+        data
+    }
+
+    /// Safari 形クライアントからサーバーへ WT CONNECT を送り、セッションを確立させる
+    ///
+    /// 戻り値は接続後のクライアント (CONNECT ストリーム ID は `send_request` が
+    /// 払い出す)。サーバー側セッションは Established かつフロー制御が有効になる。
+    /// ストリーム ID を手書きしないのは、セッション終了後の tombstone と衝突しないため。
+    fn establish_safari_shape_wt_session(server: &mut Connection) -> u64 {
+        // Safari 形クライアントの制御ストリームを流し込む
+        let mut client = Connection::client(safari_shape_client_settings());
+        client.set_control_stream_id(2).expect("test must succeed");
+        let (client_ctrl, _) = client.take_stream_data(2).expect("test must succeed");
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        // WT CONNECT を stream 0 で受信する
+        let stream_id = 0u64;
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
+        ];
+        let frame = build_headers_frame(&headers);
+        server
+            .feed_stream(stream_id, &frame, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        // 200 OK を返してセッションを確立する
+        let response = vec![Header::new(b":status", b"200").expect("test must succeed")];
+        server
+            .send_response(stream_id, &response, false)
+            .expect("test must succeed");
+        stream_id
+    }
+
+    /// サーバーへフロー制御カプセルを 1 つ供給するヘルパー
+    ///
+    /// CONNECT ストリーム上のカプセルは HTTP/3 DATA フレームとして届く
+    /// (RFC 9297 Section 3.1)。
+    fn feed_wt_capsule(
+        server: &mut Connection,
+        stream_id: u64,
+        capsule: &crate::webtransport::Capsule,
+    ) {
+        let data = capsule_data_frame(capsule);
+        server
+            .feed_stream(stream_id, &data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+    }
+
+    #[test]
+    fn test_safari_shape_session_flow_control_enabled() {
+        // Safari 形クライアントではサーバー側セッションのフロー制御が有効になり、
+        // 初期クレジットのカプセルが取り出せること
+        // (docs/SAFARI_WT.md: セッション確立直後に WT_MAX_STREAMS / WT_MAX_DATA が必要)。
+        let mut server = Connection::server(wt_multi_draft_settings_with_flow_control());
+        server.set_control_stream_id(3).expect("test must succeed");
+        server
+            .set_webtransport_transport_verified(true, true)
+            .expect("test must succeed");
+
+        let stream_id = establish_safari_shape_wt_session(&mut server);
+        assert!(
+            server.wt_session_flow_control_enabled(stream_id),
+            "Safari 形クライアントでフロー制御が有効にならない"
+        );
+
+        let capsules = server.take_wt_flow_control_capsules(stream_id);
+        assert_eq!(capsules.len(), 3, "初期カプセルが 3 件でない: {capsules:?}");
+        assert_eq!(
+            capsules[0],
+            crate::webtransport::Capsule::MaxStreams {
+                bidirectional: true,
+                maximum: 100
+            }
+        );
+        assert_eq!(
+            capsules[1],
+            crate::webtransport::Capsule::MaxStreams {
+                bidirectional: false,
+                maximum: 100
+            }
+        );
+        assert_eq!(
+            capsules[2],
+            crate::webtransport::Capsule::MaxData {
+                maximum: 8 * 1024 * 1024
+            }
+        );
+
+        // 取り出し後は空になること (二重送出しない)
+        assert!(server.take_wt_flow_control_capsules(stream_id).is_empty());
+    }
+
+    #[test]
+    fn test_peer_max_data_limits_outbound_send() {
+        // ピアが WT_MAX_DATA を広告したら、その範囲内でのみ送信を許可する
+        // (draft-ietf-webtrans-http3-16 Section 5.6.4: "MUST NOT exceed the
+        //  Maximum Data value")。
+        let mut server = Connection::server(wt_multi_draft_settings_with_flow_control());
+        server.set_control_stream_id(3).expect("test must succeed");
+        server
+            .set_webtransport_transport_verified(true, true)
+            .expect("test must succeed");
+        let stream_id = establish_safari_shape_wt_session(&mut server);
+        let _ = server.take_wt_flow_control_capsules(stream_id);
+
+        // 送信側上限はピアの WT_MAX_DATA カプセルで確定する。未受信の間は
+        // 送信できない (初期値 0 と同じ扱い。draft-ietf-webtrans-http3-16 Section 5.5)。
+        assert_eq!(
+            server.wt_remote_max_data(stream_id),
+            None,
+            "上限未受信の状態で上限が確定している"
+        );
+        assert!(!server.can_send_wt_data(stream_id, 1));
+
+        let limit = 10_000_000u64;
+        feed_wt_capsule(
+            &mut server,
+            stream_id,
+            &crate::webtransport::Capsule::MaxData { maximum: limit },
+        );
+
+        assert_eq!(server.wt_remote_max_data(stream_id), Some(limit));
+        assert!(server.can_send_wt_data(stream_id, limit));
+        assert!(!server.can_send_wt_data(stream_id, limit + 1));
+
+        // limit - 400 バイト送信すると残りは 400 バイト
+        assert!(server.wt_data_sent(stream_id, limit - 400));
+        assert!(server.can_send_wt_data(stream_id, 400));
+        assert!(!server.can_send_wt_data(stream_id, 401));
+
+        // 上限を超える送信試行は WT_DATA_BLOCKED を生成する
+        assert!(!server.wt_data_sent(stream_id, 401));
+        let blocked = server.take_wt_flow_control_capsules(stream_id);
+        assert!(
+            blocked.iter().any(|c| matches!(
+                c,
+                crate::webtransport::Capsule::DataBlocked { maximum } if *maximum == limit
+            )),
+            "WT_DATA_BLOCKED が生成されていない: {blocked:?}"
+        );
+    }
+
+    #[test]
+    fn test_peer_max_streams_limits_outbound_open() {
+        // ピアが WT_MAX_STREAMS を広告したら、その本数までしか開設を許可しない
+        // (draft-ietf-webtrans-http3-16 Section 5.6.2)。
+        let mut server = Connection::server(wt_multi_draft_settings_with_flow_control());
+        server.set_control_stream_id(3).expect("test must succeed");
+        server
+            .set_webtransport_transport_verified(true, true)
+            .expect("test must succeed");
+        let stream_id = establish_safari_shape_wt_session(&mut server);
+        let _ = server.take_wt_flow_control_capsules(stream_id);
+
+        // 送信側上限はカプセルで確定する。未受信の間は開設できない。
+        assert!(
+            !server.can_open_wt_bidi_stream(stream_id),
+            "上限未受信の状態で開設が許可されている"
+        );
+
+        // ピアが WT_MAX_STREAMS (bidi) = 100 を広告する
+        feed_wt_capsule(
+            &mut server,
+            stream_id,
+            &crate::webtransport::Capsule::MaxStreams {
+                bidirectional: true,
+                maximum: 100,
+            },
+        );
+        for _ in 0..100 {
+            assert!(server.wt_stream_opened(stream_id, true));
+        }
+        // 101 本目は拒否され、WT_STREAMS_BLOCKED が生成される
+        assert!(!server.can_open_wt_bidi_stream(stream_id));
+        assert!(!server.wt_stream_opened(stream_id, true));
+        let blocked = server.take_wt_flow_control_capsules(stream_id);
+        assert!(
+            blocked.iter().any(|c| matches!(
+                c,
+                crate::webtransport::Capsule::StreamsBlocked {
+                    bidirectional: true,
+                    maximum,
+                } if *maximum == 100
+            )),
+            "WT_STREAMS_BLOCKED が生成されていない: {blocked:?}"
+        );
+
+        // ピアが上限を 101 に増やすと再び開設できる (BLOCKED 状態もリセットされる)
+        feed_wt_capsule(
+            &mut server,
+            stream_id,
+            &crate::webtransport::Capsule::MaxStreams {
+                bidirectional: true,
+                maximum: 101,
+            },
+        );
+        assert!(server.can_open_wt_bidi_stream(stream_id));
+        assert!(server.wt_stream_opened(stream_id, true));
+
+        // 単方向は双方向と独立に計上される
+        assert!(!server.can_open_wt_uni_stream(stream_id));
+        feed_wt_capsule(
+            &mut server,
+            stream_id,
+            &crate::webtransport::Capsule::MaxStreams {
+                bidirectional: false,
+                maximum: 100,
+            },
+        );
+        for _ in 0..100 {
+            assert!(server.wt_stream_opened(stream_id, false));
+        }
+        assert!(!server.can_open_wt_uni_stream(stream_id));
+    }
+
+    #[test]
+    fn test_non_increasing_max_data_closes_session() {
+        // 増加しない WT_MAX_DATA は WT_FLOW_CONTROL_ERROR でセッションを閉じる
+        // (draft-ietf-webtrans-http3-16 Section 5.6.4: "does not increase")。
+        let mut server = Connection::server(wt_multi_draft_settings_with_flow_control());
+        server.set_control_stream_id(3).expect("test must succeed");
+        server
+            .set_webtransport_transport_verified(true, true)
+            .expect("test must succeed");
+        let stream_id = establish_safari_shape_wt_session(&mut server);
+        let _ = server.take_wt_flow_control_capsules(stream_id);
+
+        // ピアの初期上限 8 MiB より大きい値を広告する
+        // (増加しない値はエラーになるため。draft-ietf-webtrans-http3-16 Section 5.6.4)
+        feed_wt_capsule(
+            &mut server,
+            stream_id,
+            &crate::webtransport::Capsule::MaxData { maximum: 9_000_000 },
+        );
+        assert_eq!(server.wt_remote_max_data(stream_id), Some(9_000_000));
+
+        // 同値を再送するとセッション終了になる
+        feed_wt_capsule(
+            &mut server,
+            stream_id,
+            &crate::webtransport::Capsule::MaxData { maximum: 9_000_000 },
+        );
+        assert!(
+            !server.wt_sessions.contains_key(&stream_id),
+            "同値の WT_MAX_DATA でセッションが閉じられていない"
+        );
+    }
+
+    #[test]
+    fn test_data_consumed_generates_max_data_refresh() {
+        // 受信データを消費すると、ウィンドウが半分を下回った時点で
+        // WT_MAX_DATA の更新カプセルが生成される
+        // (draft-ietf-webtrans-http3-16 Section 5.6.4)。
+        let mut server = Connection::server(wt_multi_draft_settings_with_flow_control());
+        server.set_control_stream_id(3).expect("test must succeed");
+        server
+            .set_webtransport_transport_verified(true, true)
+            .expect("test must succeed");
+        let stream_id = establish_safari_shape_wt_session(&mut server);
+        // 初期クレジットを空にする
+        let _ = server.take_wt_flow_control_capsules(stream_id);
+
+        // 初期ウィンドウは 8 MiB (wt_multi_draft_settings_with_flow_control)。
+        // 受信データをウィンドウの半分まで計上してから消費すると、
+        // 残りがしきい値を下回るため WT_MAX_DATA の更新カプセルが生成される
+        // (draft-ietf-webtrans-http3-16 Section 5.6.4)。
+        let window = 8 * 1024 * 1024u64;
+        let received = window / 2 + 1;
+        server
+            .wt_sessions
+            .get_mut(&stream_id)
+            .expect("test must succeed")
+            .recv_data_fc = Some(crate::webtransport::flow_control::DataFlowControl::new(
+            window,
+        ));
+        server
+            .wt_sessions
+            .get_mut(&stream_id)
+            .expect("test must succeed")
+            .add_received_data(received);
+        server.wt_data_consumed(stream_id, received);
+
+        let refreshed = server.take_wt_flow_control_capsules(stream_id);
+        assert!(
+            refreshed.iter().any(|c| matches!(
+                c,
+                crate::webtransport::Capsule::MaxData { maximum } if *maximum > window
+            )),
+            "WT_MAX_DATA の更新カプセルが生成されていない: {refreshed:?}"
+        );
     }
 
     #[test]
@@ -4414,7 +4837,7 @@ mod tests {
             .send_response(0, &response, false)
             .expect("test must succeed");
 
-        let capsules = server.take_wt_pending_capsules(0);
+        let capsules = server.take_wt_flow_control_capsules(0);
         assert_eq!(capsules.len(), 3);
         assert_eq!(
             capsules[0],
@@ -4476,7 +4899,7 @@ mod tests {
             .send_response(0, &response, false)
             .expect("test must succeed");
 
-        assert!(server.take_wt_pending_capsules(0).is_empty());
+        assert!(server.take_wt_flow_control_capsules(0).is_empty());
     }
 
     #[test]
@@ -4624,14 +5047,14 @@ mod tests {
         // ストリームがバッファリングされていること
         assert_eq!(server.wt_sessions[&0].buffered_streams.len(), 1);
         // Open / Data イベントは確立まで発火されていないこと
-        // (draft-ietf-webtrans-http3-15 Section 4.6)
+        // (draft-ietf-webtrans-http3-16 Section 4.6)
         assert!(server.events.is_empty());
     }
 
     #[test]
     fn test_wt_pending_stream_data_buffered_until_established() {
         // Pending セッションに対する先行 stream の Data も発火されないことを確認する
-        // (draft-ietf-webtrans-http3-15 Section 4.6)
+        // (draft-ietf-webtrans-http3-16 Section 4.6)
         let mut server = make_negotiated_wt_server();
 
         // 先行 uni stream を流し込む (session_id = 0, ペイロード = 0xAA, 0xBB)
@@ -4674,7 +5097,7 @@ mod tests {
     #[test]
     fn test_wt_client_rejects_unknown_session_id() {
         // クライアントは自身が開始していない session_id のストリームを拒否する
-        // (draft-ietf-webtrans-http3-15 Section 4.6)
+        // (draft-ietf-webtrans-http3-16 Section 4.6)
         let mut client = wt_negotiated_client();
 
         // server-initiated uni stream (session_id = 0 だがクライアントはセッション未開始)
@@ -4786,7 +5209,7 @@ mod tests {
     fn test_stream_reset_propagates_to_wt_uni_data_stream() {
         // 既知 WebTransport セッションに属する単方向データストリームの RESET_STREAM は
         // セッションを終了させず、WebTransportEvent::StreamReset イベントとして通知する
-        // (draft-ietf-webtrans-http3-15 Section 4.4)
+        // (draft-ietf-webtrans-http3-16 Section 4.4)
         let mut conn = make_server_with_established_wt_session(4);
         // セッション 4 に紐づく WT uni stream 2 を作成
         conn.feed_stream(2, &[0x40, 0x54, 0x04], false)
@@ -4834,7 +5257,7 @@ mod tests {
     #[test]
     fn test_stream_reset_on_connect_stream_terminates_wt_session() {
         // CONNECT stream (= session_id) への RESET_STREAM はセッションを終了させる
-        // (draft-ietf-webtrans-http3-15 Section 6)
+        // (draft-ietf-webtrans-http3-16 Section 6)
         let mut conn = make_server_with_established_wt_session(0);
 
         conn.stream_reset(0, 0x99, 0).expect("test must succeed");
@@ -5028,7 +5451,9 @@ mod tests {
     /// process_wt_capsule_data に流す形で feed する補助関数
     fn feed_drain_session_capsule(conn: &mut Connection, session_id: u64) {
         let mut payload = Vec::new();
-        crate::webtransport::Capsule::DrainSession.encode(&mut payload);
+        crate::webtransport::Capsule::DrainSession
+            .encode(&mut payload)
+            .expect("テスト用カプセルのエンコードは成功する");
         conn.process_wt_capsule_data(session_id, &payload)
             .expect("test must succeed");
     }
@@ -5079,7 +5504,7 @@ mod tests {
     fn test_wt_session_closed_event_carries_reliable_sizes() {
         // CONNECT stream RESET によるセッション終了時、関連 WT データストリームの
         // reliable_size が stream header 長と一致していることを検証する
-        // (draft-ietf-webtrans-http3-15 Section 6 / Section 4.4 / Section 5.4)
+        // (draft-ietf-webtrans-http3-16 Section 6 / Section 4.4 / Section 5.4)
         let mut conn = make_server_with_established_wt_session(0);
 
         // session_id = 0 に紐づく WT bidi stream 4 と uni stream 2 を作成
@@ -5757,7 +6182,7 @@ mod tests {
     fn test_wt_drain_session_transitions_to_draining_and_blocks_send_datagram() {
         // WT_DRAIN_SESSION を受信したセッションは Draining へ遷移し、
         // send_datagram は Error::WtSessionDraining を返す
-        // (draft-ietf-webtrans-http3-15 Section 4.7)
+        // (draft-ietf-webtrans-http3-16 Section 4.7)
         let mut conn = make_server_with_established_wt_session(0);
 
         feed_drain_session_capsule(&mut conn, 0);
@@ -5795,7 +6220,8 @@ mod tests {
             error_code: 0,
             message: String::new(),
         }
-        .encode(&mut payload);
+        .encode(&mut payload)
+        .expect("テスト用カプセルのエンコードは成功する");
         conn.process_wt_capsule_data(0, &payload)
             .expect("test must succeed");
 
@@ -5809,7 +6235,7 @@ mod tests {
     fn test_client_goaway_transitions_wt_session_to_draining() {
         // クライアントが GOAWAY を受信したとき、対象 session_id 以上の
         // Established / Pending な WT セッションが Draining に遷移する
-        // (draft-ietf-webtrans-http3-15 Section 4.7 / RFC 9114 Section 5.2)
+        // (draft-ietf-webtrans-http3-16 Section 4.7 / RFC 9114 Section 5.2)
         let (mut client, mut server) = setup_wt_pair();
 
         // クライアントが WT CONNECT を送信
@@ -7190,7 +7616,7 @@ mod tests {
         // BufferedStreamRejected で拒否される (draft-16 Section 4.6)。
         let mut server = make_wt_enabled_server_without_peer_settings();
         let wt_stream_data = [0x40, 0x41, 0x00];
-        let limit = crate::webtransport::session::MAX_BUFFERED_STREAMS;
+        let limit = crate::webtransport::flow_control::MAX_BUFFERED_STREAMS;
 
         // 上限本数まで異なる client-initiated bidi (下位 2 ビット 0x00) を保留
         for i in 0..limit {

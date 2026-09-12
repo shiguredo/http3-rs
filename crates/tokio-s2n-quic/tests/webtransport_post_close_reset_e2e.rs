@@ -43,7 +43,8 @@ fn close_session_data_frame() -> Vec<u8> {
         error_code: 0,
         message: String::new(),
     }
-    .encode_as_data_frame(&mut buf);
+    .encode_as_data_frame(&mut buf)
+    .expect("テスト用カプセルのエンコードは成功する");
     buf
 }
 
@@ -54,7 +55,8 @@ fn close_session_data_frame_with_trailing(trailing: &[u8]) -> Vec<u8> {
         error_code: 0,
         message: String::new(),
     }
-    .encode(&mut capsule);
+    .encode(&mut capsule)
+    .expect("テスト用カプセルのエンコードは成功する");
     let mut data = vec![0x00, (capsule.len() + trailing.len()) as u8];
     data.extend_from_slice(&capsule);
     data.extend_from_slice(trailing);
