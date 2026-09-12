@@ -149,7 +149,8 @@ async function runEngine(playwright, engineName, config, pagePort) {
       window.WT_CONFIG = cfg;
     }, config);
 
-    await page.goto(`https://127.0.0.1:${pagePort}/`, { waitUntil: 'load', timeout: 20000 });
+    const sizeParam = process.env.WT_SIZE ? `?size=${process.env.WT_SIZE}` : '';
+    await page.goto(`https://127.0.0.1:${pagePort}/${sizeParam}`, { waitUntil: 'load', timeout: 20000 });
 
     // 全項目の完了 (DONE) を待つ
     await page.waitForFunction(
@@ -235,6 +236,10 @@ async function main() {
     }
   } finally {
     if (server) {
+      if (process.env.WT_DUMP_SERVER === '1') {
+        console.log('=== サーバーログ ===');
+        console.log(server.getOutput());
+      }
       server.child.kill('SIGTERM');
     }
     pageServer.close();

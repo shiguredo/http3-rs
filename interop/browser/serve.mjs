@@ -18,7 +18,9 @@ export function createPageServer(port, dir, key, cert) {
   };
 
   const server = createServer({ key, cert }, (req, res) => {
-    const path = req.url === '/' ? '/index.html' : req.url;
+    // クエリ文字列を除いてファイルを解決する
+    const pathOnly = (req.url || '/').split('?')[0];
+    const path = pathOnly === '/' ? '/index.html' : pathOnly;
     try {
       const body = readFileSync(join(dir, path));
       res.writeHead(200, {
