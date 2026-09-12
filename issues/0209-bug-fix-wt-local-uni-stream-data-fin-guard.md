@@ -1,7 +1,7 @@
 # ローカル開始 uni ストリームへの STREAM / FIN が WebTransport データとして誤処理される
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-wt-local-uni-stream-data-fin-guard
 - Polished: {YYYY-MM-DD}
 
@@ -32,6 +32,23 @@ WT データストリームとして登録済みのローカル開始 uni スト
 - `cargo test --workspace --tests` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` が通る
 
 ## 解決方法
+
+### 修正内容
+
+- `Connection::handle_wt_uni_stream_data` で `wt_uni_streams` に登録済みのローカル開始 uni への STREAM を早期 return で静かに吸収する。データ FC 計上と `WebTransportEvent::UniStreamData` 発火を行わない
+- `Connection::handle_wt_uni_stream_fin` で登録を取得後にローカル開始 uni を判定し、該当する場合は登録を維持したまま早期 return する。`on_remote_stream_closed` の WT_MAX_STREAMS クレジット回復、`remove_stream_received_data`、登録除去、`WebTransportEvent::UniStreamEnd` 発火を行わない
+- `handle_wt_uni_stream_data` / `handle_wt_uni_stream_fin` の doc を防御範囲に合わせて更新し、`register_local_wt_stream` の doc も STREAM / FIN / RESET_STREAM の 3 経路が防御対象であることを明記する
+
+### テスト
+
+- `src/connection/mod.rs` に 2 件追加する
+  - `test_wt_local_uni_stream_data_and_fin_are_ignored_on_server`: フロー制御有効のサーバーでローカル開始 uni (stream_id=7) を登録し、STREAM でデータ FC が計上されず `UniStreamData` が発火しないこと、FIN で MaxStreams カプセルが生成されず登録が維持され `UniStreamEnd` が発火しないことを検証する
+  - `test_wt_local_uni_stream_data_and_fin_are_ignored_on_client`: クライアント側でも STREAM / FIN の吸収と登録維持を検証する
+- ガードを個別に外すと対応テストが失敗することを確認し、回帰検知が機能することを確かめる
+
+### 検証結果
+
+- `cargo test --workspace --tests` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` が通る
 
 ### 関連ファイル
 
