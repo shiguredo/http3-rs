@@ -1,4 +1,4 @@
-.PHONY: test doc-test cover pbt pbt-cover fuzz fuzzing fuzzing-list interop-test-h3 interop-test-wt interop-test check clippy fmt clean
+.PHONY: test doc-test cover pbt pbt-cover fuzz fuzzing fuzzing-list interop-test-h3 interop-test-wt interop-test-browser interop-test check clippy fmt clean
 
 # 全テストを実行する
 test:
@@ -37,7 +37,15 @@ interop-test-h3:
 interop-test-wt:
 	cd interop/wt && cargo test
 
-# interop テストを全て実行する
+# ブラウザ (Chromium / WebKit) との WebTransport 相互運用テストを実行する
+#
+# npm ci とブラウザのダウンロードに時間がかかるため interop-test には含めない。
+# CI から個別に実行する。
+interop-test-browser:
+	cargo build --manifest-path examples/wt_server/Cargo.toml
+	cd interop/browser && npm ci && npx playwright install chromium webkit && node run.mjs
+
+# interop テストを全て実行する (ブラウザは含めない)
 interop-test: interop-test-h3 interop-test-wt
 
 # cargo check を実行する

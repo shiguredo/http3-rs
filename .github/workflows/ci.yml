@@ -45,6 +45,28 @@ jobs:
       - name: Run interop tests
         if: runner.os == 'macOS'
         run: make interop-test
+      # 実ブラウザ (Chromium / WebKit) から wt_server へ接続できることを確認する。
+      # WebKit は Safari 相当であり、Safari 固有の SETTINGS 制約を検証できる。
+      # ブラウザは macOS でのみ導入できるため macOS でのみ実行する。
+      - name: Set up Node.js
+        if: runner.os == 'macOS'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Install Playwright browsers
+        if: runner.os == 'macOS'
+        run: |
+          npm ci --prefix interop/browser
+          npx --prefix interop/browser playwright install chromium webkit
+      - name: Build WebTransport server
+        if: runner.os == 'macOS'
+        run: cargo build --manifest-path examples/wt_server/Cargo.toml
+      - name: Run browser WebTransport interop tests
+        if: runner.os == 'macOS'
+        run: node interop/browser/run.mjs
+        env:
+          # Playwright 未導入を失敗として扱う (skip で CI が緑になるのを防ぐ)
+          WT_FORCE: "1"
 
   slack_notify:
     needs: [ci]

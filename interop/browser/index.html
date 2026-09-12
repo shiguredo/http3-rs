@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>WebTransport 相互運用テスト</title>
+</head>
+<body>
+<pre id="log"></pre>
+<script type="module">
+// 検証ページ
+//
+// Playwright の addInitScript で window.WT_CONFIG = { url, certificateHash, path }
+// が注入される。各検証項目は独立した WebTransport セッションを開き、
+// 結果を RESULT 行として console へ出力する。
+//
+// 1 項目が失敗しても残りを続行する。失敗時は例外の内容を RESULT 行に含める。
+
+const config = window.WT_CONFIG || {};
+const logEl = document.getElementById('log');
+
+function emit(line) {
+  logEl.textContent += line + '\n';
+  console.log(line);
+}
+
+// 証明書ハッシュ (base64) を Uint8Array に変換する
+function decodeHash(base64) {
+  const raw = atob(base64);
+  const buf = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) {
+    buf[i] = raw.charCodeAt(i);
+  }
+  return buf;
+}
+
+// 新しい WebTransport セッションを開く
+//
+// serverCertificateHashes で自己署名証明書をピン留めする。乱数を含む
+// 証明書を使うため、サーバーが起動ごとにハッシュを出力し、それを注入する。
+function openSession() {
+  const options = {};
+  if (config.certificateHash) {
+    options.serverCertificateHashes = [
+      { algorithm: 'sha-256', value: decodeHash(config.certificateHash) },
+    ];
+  }
+  const transport = new WebTransport(config.url, options);
+  return transport;
+}
+
+// セッション確立を待つ
+async function readyTransport(transport, timeoutMs) {
+  await withTimeout(transport.ready, timeoutMs, 'transport.ready');
+  return transport;
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} が ${timeoutMs}ms でタイムアウトした`)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// 双方向ストリームで 1 往復する
+async function roundTrip(stream, payload) {
+  const writer = stream.writable.getWriter();
+  await writer.write(payload);
+  await writer.close();
+
+  const reader = stream.readable.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    chunks.push(value);
+    total += value.length;
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return merged;
+}
+
+// バイト列を比較する
+function equalBytes(a, b) {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// 検証項目
+//
+// 各項目は assert が通れば戻り値の文字列を RESULT 行に含める。
+const checks = {
+  // セッション確立 (SETTINGS と CONNECT の交換が成功していること)
+  async session() {
+    const transport = await readyTransport(openSession(), 20000);
+    transport.close();
+    return 'ready';
+  },
+
+  // 双方向ストリームの開設とエコー
+  async bidiEcho() {
+    const transport = await readyTransport(openSession(), 20000);
+    const stream = await withTimeout(
+      transport.createBidirectionalStream(),
+      20000,
+      'createBidirectionalStream',
+    );
+    const payload = new TextEncoder().encode('hello-webtransport');
+    const echoed = await roundTrip(stream, payload);
+    if (!equalBytes(echoed, payload)) {
+      throw new Error(`エコーが一致しない: ${new TextDecoder().decode(echoed)}`);
+    }
+    transport.close();
+    return 'echo ok';
+  },
+
+  // 双方向ストリームの複数本
+  async bidiMultiple() {
+    const transport = await readyTransport(openSession(), 20000);
+    const payloads = ['first', 'second', 'third'];
+    for (const payload of payloads) {
+      const stream = await withTimeout(
+        transport.createBidirectionalStream(),
+        20000,
+        'createBidirectionalStream',
+      );
+      const bytes = new TextEncoder().encode(payload);
+      const echoed = await roundTrip(stream, bytes);
+      if (!equalBytes(echoed, bytes)) {
+        throw new Error(`エコーが一致しない: ${new TextDecoder().decode(echoed)}`);
+      }
+    }
+    transport.close();
+    return `${payloads.length} 本`;
+  },
+
+  // クライアント起点の単方向ストリーム送信
+  //
+  // サーバーは単方向ストリームをエコーしないため、送信できたことだけを確認する
+  // (サーバー側の受信確認はサーバーログで行う)。
+  async uniSend() {
+    const transport = await readyTransport(openSession(), 20000);
+    const stream = await withTimeout(transport.createUnidirectionalStream(), 20000, 'createUnidirectionalStream');
+    const writer = stream.getWriter();
+    await writer.write(new TextEncoder().encode('uni-hello'));
+    await writer.close();
+    // 書き込みが完了すれば送信経路は生きている
+    transport.close();
+    return 'sent';
+  },
+};
+
+// 全項目を順に実行する
+async function run() {
+  const names = Object.keys(checks);
+  emit(`INFO 接続先 ${config.url}`);
+  emit(`INFO 検証項目 ${names.length}`);
+
+  for (const name of names) {
+    const startedAt = Date.now();
+    try {
+      const detail = await checks[name]();
+      emit(`RESULT PASS ${name} ${detail} (${Date.now() - startedAt}ms)`);
+    } catch (e) {
+      const message = e && e.message ? e.message : String(e);
+      emit(`RESULT FAIL ${name} ${message} (${Date.now() - startedAt}ms)`);
+    }
+  }
+  emit('DONE');
+}
+
+run().catch((e) => {
+  emit(`RESULT FAIL harness ${e && e.message ? e.message : e}`);
+  emit('DONE');
+});
+</script>
+</body>
+</html>
