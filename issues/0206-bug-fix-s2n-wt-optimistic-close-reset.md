@@ -1,7 +1,7 @@
 # tokio-s2n-quic の楽観的カプセル送信経路で WT_CLOSE_SESSION 後の追加 DATA が H3_MESSAGE_ERROR で reset されない
 
 - Created: 2026-09-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-s2n-wt-optimistic-close-reset
 - Polished: {YYYY-MM-DD}
 
@@ -32,7 +32,24 @@
 
 ## 解決方法
 
-(実装時に追記)
+### 修正内容
+
+- `Connection::establish_wt_session_server` の戻り値を `Result<(), Error>` に変更し、楽観的カプセル送信でバッファリングされたデータの検証に失敗した場合はセッションを終了してからエラーを伝播する。`send_response` はこのエラーを呼び出し元へ返す。検証は `qpack_encoder.track_section` より前に行い、未送出セクションがエンコーダーに残らないようにする
+- `WtSessionRequest::accept` は `send_response` のエラー時に 2xx を送らず、`reset_stream_on_stream_error` で CONNECT ストリームへ RESET_STREAM(H3_MESSAGE_ERROR) を送ってからエラーを返す
+- `run_server_connect_recv_task_inner` / `run_client_connect_recv_task_inner` の `pending_wt_events` ループは終端 `SessionClosed` を転送しても return せず、確立後と同じくピアの FIN / Err まで読み続ける (`session_closed_delivered` は pending ループで転送した場合も記録する)
+
+### テスト
+
+- `src/connection/mod.rs` に `test_wt_optimistic_capsule_trailing_rejected_on_establish` を追加する (2xx 前にバッファリングした WT_CLOSE_SESSION + 追加 DATA が `send_response` の `Error::StreamError(MessageError)` になることを検証)
+- `crates/tokio-s2n-quic/tests/webtransport_post_close_reset_e2e.rs` に 2 件追加する
+  - `optimistic_pre_response_data_triggers_message_error_reset`: CONNECT と同時 (2xx 前) に送った WT_CLOSE_SESSION + 追加 DATA でピアが RESET_STREAM(H3_MESSAGE_ERROR) を観測する
+  - `pending_session_closed_then_additional_data_triggers_message_error_reset`: 確立前にバッファリングした WT_CLOSE_SESSION を受けて確立した後、追加 DATA を送るとピアが RESET_STREAM(H3_MESSAGE_ERROR) を観測する
+- `tests/helpers/wt_raw_client.rs` に `connect_with_optimistic_payload` を追加する (CONNECT リクエストと 2xx 前ペイロードを同一 write で送り、確立を待たずに返る)
+- 各修正を個別に戻すと対応テストが失敗する (FIN を観測する) ことを確認し、回帰検知が機能することを確かめる
+
+### 検証結果
+
+- `cargo test --workspace --tests` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` が通る
 
 ### 関連ファイル
 
