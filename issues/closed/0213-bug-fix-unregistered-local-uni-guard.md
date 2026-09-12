@@ -1,7 +1,7 @@
 # 未登録のローカル開始 uni ストリームへのデータがピア開始ストリームとして誤処理される
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-unregistered-local-uni-guard
 - Polished: {YYYY-MM-DD}
 
@@ -30,6 +30,22 @@
 - `cargo test --workspace --tests` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` が通る
 
 ## 解決方法
+
+### 修正内容
+
+- `Connection::handle_unidirectional_stream` の入口 (無視対象チェックの後、既知ストリーム判定の前) で `is_local_initiated_uni(kind)` を判定し、ローカル開始 uni へのデータ / FIN を静かに吸収する。制御 / QPACK / WT 等のピア開始ストリームとして誤登録しない
+- 0209 の登録済みローカル開始 uni のガードは関数単体の防御として残す (多層防御)
+
+### テスト
+
+- `src/connection/mod.rs` に 2 件追加する
+  - `test_unregistered_local_uni_stream_data_is_ignored_on_server`: 未登録のサーバー開始 uni (stream_id=7) に QPACK エンコーダーストリームタイプ / 制御ストリームタイプ / FIN を feed し、エンコーダーストリームへ誤登録されず、制御ストリームの登録が変化せず、イベントが発火しないことを検証する
+  - `test_unregistered_local_uni_stream_data_is_ignored_on_client`: クライアント側でも同様に検証する
+- ガードを外すと 2 テストが失敗する (QPACK エンコーダーストリームとして誤登録) ことを確認し、回帰検知が機能することを確かめる
+
+### 検証結果
+
+- `cargo test --workspace --tests` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` が通る
 
 ### 関連ファイル
 

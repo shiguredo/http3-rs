@@ -734,6 +734,15 @@ impl Connection {
             return Ok(());
         }
 
+        // ローカル開始 uni (ピアは受信専用) へのデータ / FIN は RFC 9000 Section 19.8 の
+        // STREAM_STATE_ERROR に相当する不正入力。QUIC 層で拒否されるのが通常経路だが、
+        // 統合層の不具合や将来の QUIC 実装変更で到達しても制御 / QPACK / 新規 WT 等の
+        // ピア開始ストリームとして誤処理しないよう、ここで静かに吸収する
+        let kind = crate::stream::StreamKind::from_stream_id(stream_id);
+        if self.is_local_initiated_uni(kind) {
+            return Ok(());
+        }
+
         // データがある場合は先に処理する (FIN 判定の前にパーサーを進める)
         if !data.is_empty() {
             // 既知のストリームかチェック
@@ -5407,6 +5416,69 @@ mod tests {
             client.wt_uni_streams.contains_key(&6),
             "登録が維持されること"
         );
+        assert!(
+            client.poll_event().expect("test must succeed").is_none(),
+            "UniStreamEnd が発火しないこと"
+        );
+    }
+
+    #[test]
+    fn test_unregistered_local_uni_stream_data_is_ignored_on_server() {
+        // 未登録のローカル開始 uni へのデータ / FIN は不正入力として静かに吸収し、
+        // ピア開始ストリーム (制御 / QPACK 等) として誤処理しない
+        // (RFC 9000 Section 19.8)
+        let mut server = make_server_with_established_wt_session(0);
+
+        // stream_id=7 (サーバー開始 uni) に QPACK エンコーダーストリームタイプを送る
+        server
+            .feed_stream(7, &[0x02], false)
+            .expect("test must succeed");
+        assert!(
+            server.peer_encoder_stream_id.is_none(),
+            "QPACK エンコーダーストリームとして誤登録されないこと"
+        );
+        assert!(
+            server.poll_event().expect("test must succeed").is_none(),
+            "イベントが発火しないこと"
+        );
+
+        // 制御ストリームタイプも同様に吸収する (既存の登録が変化しないこと)
+        let control_stream_before = server.control_recv.stream_id();
+        server
+            .feed_stream(7, &[0x00], false)
+            .expect("test must succeed");
+        assert_eq!(
+            server.control_recv.stream_id(),
+            control_stream_before,
+            "制御ストリームの登録が変化しないこと"
+        );
+
+        // FIN も吸収し UniStreamEnd を発火しない
+        server.feed_stream(7, &[], true).expect("test must succeed");
+        assert!(
+            server.poll_event().expect("test must succeed").is_none(),
+            "UniStreamEnd が発火しないこと"
+        );
+    }
+
+    #[test]
+    fn test_unregistered_local_uni_stream_data_is_ignored_on_client() {
+        // クライアント側でも未登録のローカル開始 uni へのデータ / FIN を吸収する
+        let mut client = wt_negotiated_client_with_session(0);
+
+        client
+            .feed_stream(6, &[0x02], false)
+            .expect("test must succeed");
+        assert!(
+            client.peer_encoder_stream_id.is_none(),
+            "QPACK エンコーダーストリームとして誤登録されないこと"
+        );
+        assert!(
+            client.poll_event().expect("test must succeed").is_none(),
+            "イベントが発火しないこと"
+        );
+
+        client.feed_stream(6, &[], true).expect("test must succeed");
         assert!(
             client.poll_event().expect("test must succeed").is_none(),
             "UniStreamEnd が発火しないこと"
