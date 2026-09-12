@@ -1,7 +1,7 @@
 # examples/wt_server が WT_MAX_DATA をクライアントへ通知せず WebKit で双方向ストリームの送信が停止する
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-wt-server-max-data-capsule
 - Polished: {YYYY-MM-DD}
 
@@ -45,6 +45,36 @@ Chromium では同じサーバーで停止しないため、ブラウザ実装�
 
 ## 解決方法
 
+0217 (WebKit から双方向ストリームへ 4 KiB 以上を書き込むと完了しない) に統合して closed にする。
+
+### 統合の理由
+
+本 issue は起票時に「WebKit の送信ウィンドウが 0 のままになるため停止する」と診断したが、実測でこの診断が誤りであることが判明した。
+
+計測した結果:
+
+| データサイズ | WebKit |
+|---|---|
+| 1 KiB | 成功する |
+| 4 KiB | 停止する |
+| 16 KiB | 停止する |
+| 256 KiB | 停止する |
+| 512 KiB | 停止する |
+
+- 閾値は 4 KiB であり、WebTransport のデータフロー制御の窓より小さい。窓が 0 であることが原因なら 1 KiB も停止するはずである
+- サーバーがセッション確立直後に送る `WT_MAX_STREAMS` / `WT_MAX_DATA` カプセルの値を変えても、閾値は 1 バイトも変化しなかった。カプセルの値は停止の有無に影響していない
+- 停止時、サーバーは双方向ストリームのデータを 1 バイトも受信していない。CONNECT ストリームの受信は成功している
+
+このため、原因は WebTransport のデータフロー制御ではなく、原因自体が未確定である。停止がこのリポジトリ側の問題か WebKit 側の問題かも切り分けられていない。
+
+同一の症状を 0217 で扱っているため、2 つの issue に分けておく意味がない。実測の記録は `docs/WEBKIT_WT.md` にあり、0217 から参照している。
+
+### 起票時に想定した修正について
+
+`Connection::initialize_session_flow_control` が SETTINGS とは独立した上限で初期カプセルを生成できるようにする変更を実装して検証したが、WebKit の閾値は変化しなかった。停止の原因ではないため破棄した。
+
+なお「SETTINGS で `SETTINGS_WT_INITIAL_MAX_*` を広告できない draft 形状では初期クレジットのカプセルが生成されない」という記述自体はコード上そのとおりである。ただし本 issue の症状の原因ではない。
+
 ### 関連ファイル
 
 - `src/connection/wt_session.rs` (`Connection::initialize_session_flow_control` / `Connection::wt_data_consumed`)
@@ -54,3 +84,8 @@ Chromium では同じサーバーで停止しないため、ブラウザ実装�
 - `crates/tokio-s2n-quic/src/webtransport/session.rs` (`WtSession::consume_data`)
 - 一次資料: `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 5.5, 5.6
 - 検証手段: `interop/browser` (Chromium / WebKit の Playwright テスト)
+- 実測の記録: `docs/WEBKIT_WT.md`
+
+### 関連 issue
+
+- 0217 (統合先。原因の確定と修正を扱う)
