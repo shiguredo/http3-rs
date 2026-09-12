@@ -552,7 +552,10 @@ impl Connection {
     /// RESET_STREAM はセッションに通知する。SETTINGS 未着で保留中の 0x41 bidi は
     /// 保留エントリを破棄して `ignored_pre_negotiation_wt_bidi` に記録し `true` を返す。
     /// 既に拒否済みで `ignored_pre_negotiation_wt_bidi` に登録済みの 0x41 bidi は
-    /// 静かに吸収して `true` を返す。非 WT ストリームは `false` を返す。
+    /// 静かに吸収して `true` を返す。WT データストリームとして登録済みの
+    /// ローカル開始 uni への RESET_STREAM は RFC 9000 Section 19.4 の
+    /// STREAM_STATE_ERROR に相当する不正入力として静かに吸収し `true` を返す。
+    /// 非 WT ストリームは `false` を返す。
     pub(crate) fn handle_wt_stream_reset(
         &mut self,
         stream_id: u64,
@@ -615,6 +618,17 @@ impl Connection {
         };
         let is_bidi = self.wt_bidi_streams.contains_key(&stream_id);
 
+        // WT データストリームとして登録済みのローカル開始 uni (ピアは受信専用) への
+        // RESET_STREAM は RFC 9000 Section 19.4 の STREAM_STATE_ERROR に相当する不正入力。
+        // QUIC 層で拒否されるのが通常経路だが、統合層の不具合や将来の QUIC 実装変更で
+        // 到達しても不正に処理しないよう、ここで静かに吸収する。ピアが開いていない
+        // ストリームの WT_MAX_STREAMS クレジットを回復してはならない
+        // (draft-ietf-webtrans-http3-16 Section 5.3)
+        let kind = crate::stream::StreamKind::from_stream_id(stream_id);
+        if self.is_local_initiated_uni(kind) {
+            return true;
+        }
+
         // データ FC の計上と自動消費 (draft-ietf-webtrans-http3-16 Section 5.4)
         // 超過でセッション終了した場合は StreamReset イベントを発火しない
         // (SessionClosed の reset_streams に含まれるため)
@@ -624,7 +638,6 @@ impl Connection {
 
         // ストリーム数クレジットの回復 (ピア開始のみ。WT_MAX_STREAMS は
         // ピアが開くストリーム数の制限。draft-ietf-webtrans-http3-16 Section 5.3)
-        let kind = crate::stream::StreamKind::from_stream_id(stream_id);
         let local_initiated = self.is_local_initiated_bidi(kind);
         if let Some(session) = self.wt_sessions.get_mut(&session_id) {
             if !local_initiated {
@@ -663,7 +676,8 @@ impl Connection {
     ) -> bool {
         // ヘッダー減算はピアがヘッダーを送った場合のみ適用する
         // (ローカル開始 bidi は開始側 (ローカル) がヘッダーを送るため、
-        //  ピアの final_size にヘッダーは含まれない)
+        //  ピアの final_size にヘッダーは含まれない。ローカル開始 uni は
+        //  呼び出し元の早期 return で本関数に到達しない)
         let kind = crate::stream::StreamKind::from_stream_id(stream_id);
         let header_len = if self.is_local_initiated_bidi(kind) {
             0
