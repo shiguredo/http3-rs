@@ -44,6 +44,8 @@
   - @voluntas
 - [FIX] `handle_wt_stream_reset` が WebTransport データストリームとして登録済みのローカル開始 uni ストリームの RESET_STREAM を bidi と同様に処理し、ピアが開いていないストリームの WT_MAX_STREAMS クレジットを回復して登録を除去する問題を修正する。QUIC 層が STREAM_STATE_ERROR で終了とすべき事象 (RFC 9000 Section 19.4) を本層では防御的に静かに吸収する (draft-ietf-webtrans-http3-16 Section 5.3)
   - @voluntas
+- [FIX] 登録済みローカル開始 uni ストリームへの STREAM / FIN が WebTransport データとして誤処理され、データ FC 計上・WT_MAX_STREAMS クレジット回復・登録除去・イベント発火が起きる問題を修正する。統合層の不具合等で到達した場合は防御的に静かに吸収する (RFC 9000 Section 19.8 / draft-ietf-webtrans-http3-16 Section 5.3 / 5.4)
+  - @voluntas
 - [CHANGE] MSRV (Minimum Supported Rust Version) を 1.88 から 1.93 に引き上げる
   - @voluntas
 - [CHANGE] `Client::connect` / `ClientWebTransportSession::connect` / `TlsContext::new_client` でサーバー証明書のチェーン検証とホスト名検証を有効にする (従来 `verify_peer=true` は検証なしと同等の挙動だった)。検証に失敗する既存接続は失敗するようになる (RFC 9114 Section 3.1 / RFC 9001 Section 4.4)

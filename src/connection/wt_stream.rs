@@ -168,8 +168,9 @@ impl Connection {
     ///   (draft-ietf-webtrans-http3-16 Section 4.4)。
     ///   ローカル開始 uni に対する STREAM (受信データ) / FIN の到着は QUIC 層で
     ///   STREAM_STATE_ERROR となり sans-I/O へは到達しない (RFC 9000 Section 19.8)。
-    ///   登録済みローカル開始 uni への RESET_STREAM が統合層の不具合等で到達した場合は
-    ///   `handle_wt_stream_reset` が防御的に静かに吸収する (RFC 9000 Section 19.4)。
+    ///   登録済みローカル開始 uni への STREAM / FIN / RESET_STREAM が統合層の不具合等で
+    ///   到達した場合は `handle_wt_uni_stream_data` / `handle_wt_uni_stream_fin` /
+    ///   `handle_wt_stream_reset` が防御的に静かに吸収する (RFC 9000 Section 19.4 / 19.8)。
     ///
     /// 受信データにはストリームヘッダー (signal value + session ID) が含まれない。
     /// ヘッダーは開始側がストリーム先頭で 1 回だけ送信する
@@ -726,7 +727,8 @@ impl Connection {
     ///
     /// (draft-ietf-webtrans-http3-15 Section 4.6, 5.4)
     /// Pending セッション中はバッファに追記、Established 後はイベント発火。
-    /// 非 WT ストリームは `false` を返す。
+    /// 登録済みローカル開始 uni への STREAM は防御的に静かに吸収し `Ok(true)` を
+    /// 返す (RFC 9000 Section 19.8)。非 WT ストリームは `false` を返す。
     pub(crate) fn handle_wt_uni_stream_data(
         &mut self,
         stream_id: u64,
@@ -735,6 +737,15 @@ impl Connection {
         let Some(&session_id) = self.wt_uni_streams.get(&stream_id) else {
             return Ok(false);
         };
+
+        // WT データストリームとして登録済みのローカル開始 uni (ピアは受信専用) への
+        // STREAM は RFC 9000 Section 19.8 の STREAM_STATE_ERROR に相当する不正入力。
+        // QUIC 層で拒否されるのが通常経路だが、統合層の不具合や将来の QUIC 実装変更で
+        // 到達しても不正に処理しないよう、ここで静かに吸収する
+        let kind = crate::stream::StreamKind::from_stream_id(stream_id);
+        if self.is_local_initiated_uni(kind) {
+            return Ok(true);
+        }
 
         let buffered = self
             .wt_sessions
@@ -782,11 +793,22 @@ impl Connection {
     ///
     /// (draft-ietf-webtrans-http3-15 Section 4.6, 5.6)
     /// Pending セッション中はバッファに記録、Established 後はイベント発火。
-    /// 非 WT ストリームは `false` を返す。
+    /// 登録済みローカル開始 uni への FIN は登録を維持したまま防御的に静かに吸収し
+    /// `true` を返す (RFC 9000 Section 19.8)。非 WT ストリームは `false` を返す。
     pub(crate) fn handle_wt_uni_stream_fin(&mut self, stream_id: u64) -> bool {
-        let Some(session_id) = self.wt_uni_streams.remove(&stream_id) else {
+        let Some(&session_id) = self.wt_uni_streams.get(&stream_id) else {
             return false;
         };
+
+        // WT データストリームとして登録済みのローカル開始 uni (ピアは受信専用) への
+        // FIN は RFC 9000 Section 19.8 の STREAM_STATE_ERROR に相当する不正入力。
+        // 登録を維持し、クレジット回復・登録除去・UniStreamEnd 発火を行わない
+        let kind = crate::stream::StreamKind::from_stream_id(stream_id);
+        if self.is_local_initiated_uni(kind) {
+            return true;
+        }
+
+        self.wt_uni_streams.remove(&stream_id);
 
         let pending = self
             .wt_sessions
