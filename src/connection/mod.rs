@@ -2122,16 +2122,19 @@ impl Connection {
             self.closed_wt_sessions.insert(stream_id);
         }
 
-        // フィールドセクションの送信を記録 (RFC 9204 Section 2.1.1, 4.4.1)
-        // 送信成功後に行う: send_encoded_headers が失敗した場合に未送出セクションが
-        // エンコーダーに登録されたままになるのを防ぐ
-        let ric = self.qpack_encoder.last_required_insert_count();
-        self.qpack_encoder.track_section(stream_id, ric);
-
         // サーバー側: WebTransport CONNECT に対する 2xx レスポンス送信時に
         // セッションを Established に遷移させる (draft-ietf-webtrans-http3-15 Section 3)
         // WT 分岐を wt_session.rs のヘルパーに委譲
-        self.establish_wt_session_server(stream_id, headers);
+        // エラー時は encode 済みのレスポンスを送信バッファに残したまま呼び出し元が
+        // reset するため、QPACK のセクション追跡より前に検証する
+        self.establish_wt_session_server(stream_id, headers)?;
+
+        // フィールドセクションの送信を記録 (RFC 9204 Section 2.1.1, 4.4.1)
+        // 送信と WebTransport の検証が成功した後に行う: send_encoded_headers /
+        // establish_wt_session_server が失敗した場合に未送出セクションが
+        // エンコーダーに登録されたままになるのを防ぐ
+        let ric = self.qpack_encoder.last_required_insert_count();
+        self.qpack_encoder.track_section(stream_id, ric);
 
         Ok(())
     }
@@ -6196,6 +6199,59 @@ mod tests {
         assert!(
             matches!(err, Error::StreamError(ErrorCode::MessageError)),
             "同一 DATA フレーム内の追加バイトは H3_MESSAGE_ERROR であること: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_wt_optimistic_capsule_trailing_rejected_on_establish() {
+        // 2xx 応答前にバッファリングされた WT_CLOSE_SESSION に続く追加 DATA は、
+        // 2xx 応答時の establish で H3_MESSAGE_ERROR として検出されることを検証する
+        // (draft-ietf-webtrans-http3-16 Section 6)
+        let (mut client, mut server) = setup_wt_pair();
+
+        // CONNECT リクエストを送る (2xx レスポンスはまだ送らない)
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").expect("test must succeed"),
+            Header::new(b":protocol", b"webtransport-h3").expect("test must succeed"),
+            Header::new(b":scheme", b"https").expect("test must succeed"),
+            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":path", b"/wt").expect("test must succeed"),
+        ];
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("test must succeed");
+        let (req_data, _) = client
+            .take_stream_data(stream_id)
+            .expect("test must succeed");
+        server
+            .feed_stream(stream_id, &req_data, false)
+            .expect("test must succeed");
+        let _ = server.drain_events().expect("test must succeed");
+
+        // 2xx 前に WT_CLOSE_SESSION + 追加 DATA を送る (楽観的カプセル送信)
+        let mut data = close_session_data_frame();
+        data.extend_from_slice(&[0x00, 0x01, 0xAA]);
+        server
+            .feed_stream(stream_id, &data, false)
+            .expect("test must succeed");
+        assert_eq!(
+            server.wt_sessions[&stream_id].state,
+            WtSessionState::Pending,
+            "2xx 応答前は Pending のままであること"
+        );
+        assert!(
+            !server.wt_sessions[&stream_id].capsule_buf.is_empty(),
+            "楽観的カプセルがバッファリングされること"
+        );
+
+        // 2xx 応答時の establish が H3_MESSAGE_ERROR を返すこと
+        let response = vec![Header::new(b":status", b"200").expect("test must succeed")];
+        let err = server
+            .send_response(stream_id, &response, false)
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::StreamError(ErrorCode::MessageError)),
+            "楽観的カプセルの追加 DATA は H3_MESSAGE_ERROR であること: {err:?}"
         );
     }
 

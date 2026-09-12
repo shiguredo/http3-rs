@@ -2,7 +2,8 @@
 //!
 //! 生の s2n-quic クライアントで CONNECT ストリームを直接操作し、WT_CLOSE_SESSION
 //! 送信後に追加 DATA を送ると、受信側が RESET_STREAM(H3_MESSAGE_ERROR) を返すことを
-//! 確認する (draft-ietf-webtrans-http3-16 Section 6)。
+//! 確認する。2xx 応答前に追加 DATA を送る楽観的カプセル送信経路も検証する
+//! (draft-ietf-webtrans-http3-16 Section 6)。
 //!
 //! モック・スタブは使用しない (実 QUIC 接続を利用する)。
 
@@ -235,6 +236,120 @@ async fn separate_write_additional_data_triggers_message_error_reset() {
 
     let (_session, event) = server_task
         .await
+        .expect("サーバータスクの終了に成功すること");
+    assert!(
+        matches!(event, WebTransportEvent::SessionClosed { .. }),
+        "サーバー側で SessionClosed が届くこと: {event:?}"
+    );
+}
+
+/// 2xx 応答前に届いた WT_CLOSE_SESSION + 追加 DATA で RESET_STREAM(H3_MESSAGE_ERROR) が返る
+///
+/// 楽観的カプセル送信経路 (2xx 応答前に CONNECT ストリームへ DATA が届く場合) を検証する。
+/// CONNECT リクエストと DATA を同一 write で送るため、通常はセッション確立時に
+/// バッファリング済みカプセルの検証で H3_MESSAGE_ERROR になる。QUIC のチャンク分割次第で
+/// 確立後の受信タスク経路になった場合も、どちらでも RESET_STREAM(H3_MESSAGE_ERROR) が
+/// 送出される。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn optimistic_pre_response_data_triggers_message_error_reset() {
+    let (mut server, server_addr, cert_pem) = start_server().await;
+
+    let server_task = tokio::spawn(async move {
+        let request = server.accept().await.expect("accept に成功すること");
+        match request.accept().await {
+            Ok(mut session) => {
+                // 確立後の受信タスク経路になった場合は、受信タスクが reset を送出して
+                // 終了する (recv_event が None になる) までセッションを保持する
+                let _ = tokio::time::timeout(Duration::from_secs(5), session.recv_event()).await;
+                let _ = tokio::time::timeout(Duration::from_secs(5), session.recv_event()).await;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    });
+
+    let mut data = close_session_data_frame();
+    data.extend_from_slice(&additional_data_frame());
+    let mut client =
+        RawWtClient::connect_with_optimistic_payload(server_addr, &cert_pem, &data).await;
+
+    let err = observe_reset(&mut client).await;
+    assert_message_error_reset(&err);
+
+    let result = tokio::time::timeout(Duration::from_secs(5), server_task)
+        .await
+        .expect("accept のタイムアウト待ちが完了すること")
+        .expect("サーバータスクの終了に成功すること");
+    // 確立時のエラー (楽観的カプセル経路) または確立成功 (確立後の受信タスク経路) の
+    // いずれでも、ピアへの RESET_STREAM(H3_MESSAGE_ERROR) は上で確認済み
+    match result {
+        Ok(()) => {}
+        Err(tokio_s2n_quic::Error::Http3(shiguredo_http3::Error::StreamError(
+            shiguredo_http3::ErrorCode::MessageError,
+        ))) => {}
+        Err(other) => panic!("楽観的カプセルの処理で予期しないエラーが返った: {other}"),
+    }
+}
+
+/// 確立前に WT_CLOSE_SESSION を受け取り、確立後に追加 DATA が届いても reset される
+///
+/// 2xx 前に WT_CLOSE_SESSION のみがバッファリングされるケースでは、2xx 応答後の
+/// 受信タスクが SessionClosed を転送したあとも FIN / Err まで読み続ける必要がある。
+/// 早期に終了すると後続の追加 DATA を読めず、H3_MESSAGE_ERROR の reset
+/// (draft-ietf-webtrans-http3-16 Section 6 の MUST) に到達できない。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pending_session_closed_then_additional_data_triggers_message_error_reset() {
+    let (mut server, server_addr, cert_pem) = start_server().await;
+
+    let (closed_tx, closed_rx) = tokio::sync::oneshot::channel::<()>();
+    let server_task = tokio::spawn(async move {
+        let request = server.accept().await.expect("accept に成功すること");
+        let mut session = request
+            .accept()
+            .await
+            .expect("セッション確立に成功すること");
+        let event = tokio::time::timeout(Duration::from_secs(5), session.recv_event())
+            .await
+            .expect("SessionClosed のタイムアウト待ちが完了すること")
+            .expect("SessionClosed が届くこと");
+        // クライアントへ SessionClosed 観測を通知し、追加 DATA を送らせる
+        let _ = closed_tx.send(());
+        // 受信タスクが追加 DATA を reset するまでセッションを保持する
+        let next = tokio::time::timeout(Duration::from_secs(5), session.recv_event())
+            .await
+            .expect("None 受信のタイムアウト待ちが完了すること");
+        assert!(
+            next.is_none(),
+            "SessionClosed の後は recv_event が None を返すこと"
+        );
+        (session, event)
+    });
+
+    // CONNECT リクエスト + WT_CLOSE_SESSION をまとめて送る (2xx 前)
+    let mut client = RawWtClient::connect_with_optimistic_payload(
+        server_addr,
+        &cert_pem,
+        &close_session_data_frame(),
+    )
+    .await;
+
+    // サーバーが SessionClosed を観測するまで待つ
+    closed_rx
+        .await
+        .expect("SessionClosed 観測の通知を受信できること");
+    // 確立後に追加 DATA を送る (受信タスクが SessionClosed 転送後も読み続けることの検証)
+    client
+        .send
+        .send(Bytes::from(additional_data_frame()))
+        .await
+        .expect("追加データの送信に成功すること");
+
+    let err = observe_reset(&mut client).await;
+    assert_message_error_reset(&err);
+
+    let (_session, event) = tokio::time::timeout(Duration::from_secs(5), server_task)
+        .await
+        .expect("サーバータスクのタイムアウト待ちが完了すること")
         .expect("サーバータスクの終了に成功すること");
     assert!(
         matches!(event, WebTransportEvent::SessionClosed { .. }),

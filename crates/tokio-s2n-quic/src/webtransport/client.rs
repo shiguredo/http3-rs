@@ -404,19 +404,22 @@ async fn run_client_connect_recv_task_inner(
     connect_tx: &mpsc::UnboundedSender<ConnectCommand>,
 ) {
     // ハンドシェイク中に到着していた WebTransport イベントを先に流す。
-    // SessionClosed が既にキューに乗っていた場合はここでタスクを終了する。
+    // SessionClosed を転送してもタスクは終了せず、ピアの FIN / Err まで読み続ける。
+    // 早期に終了すると WT_CLOSE_SESSION 後の追加 DATA を読めず、
+    // H3_MESSAGE_ERROR での reset (draft-ietf-webtrans-http3-16 Section 6 の MUST) に
+    // 到達できない。
+    // 実 SessionClosed を転送済みか (Err 分岐で synthesized を再送しないため)
+    let mut session_closed_delivered = false;
     for event in pending_wt_events {
         let is_terminal = matches!(event, WebTransportEvent::SessionClosed { .. });
         if event_tx.send(event).await.is_err() {
             return;
         }
         if is_terminal {
-            return;
+            session_closed_delivered = true;
         }
     }
 
-    // 実 SessionClosed を転送済みか (Err 分岐で synthesized を再送しないため)
-    let mut session_closed_delivered = false;
     loop {
         let received = recv_stream.receive().await;
         // MutexGuard は await を跨げないため、ブロックで囲って先にドロップする。

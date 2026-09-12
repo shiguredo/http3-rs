@@ -1093,13 +1093,18 @@ impl Connection {
     ///
     /// (draft-ietf-webtrans-http3-15 Section 3, 5.1, 5.5, 5.6)
     /// 非 WT セッションまたは非 2xx の場合は何もしない。
+    ///
+    /// 楽観的カプセル送信でバッファリングされたデータが不正な場合
+    /// (`WT_CLOSE_SESSION` 後の追加バイト等) は `Error::StreamError(MessageError)` を
+    /// 返す。呼び出し側は CONNECT ストリームを `H3_MESSAGE_ERROR` で reset すること
+    /// (draft-ietf-webtrans-http3-16 Section 6)。
     pub(crate) fn establish_wt_session_server(
         &mut self,
         stream_id: u64,
         headers: &[crate::qpack::Header],
-    ) {
+    ) -> Result<(), Error> {
         if self.role != Role::Server || !super::is_success_status(headers) {
-            return;
+            return Ok(());
         }
 
         let fc_enabled = self.is_wt_flow_control_enabled();
@@ -1131,29 +1136,25 @@ impl Connection {
                     0,
                     String::new(),
                 );
-                return;
+                return Ok(());
             }
 
             // 楽観的カプセル送信でバッファリングされたデータを処理する
             // (draft-ietf-webtrans-http3-16 Section 3.2)
-            if let Some(session) = self.wt_sessions.get(&stream_id)
-                && !session.capsule_buf.is_empty()
-            {
-                let buf = std::mem::take(
-                    &mut self
-                        .wt_sessions
-                        .get_mut(&stream_id)
-                        .expect("session must exist")
-                        .capsule_buf,
-                );
-                if let Some(session) = self.wt_sessions.get_mut(&stream_id) {
-                    session.capsule_buf = buf;
-                }
-                if self.process_wt_capsule_data(stream_id, &[]).is_err() {
-                    self.terminate_wt_session(stream_id);
-                }
+            let has_buffered_capsules = self
+                .wt_sessions
+                .get(&stream_id)
+                .is_some_and(|session| !session.capsule_buf.is_empty());
+            if has_buffered_capsules && let Err(e) = self.process_wt_capsule_data(stream_id, &[]) {
+                // 失敗したセッションを終了し、呼び出し元が CONNECT ストリームを
+                // H3_MESSAGE_ERROR で reset できるようエラーを伝播する
+                // (draft-ietf-webtrans-http3-16 Section 6)。
+                self.terminate_wt_session(stream_id);
+                return Err(e);
             }
         }
+
+        Ok(())
     }
 
     /// SETTINGS 受信前に保留した WT CONNECT を処理する

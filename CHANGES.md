@@ -40,6 +40,8 @@
   - @voluntas
 - [FIX] `tokio-s2n-quic` の `H3Server` がピアの WebTransport bidi ストリーム (0x41) をリクエストストリームとして処理し、ヘッダー / FIN が来ないまま 10ms ポーリングでハングする問題を修正する。`accept_request` は WT イベント受信時に `WT_BUFFERED_STREAM_REJECTED` の RESET_STREAM / STOP_SENDING を送って `Error::InvalidState` で終了し、`H3Server::bind` は WebTransport 有効化済みの `ServerConfig` を拒否する (draft-ietf-webtrans-http3-16 Section 4.3 / 4.6)
   - @voluntas
+- [FIX] `tokio-s2n-quic` の楽観的カプセル送信経路で、2xx 応答前にバッファリングされた WT_CLOSE_SESSION 後の追加 DATA が H3_MESSAGE_ERROR で reset されない問題を修正する。`send_response` はセッション確立時に検出したストリームエラーを伝播し、`WtSessionRequest::accept` が RESET_STREAM(H3_MESSAGE_ERROR) を送出する。受信タスクは SessionClosed 転送後も FIN / Err まで読み続ける (draft-ietf-webtrans-http3-16 Section 6)
+  - @voluntas
 - [CHANGE] MSRV (Minimum Supported Rust Version) を 1.88 から 1.93 に引き上げる
   - @voluntas
 - [CHANGE] `Client::connect` / `ClientWebTransportSession::connect` / `TlsContext::new_client` でサーバー証明書のチェーン検証とホスト名検証を有効にする (従来 `verify_peer=true` は検証なしと同等の挙動だった)。検証に失敗する既存接続は失敗するようになる (RFC 9114 Section 3.1 / RFC 9001 Section 4.4)

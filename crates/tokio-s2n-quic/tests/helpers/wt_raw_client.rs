@@ -49,6 +49,27 @@ pub struct RawWtClient {
 impl RawWtClient {
     /// 接続して WebTransport の CONNECT リクエストを送る
     pub async fn connect(server_addr: SocketAddr, ca_cert_pem: &str) -> Self {
+        Self::connect_inner(server_addr, ca_cert_pem, None).await
+    }
+
+    /// 接続して CONNECT リクエストを送り、2xx レスポンス受信前に
+    /// `optimistic_payload` を CONNECT ストリームへ送る
+    ///
+    /// 楽観的カプセル送信 (2xx 応答前に CONNECT ストリームへ送出される DATA) の
+    /// 検証に使用する。セッション確立は待たず、送信直後に返る。
+    pub async fn connect_with_optimistic_payload(
+        server_addr: SocketAddr,
+        ca_cert_pem: &str,
+        optimistic_payload: &[u8],
+    ) -> Self {
+        Self::connect_inner(server_addr, ca_cert_pem, Some(optimistic_payload)).await
+    }
+
+    async fn connect_inner(
+        server_addr: SocketAddr,
+        ca_cert_pem: &str,
+        optimistic_payload: Option<&[u8]>,
+    ) -> Self {
         let client = s2n_quic::Client::builder()
             .with_tls(ca_cert_pem)
             .expect("クライアント TLS の構築に成功すること")
@@ -180,39 +201,46 @@ impl RawWtClient {
         {
             data.extend_from_slice(&chunk);
         }
+        if let Some(payload) = optimistic_payload {
+            // 楽観的カプセル送信: CONNECT リクエストと同一 write にまとめ、
+            // サーバー側でヘッダーと同一 receive チャンクに届きやすくする。
+            data.extend_from_slice(payload);
+        }
         send.send(Bytes::from(data))
             .await
             .expect("CONNECT リクエストの送信に成功すること");
 
-        // サーバーの 200 レスポンスを処理してセッション確立を待つ。
-        // 確立前に CONNECT ストリームへデータを注入すると、サーバーの
-        // ハンドシェイク中に処理されてしまうため。
-        loop {
-            let established = h3
-                .lock()
-                .expect("mutex should not be poisoned")
-                .drain_events()
-                .expect("イベントドレインに成功すること")
-                .iter()
-                .any(|event| {
-                    matches!(
-                        event,
-                        Event::WebTransport(WebTransportEvent::SessionEstablished { .. })
-                    )
-                });
-            if established {
-                break;
-            }
-            match tokio::time::timeout(Duration::from_secs(5), recv.receive()).await {
-                Ok(Ok(Some(data))) => {
-                    h3.lock()
-                        .expect("mutex should not be poisoned")
-                        .feed_stream(connect_stream_id, &data, false)
-                        .expect("CONNECT レスポンスの feed に成功すること");
+        if optimistic_payload.is_none() {
+            // サーバーの 200 レスポンスを処理してセッション確立を待つ。
+            // 確立前に CONNECT ストリームへデータを注入すると、サーバーの
+            // ハンドシェイク中に処理されてしまうため。
+            loop {
+                let established = h3
+                    .lock()
+                    .expect("mutex should not be poisoned")
+                    .drain_events()
+                    .expect("イベントドレインに成功すること")
+                    .iter()
+                    .any(|event| {
+                        matches!(
+                            event,
+                            Event::WebTransport(WebTransportEvent::SessionEstablished { .. })
+                        )
+                    });
+                if established {
+                    break;
                 }
-                Ok(Ok(None)) => panic!("セッション確立前に FIN を受信した"),
-                Ok(Err(e)) => panic!("セッション確立前にエラーを受信した: {e}"),
-                Err(_) => panic!("セッション確立のタイムアウト"),
+                match tokio::time::timeout(Duration::from_secs(5), recv.receive()).await {
+                    Ok(Ok(Some(data))) => {
+                        h3.lock()
+                            .expect("mutex should not be poisoned")
+                            .feed_stream(connect_stream_id, &data, false)
+                            .expect("CONNECT レスポンスの feed に成功すること");
+                    }
+                    Ok(Ok(None)) => panic!("セッション確立前に FIN を受信した"),
+                    Ok(Err(e)) => panic!("セッション確立前にエラーを受信した: {e}"),
+                    Err(_) => panic!("セッション確立のタイムアウト"),
+                }
             }
         }
 
