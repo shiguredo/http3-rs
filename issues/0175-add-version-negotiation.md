@@ -1,7 +1,7 @@
 # サポート外バージョンの Initial に Version Negotiation パケットを返す
 
 - Created: 2026-08-13
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-18
 - Branch: feature/add-version-negotiation
 - Polished: {YYYY-MM-DD}
 
@@ -33,6 +33,8 @@
 - `cargo test --all` と `cargo fmt --all -- --check` と `cargo clippy --all-targets --all-features -- -D warnings` が通る
 
 ## 解決方法
+
+Version Negotiation は shiguredo/ngtcp2-rs の crates.io クレート (`shiguredo_ngtcp2` / `shiguredo_ngtcp2_tokio`) が実装済みである。サポート外バージョンの Initial には接続状態を作らずに Version Negotiation パケットを返し、1200 バイト未満のデータグラムには返さない (同リポジトリの `docs/quic.md` と `tokio-ngtcp2/tests/e2e/version_negotiation.rs`)。`tokio-ngtcp2` は同クレートのサーバーを使うため、本リポジトリ側での実装は不要になった。
 
 ### 関連ファイル
 
