@@ -5,10 +5,8 @@ test:
 	cargo test --workspace --tests
 
 # doctest を実行する (compile_fail ブロックを含む)
-# bindgen 生成 doc (`nghttp3-sys` / `ngtcp2-sys`) には C 言語サンプルが含まれ
-# rustc ではパースできないため `--exclude` で除外する
 doc-test:
-	cargo test --doc --workspace --exclude nghttp3-sys --exclude ngtcp2-sys
+	cargo test --doc --workspace
 
 # 全テストカバレッジ付きで実行する
 cover:

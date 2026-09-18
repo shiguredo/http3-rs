@@ -28,14 +28,15 @@ jobs:
           toolchain: stable
       - run: cargo fmt --all --check
       # interop/h3 / interop/wt は専用ステップでのみ実行する。
-      # また shiguredo_ngtcp2 / tokio-ngtcp2 は POSIX ソケット型に依存するため Windows では除外する。
+      # また tokio-ngtcp2 は POSIX ソケット型に依存する shiguredo_ngtcp2_tokio を
+      # 使用するため Windows では除外する。
       - name: Set excluded crates
         id: excludes
         shell: bash
         run: |
           EXCLUDES="--exclude interop_h3 --exclude interop_wt"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            EXCLUDES="$EXCLUDES --exclude ngtcp2-sys --exclude nghttp3-sys --exclude shiguredo_ngtcp2 --exclude tokio-ngtcp2"
+            EXCLUDES="$EXCLUDES --exclude tokio-ngtcp2"
           fi
           echo "flags=$EXCLUDES" >> "$GITHUB_OUTPUT"
       - run: cargo clippy --workspace ${{ steps.excludes.outputs.flags }} -- -D warnings

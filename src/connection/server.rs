@@ -206,6 +206,29 @@ impl ServerConnection {
             reset_stream_at_supported,
         )
     }
+
+    /// WebTransport セッションのデータ消費を通知する
+    ///
+    /// (draft-ietf-webtrans-http3-15 Section 5.6)
+    pub fn wt_data_consumed(&mut self, session_id: u64, bytes: u64) {
+        self.inner.wt_data_consumed(session_id, bytes);
+    }
+
+    /// WebTransport セッションの送信待ちカプセルを取り出す
+    ///
+    /// 取り出したカプセルは DATA フレームに包んで CONNECT ストリームへ送信すること。
+    /// (draft-ietf-webtrans-http3-15 Section 5.6)
+    pub fn take_wt_pending_capsules(
+        &mut self,
+        session_id: u64,
+    ) -> Vec<crate::webtransport::Capsule> {
+        self.inner.take_wt_pending_capsules(session_id)
+    }
+
+    /// WebTransport セッションのフロー制御が有効かどうかを取得する
+    pub fn wt_session_flow_control_enabled(&self, session_id: u64) -> bool {
+        self.inner.wt_session_flow_control_enabled(session_id)
+    }
 }
 
 #[cfg(test)]
@@ -245,5 +268,32 @@ mod tests {
         server
             .register_local_wt_stream(0, 1)
             .expect("test must succeed");
+    }
+
+    #[test]
+    fn test_server_connection_wt_flow_control_capsules() {
+        // フロー制御を宣言した設定でセッションを確立すると初期カプセルが生成される
+        let mut server = ServerConnection::with_default_settings();
+        server.set_control_stream_id(3).expect("test must succeed");
+
+        let wt = crate::webtransport::Settings::new()
+            .wt_initial_max_data(crate::VarInt::from_static(1024));
+        let mut session = WtSession::new();
+        session.state = WtSessionState::Established;
+        session.flow_control_enabled = true;
+        session.initialize_flow_control(&wt, true);
+        server.inner.wt_sessions.insert(0, session);
+
+        assert!(
+            server.wt_session_flow_control_enabled(0),
+            "フロー制御が有効になっていること"
+        );
+        assert!(
+            !server.take_wt_pending_capsules(0).is_empty(),
+            "初期フロー制御カプセルが取得できること"
+        );
+
+        // データ消費を通知してもパニックしない
+        server.wt_data_consumed(0, 10);
     }
 }

@@ -9,13 +9,15 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
-shiguredo_ngtcp2 = { path = "../ngtcp2-rs" }
-# ngtcp2 / nghttp3 FFI 型を直接参照するため
-ngtcp2-sys = { path = "../ngtcp2-sys" }
-nghttp3-sys = { path = "../nghttp3-sys" }
+# HTTP/3 / WebTransport の状態機械 (Sans I/O)
+shiguredo_http3.workspace = true
+# QUIC トランスポート (crates.io の shiguredo_ngtcp2 系)
+#
+# 3 クレートは同時にリリースされるため、揃ったバージョンを指定する。
+# 直接使うのは shiguredo_ngtcp2_tokio (sans-IO 層は再公開経由で使う)。
+shiguredo_ngtcp2_tokio = "=2026.1.0-canary.0"
 tokio = { version = "1.53", features = ["full"] }
 
 [dev-dependencies]
 rcgen = "0.14"
 serial_test = "4.0"
-shiguredo_http3.workspace = true

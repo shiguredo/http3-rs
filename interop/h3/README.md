@@ -14,7 +14,7 @@ HTTP/3 相互運用性テスト
 | s2n-quic (AWS) | tokio 統合 | s2n-tls | shiguredo_http3 による HTTP/3 処理 |
 | quiche (Cloudflare) | Sans I/O | BoringSSL | HTTP/3 内蔵 |
 | quinn (hyperium) | tokio 統合 | rustls (aws-lc-rs) | h3 + h3-quinn による HTTP/3 処理 |
-| ngtcp2 / nghttp3 | tokio 統合 | wolfSSL | IETF リファレンス実装 |
+| ngtcp2 + shiguredo_http3 | tokio 統合 | aws-lc | ngtcp2 (C) で QUIC、shiguredo_http3 で HTTP/3 |
 | tquic (Tencent) | Sans I/O | BoringSSL | HTTP/3 内蔵 |
 
 ## テスト構成
@@ -66,6 +66,6 @@ cargo test -p interop_h3 --test tquic_client_ngtcp2_server
 - quiche: Cloudflare の QUIC 実装 (Rust, BoringSSL)
 - quinn: 純 Rust QUIC 実装 (rustls)
 - h3 / h3-quinn: HTTP/3 プロトコル実装
-- ngtcp2 / nghttp3: IETF リファレンス実装 (C)
+- ngtcp2: IETF リファレンス実装 (C)。QUIC のみを担い、HTTP/3 は shiguredo_http3 を使用する
 - tquic: Tencent の QUIC 実装 (Rust, BoringSSL)
 - shiguredo_http3: Sans I/O HTTP/3 ライブラリ

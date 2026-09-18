@@ -126,35 +126,22 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.18.0"
+version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce2b2dcc879c3bae0d371e77c99f2238400ef24ec001394befa67b6e543add9e"
+checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
 dependencies = [
- "aws-lc-sys 0.44.0",
+ "aws-lc-sys",
  "untrusted 0.7.1",
  "zeroize",
 ]
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.43.0"
+version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43103168cc76fe62678a375e722fc9cb3a0146159ac5828bc4f0dfd755c2224c"
+checksum = "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27"
 dependencies = [
  "bindgen",
- "cc",
- "cmake",
- "dunce",
- "fs_extra",
- "pkg-config",
-]
-
-[[package]]
-name = "aws-lc-sys"
-version = "0.44.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f09fae7be8bb3174e05c6afdb34199e6dc0c7c04ba9fa237b1967adfbde27483"
-dependencies = [
  "cc",
  "cmake",
  "dunce",
@@ -1503,7 +1490,6 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "shiguredo_http3",
- "shiguredo_ngtcp2",
  "tempfile",
  "tokio",
  "tokio-ngtcp2",
@@ -1527,7 +1513,6 @@ dependencies = [
  "rustls-pki-types",
  "serial_test",
  "shiguredo_http3",
- "shiguredo_ngtcp2",
  "tempfile",
  "tokio",
  "tokio-ngtcp2",
@@ -1838,27 +1823,6 @@ dependencies = [
  "quote",
  "serde",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "nghttp3-sys"
-version = "0.0.0"
-dependencies = [
- "bindgen",
- "libc",
- "shiguredo_cmake",
- "shiguredo_toml",
-]
-
-[[package]]
-name = "ngtcp2-sys"
-version = "0.0.0"
-dependencies = [
- "aws-lc-sys 0.43.0",
- "bindgen",
- "libc",
- "shiguredo_cmake",
- "shiguredo_toml",
 ]
 
 [[package]]
@@ -3117,14 +3081,36 @@ version = "2026.1.0-canary.11"
 
 [[package]]
 name = "shiguredo_ngtcp2"
-version = "0.0.0"
+version = "2026.1.0-canary.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15e8b20a5c5ec9983ed0fc18e3a7014790c58d60794dff876e638d302e9c3663"
 dependencies = [
  "aws-lc-rs",
- "aws-lc-sys 0.43.0",
  "libc",
- "nghttp3-sys",
- "ngtcp2-sys",
- "rcgen",
+ "shiguredo_ngtcp2_sys",
+]
+
+[[package]]
+name = "shiguredo_ngtcp2_sys"
+version = "2026.1.0-canary.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12dbea40db711055559543311b6e97a3be9d550c58444b7a74bcd33393048f14"
+dependencies = [
+ "aws-lc-sys",
+ "libc",
+ "shiguredo_cmake",
+ "shiguredo_toml",
+]
+
+[[package]]
+name = "shiguredo_ngtcp2_tokio"
+version = "2026.1.0-canary.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c52b8ac58ec56526611e08e3712bb99d7065d3a7df173215fa2599ca3edcda7"
+dependencies = [
+ "libc",
+ "shiguredo_ngtcp2",
+ "tokio",
 ]
 
 [[package]]
@@ -3545,12 +3531,10 @@ dependencies = [
 name = "tokio-ngtcp2"
 version = "0.0.0"
 dependencies = [
- "nghttp3-sys",
- "ngtcp2-sys",
  "rcgen",
  "serial_test",
  "shiguredo_http3",
- "shiguredo_ngtcp2",
+ "shiguredo_ngtcp2_tokio",
  "tokio",
 ]
 

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use shiguredo_ngtcp2::{Header as Ngtcp2Header, Http3Event};
+use shiguredo_http3::{Event, Header};
 use tokio_ngtcp2::Server;
 use tokio_s2n_quic::{ClientConfig, H3Client, H3ClientRequest};
 
@@ -22,8 +22,6 @@ async fn start_ngtcp2_server(
         "127.0.0.1:0".parse().expect("test must succeed"),
         cert_path,
         key_path,
-        None,
-        None,
     )
     .await?;
 
@@ -45,12 +43,13 @@ async fn run_ngtcp2_server(
             eprintln!("[ngtcp2 server] イベント: {:?} from {:?}", event, addr);
 
             match event {
-                Http3Event::HeadersEnd { stream_id, .. } => {
+                Event::HeadersEnd { stream_id, .. } => {
                     eprintln!("[ngtcp2 server] ヘッダー終了: stream_id = {}", stream_id);
 
                     let response_headers = vec![
-                        Ngtcp2Header::status(200),
-                        Ngtcp2Header::new(b"content-type", b"text/plain; charset=utf-8"),
+                        Header::new(b":status", b"200").expect("test must succeed"),
+                        Header::new(b"content-type", b"text/plain; charset=utf-8")
+                            .expect("test must succeed"),
                     ];
                     let body = b"Hello from HTTP/3 server!".to_vec();
 
@@ -158,12 +157,13 @@ async fn test_post_request_with_body() {
         let _ = tokio::time::timeout(
             Duration::from_secs(10),
             server.run(|_addr, event| match event {
-                Http3Event::HeadersEnd { stream_id, .. } => {
+                Event::HeadersEnd { stream_id, .. } => {
                     eprintln!("[ngtcp2 server] POST 受信: stream_id = {}", stream_id);
                     Some((
                         vec![
-                            Ngtcp2Header::status(200),
-                            Ngtcp2Header::new(b"content-type", b"text/plain; charset=utf-8"),
+                            Header::new(b":status", b"200").expect("test must succeed"),
+                            Header::new(b"content-type", b"text/plain; charset=utf-8")
+                                .expect("test must succeed"),
                         ],
                         b"OK".to_vec(),
                     ))
@@ -226,14 +226,16 @@ async fn test_response_custom_headers() {
         let _ = tokio::time::timeout(
             Duration::from_secs(10),
             server.run(|_addr, event| match event {
-                Http3Event::HeadersEnd { stream_id, .. } => {
+                Event::HeadersEnd { stream_id, .. } => {
                     eprintln!("[ngtcp2 server] ヘッダー終了: stream_id = {}", stream_id);
                     Some((
                         vec![
-                            Ngtcp2Header::status(200),
-                            Ngtcp2Header::new(b"content-type", b"text/plain; charset=utf-8"),
-                            Ngtcp2Header::new(b"x-server", b"nghttp3"),
-                            Ngtcp2Header::new(b"x-custom-header", b"custom-value"),
+                            Header::new(b":status", b"200").expect("test must succeed"),
+                            Header::new(b"content-type", b"text/plain; charset=utf-8")
+                                .expect("test must succeed"),
+                            Header::new(b"x-server", b"nghttp3").expect("test must succeed"),
+                            Header::new(b"x-custom-header", b"custom-value")
+                                .expect("test must succeed"),
                         ],
                         b"Hello".to_vec(),
                     ))
@@ -316,27 +318,37 @@ async fn test_status_404() {
     let port = server_addr.port();
 
     let server_task = tokio::spawn(async move {
-        // Http3Event::Header でパスを収集して HeadersEnd でレスポンスを決定する
-        let mut request_paths: HashMap<i64, Vec<u8>> = HashMap::new();
+        // Event::Header でパスを収集して HeadersEnd でレスポンスを決定する
+        let mut request_paths: HashMap<u64, Vec<u8>> = HashMap::new();
         let _ = tokio::time::timeout(
             Duration::from_secs(10),
             server.run(move |_addr, event| match event {
-                Http3Event::Header { stream_id, header } => {
-                    if header.name == b":path" {
-                        request_paths.insert(stream_id, header.value.clone());
+                Event::Header {
+                    stream_id,
+                    name,
+                    value,
+                } => {
+                    if name == b":path" {
+                        request_paths.insert(stream_id, value);
                     }
                     None
                 }
-                Http3Event::HeadersEnd { stream_id, .. } => {
+                Event::HeadersEnd { stream_id, .. } => {
                     let path = request_paths.get(&stream_id).cloned().unwrap_or_default();
                     eprintln!(
                         "[ngtcp2 server] リクエストパス: {}",
                         String::from_utf8_lossy(&path)
                     );
                     if path == b"/not-found" {
-                        Some((vec![Ngtcp2Header::status(404)], vec![]))
+                        Some((
+                            vec![Header::new(b":status", b"404").expect("test must succeed")],
+                            vec![],
+                        ))
                     } else {
-                        Some((vec![Ngtcp2Header::status(200)], b"OK".to_vec()))
+                        Some((
+                            vec![Header::new(b":status", b"200").expect("test must succeed")],
+                            b"OK".to_vec(),
+                        ))
                     }
                 }
                 _ => None,

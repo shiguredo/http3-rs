@@ -32,3 +32,7 @@ ngtcp2 系クライアントの証明書検証 (0140 で実装済み) を拡張�
 ## 解決方法
 
 (実装時に追記)
+
+## pending にした理由
+
+対象の TLS 証明書検証コード (`crates/ngtcp2-rs/src/crypto.rs`) は shiguredo/ngtcp2-rs へ移動し、crates.io の `shiguredo_ngtcp2` / `shiguredo_ngtcp2_tokio` として公開された。2026-09-18 時点の `shiguredo_ngtcp2` でも `TlsContext::set_server_name` はサーバー名を DNS 名に限定して IP アドレスを拒否するため、IP SAN 検証は未対応である。対応は同リポジトリで行う必要があり、このリポジトリの `tokio-ngtcp2` は同クレートを使うだけなのでここでは対応しない。

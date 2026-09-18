@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use shiguredo_ngtcp2::{Header as Ngtcp2Header, Http3Event};
+use shiguredo_http3::{Event, Header};
 use tokio_ngtcp2::Server;
 
 use interop_h3::{generate_shared_certificate, run_quinn_client, save_certificate_files};
@@ -16,8 +16,6 @@ async fn start_ngtcp2_server(
         "127.0.0.1:0".parse().expect("test must succeed"),
         cert_path,
         key_path,
-        None,
-        None,
     )
     .await?;
 
@@ -48,12 +46,13 @@ async fn test_http3_request_response() {
                 eprintln!("[ngtcp2 server] イベント: {:?} from {:?}", event, addr);
 
                 match event {
-                    Http3Event::HeadersEnd { stream_id, .. } => {
+                    Event::HeadersEnd { stream_id, .. } => {
                         eprintln!("[ngtcp2 server] ヘッダー終了: stream_id = {}", stream_id);
 
                         let response_headers = vec![
-                            Ngtcp2Header::status(200),
-                            Ngtcp2Header::new(b"content-type", b"text/plain; charset=utf-8"),
+                            Header::new(b":status", b"200").expect("test must succeed"),
+                            Header::new(b"content-type", b"text/plain; charset=utf-8")
+                                .expect("test must succeed"),
                         ];
                         let body = b"Hello from HTTP/3 server!".to_vec();
 
