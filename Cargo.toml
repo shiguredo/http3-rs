@@ -12,9 +12,6 @@ include = ["/LICENSE", "/README.md", "/src/**"]
 
 [workspace]
 members = [
-  "crates/nghttp3-sys",
-  "crates/ngtcp2-rs",
-  "crates/ngtcp2-sys",
   "crates/tokio-ngtcp2",
   "crates/tokio-s2n-quic",
   "examples/wt_server",

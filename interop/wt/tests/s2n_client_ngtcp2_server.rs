@@ -13,7 +13,7 @@ use serial_test::serial;
 use tokio::time::timeout;
 
 use interop_wt::{generate_shared_certificate, save_certificate_files};
-use shiguredo_ngtcp2::Http3Event;
+use shiguredo_http3::{Event, WebTransportEvent};
 use tokio_ngtcp2::ServerWebTransportSession;
 use tokio_s2n_quic::{ClientConfig, WtClient};
 
@@ -42,18 +42,17 @@ async fn test_webtransport_session() {
             Duration::from_secs(10),
             server.run(|addr, session_id, event| {
                 match &event {
-                    Http3Event::HeadersEnd { stream_id, .. } => {
+                    Event::HeadersEnd { stream_id, .. } => {
                         eprintln!(
                             "[ngtcp2 server] CONNECT request: addr={} session_id={} stream_id={}",
                             addr, session_id, stream_id
                         );
                         return true;
                     }
-                    Http3Event::WebTransportData {
-                        session_id,
-                        stream_id,
-                        data,
-                    } => {
+                    Event::WebTransport(
+                        WebTransportEvent::BidiStreamData { stream_id, data }
+                        | WebTransportEvent::UniStreamData { stream_id, data },
+                    ) => {
                         eprintln!(
                             "[ngtcp2 server] WebTransport data: session_id={} stream_id={} data={}",
                             session_id,
@@ -141,18 +140,17 @@ async fn test_unidirectional_stream() {
             Duration::from_secs(10),
             server.run(move |addr, session_id, event| {
                 match &event {
-                    Http3Event::HeadersEnd { stream_id, .. } => {
+                    Event::HeadersEnd { stream_id, .. } => {
                         eprintln!(
                             "[ngtcp2 server] CONNECT request: addr={} session_id={} stream_id={}",
                             addr, session_id, stream_id
                         );
                         return true;
                     }
-                    Http3Event::WebTransportData {
-                        session_id,
-                        stream_id,
-                        data,
-                    } => {
+                    Event::WebTransport(
+                        WebTransportEvent::BidiStreamData { stream_id, data }
+                        | WebTransportEvent::UniStreamData { stream_id, data },
+                    ) => {
                         eprintln!(
                             "[ngtcp2 server] WebTransport data: session_id={} stream_id={} data={}",
                             session_id,
@@ -247,10 +245,11 @@ async fn test_client_opens_bidi_stream() {
             Duration::from_secs(10),
             server.run(move |_addr, _session_id, event| {
                 match &event {
-                    Http3Event::HeadersEnd { .. } => {
+                    Event::HeadersEnd { .. } => {
                         return true;
                     }
-                    Http3Event::WebTransportData { data, .. } => {
+                    Event::WebTransport(WebTransportEvent::BidiStreamData { data, .. })
+                    | Event::WebTransport(WebTransportEvent::UniStreamData { data, .. }) => {
                         received_data_for_server
                             .lock()
                             .expect("test must succeed")
@@ -290,6 +289,11 @@ async fn test_client_opens_bidi_stream() {
         // アプリケーションデータを送信 (open_bi_stream() が WT ヘッダーを自動送信)
         bi_stream.send(b"Hello WebTransport!").await?;
         bi_stream.finish()?;
+
+        // サーバーがデータを受信するまでセッションを保持する
+        // (セッションを即座に閉じると、WebTransport の仕様どおり
+        //  残りのストリームデータが破棄される)
+        tokio::time::sleep(Duration::from_secs(2)).await;
 
         eprintln!("[s2n client] data sent");
         Ok::<_, tokio_s2n_quic::Error>(session_id)
@@ -347,8 +351,8 @@ async fn test_server_opens_bidi_stream() {
         while client_addr.is_none() {
             let client_addr_ref = &mut client_addr;
             let mut handler =
-                |addr: std::net::SocketAddr, _session_id: i64, event: Http3Event| -> bool {
-                    if let Http3Event::HeadersEnd { .. } = &event {
+                |addr: std::net::SocketAddr, _session_id: u64, event: Event| -> bool {
+                    if let Event::HeadersEnd { .. } = &event {
                         *client_addr_ref = Some(addr);
                         return true;
                     }
@@ -379,7 +383,7 @@ async fn test_server_opens_bidi_stream() {
         eprintln!("[ngtcp2 server] data sent");
 
         // クライアントがデータを受信する時間を確保
-        let mut noop_handler = |_: std::net::SocketAddr, _: i64, _: Http3Event| false;
+        let mut noop_handler = |_: std::net::SocketAddr, _: u64, _: Event| false;
         for _ in 0..30 {
             server
                 .recv_once(Duration::from_millis(100), &mut noop_handler)
@@ -462,7 +466,7 @@ async fn test_bidi_stream_echo() {
     let server_task = tokio::spawn(async move {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let mut client_addr = None::<std::net::SocketAddr>;
-        let mut echo_stream_id = None::<i64>;
+        let mut echo_stream_id = None::<u64>;
         let mut received = Vec::<u8>::new();
 
         while received.is_empty() {
@@ -470,15 +474,16 @@ async fn test_bidi_stream_echo() {
             let echo_stream_ref = &mut echo_stream_id;
             let received_ref = &mut received;
             let mut handler =
-                |addr: std::net::SocketAddr, _session_id: i64, event: Http3Event| -> bool {
+                |addr: std::net::SocketAddr, _session_id: u64, event: Event| -> bool {
                     match &event {
-                        Http3Event::HeadersEnd { .. } => {
+                        Event::HeadersEnd { .. } => {
                             *client_addr_ref = Some(addr);
                             return true;
                         }
-                        Http3Event::WebTransportData {
-                            stream_id, data, ..
-                        } => {
+                        Event::WebTransport(
+                            WebTransportEvent::BidiStreamData { stream_id, data }
+                            | WebTransportEvent::UniStreamData { stream_id, data },
+                        ) => {
                             *echo_stream_ref = Some(*stream_id);
                             received_ref.extend_from_slice(data);
                         }
@@ -505,7 +510,7 @@ async fn test_bidi_stream_echo() {
         server.flush().await.expect("flush failed");
 
         // クライアントが ACK を返すまで少し待つ
-        let mut noop_handler = |_: std::net::SocketAddr, _: i64, _: Http3Event| false;
+        let mut noop_handler = |_: std::net::SocketAddr, _: u64, _: Event| false;
         for _ in 0..20 {
             server
                 .recv_once(Duration::from_millis(100), &mut noop_handler)
@@ -602,10 +607,11 @@ async fn test_multiple_bidi_streams() {
             Duration::from_secs(15),
             server.run(move |_addr, _session_id, event| {
                 match &event {
-                    Http3Event::HeadersEnd { .. } => {
+                    Event::HeadersEnd { .. } => {
                         return true;
                     }
-                    Http3Event::WebTransportData { data, .. } => {
+                    Event::WebTransport(WebTransportEvent::BidiStreamData { data, .. })
+                    | Event::WebTransport(WebTransportEvent::UniStreamData { data, .. }) => {
                         received_for_server
                             .lock()
                             .expect("test must succeed")
@@ -642,6 +648,11 @@ async fn test_multiple_bidi_streams() {
             bi_stream.send(payload).await?;
             bi_stream.finish()?;
         }
+
+        // サーバーが全ストリームを受信するまでセッションを保持する
+        // (セッションを即座に閉じると、WebTransport の仕様どおり
+        //  残りのストリームデータが破棄される)
+        tokio::time::sleep(Duration::from_secs(2)).await;
 
         Ok::<_, tokio_s2n_quic::Error>((session_id, payloads))
     })
@@ -701,8 +712,9 @@ async fn test_large_data() {
             Duration::from_secs(30),
             server.run(move |_addr, _session_id, event| {
                 match &event {
-                    Http3Event::HeadersEnd { .. } => return true,
-                    Http3Event::WebTransportData { data, .. } => {
+                    Event::HeadersEnd { .. } => return true,
+                    Event::WebTransport(WebTransportEvent::BidiStreamData { data, .. })
+                    | Event::WebTransport(WebTransportEvent::UniStreamData { data, .. }) => {
                         received_for_server
                             .lock()
                             .expect("test must succeed")
@@ -746,12 +758,17 @@ async fn test_large_data() {
         bi_stream.finish()?;
         eprintln!("[s2n client] {} bytes sent", DATA_SIZE);
 
+        // サーバーが全データを受信するまでセッションを保持する
+        // (セッションを即座に閉じると、WebTransport の仕様どおり
+        //  残りのストリームデータが破棄される)
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
         Ok::<_, tokio_s2n_quic::Error>(session_id)
     })
     .await;
 
     // サーバーが全データを処理する時間を確保
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
     server_task.abort();
     interop_wt::cleanup_certificate_files(&cert_path, &key_path);
 
@@ -796,7 +813,7 @@ async fn test_datagram_session() {
         let result = timeout(
             Duration::from_secs(10),
             server.run(|addr, session_id, event| {
-                if let Http3Event::HeadersEnd { stream_id, .. } = &event {
+                if let Event::HeadersEnd { stream_id, .. } = &event {
                     eprintln!(
                         "[ngtcp2 server] CONNECT request: addr={} session_id={} stream_id={}",
                         addr, session_id, stream_id

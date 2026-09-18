@@ -462,25 +462,11 @@ shiguredo_http3 (Sans I/O) と [s2n-quic](https://github.com/aws/s2n-quic) (AWS)
 
 TLS には [Rustls](https://github.com/rustls/rustls) を、暗号ライブラリには [aws-lc-rs](https://github.com/aws/aws-lc-rs) を使用しています。
 
-### ngtcp2-sys
-
-[ngtcp2](https://github.com/ngtcp2/ngtcp2) C ライブラリへの低レベル FFI バインディングです。WebTransport の `reset_stream_at` transport parameter (RFC 9221 / draft-ietf-quic-reliable-stream-reset) 対応のため [reliable-stream-reset ブランチ](https://github.com/ngtcp2/ngtcp2/tree/reliable-stream-reset)を使用しています。リリースされたらタグに切り替える予定です。
-
-### nghttp3-sys
-
-[nghttp3](https://github.com/ngtcp2/nghttp3) C ライブラリへの低レベル FFI バインディングです。WebTransport 対応のため [webtransport ブランチ](https://github.com/ngtcp2/nghttp3/tree/webtransport)を使用しています。リリースされたらタグに切り替える予定です。
-
-### shiguredo_ngtcp2
-
-ngtcp2/nghttp3 の Rust バインディングです。ngtcp2-sys/nghttp3-sys の上に安全な Rust API を提供します。
-
-TLS には [aws-lc-sys](https://github.com/aws/aws-lc-rs) (BoringSSL 互換) を使用しています。
-
 ### tokio-ngtcp2
 
-shiguredo_ngtcp2 を [Tokio](https://github.com/tokio-rs/tokio) と統合し、非同期 HTTP/3 クライアント/サーバーを提供します。
+shiguredo_http3 (Sans I/O) と [shiguredo_ngtcp2_tokio](https://crates.io/crates/shiguredo_ngtcp2_tokio) (ngtcp2 の tokio 統合) を組み合わせた HTTP/3 / WebTransport の Tokio 統合です。相互運用性テスト用です。
 
-tokio-s2n-quic との差異は、QUIC および HTTP/3 プロトコル処理に ngtcp2/nghttp3 を使用している点です。相互運用性テスト用です。
+QUIC は crates.io の `shiguredo_ngtcp2_tokio` を、HTTP/3 は shiguredo_http3 を使用します。
 
 ## 規格書
 

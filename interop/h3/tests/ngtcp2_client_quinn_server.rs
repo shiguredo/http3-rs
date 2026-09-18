@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use shiguredo_ngtcp2::{Header as Ngtcp2Header, Http3Event};
+use shiguredo_http3::{Event, Header};
 use tokio::sync::mpsc;
 use tokio_ngtcp2::Client;
 
@@ -14,17 +14,17 @@ async fn run_ngtcp2_client(
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     eprintln!("[ngtcp2 client] 接続開始: {}", server_addr);
 
-    let mut client = Client::connect_insecure(server_addr, "localhost", None, None).await?;
+    let mut client = Client::connect_insecure(server_addr, "localhost").await?;
 
     eprintln!("[ngtcp2 client] ハンドシェイク開始");
     client.handshake().await?;
     eprintln!("[ngtcp2 client] ハンドシェイク完了");
 
     let headers = vec![
-        Ngtcp2Header::method("GET"),
-        Ngtcp2Header::path("/"),
-        Ngtcp2Header::scheme("https"),
-        Ngtcp2Header::authority("localhost"),
+        Header::new(b":method", "GET").expect("test must succeed"),
+        Header::new(b":path", "/").expect("test must succeed"),
+        Header::new(b":scheme", "https").expect("test must succeed"),
+        Header::new(b":authority", "localhost").expect("test must succeed"),
     ];
 
     let stream_id = client.send_request(&headers)?;
@@ -39,23 +39,24 @@ async fn run_ngtcp2_client(
 
         while let Some(event) = client.poll() {
             match event {
-                Http3Event::HeadersBegin { stream_id } => {
+                Event::HeadersBegin { stream_id } => {
                     eprintln!("[ngtcp2 client] ヘッダー開始: stream_id = {}", stream_id);
                 }
-                Http3Event::Header {
+                Event::Header {
                     stream_id: _,
-                    header,
+                    name,
+                    value,
                 } => {
                     eprintln!(
                         "[ngtcp2 client]   {}: {}",
-                        header.name_str().unwrap_or("?"),
-                        header.value_str().unwrap_or("?")
+                        String::from_utf8_lossy(&name),
+                        String::from_utf8_lossy(&value)
                     );
                 }
-                Http3Event::HeadersEnd { stream_id, .. } => {
+                Event::HeadersEnd { stream_id, .. } => {
                     eprintln!("[ngtcp2 client] ヘッダー終了: stream_id = {}", stream_id);
                 }
-                Http3Event::Data { stream_id, data } => {
+                Event::Data { stream_id, data } => {
                     eprintln!(
                         "[ngtcp2 client] データ受信: stream_id = {}, len = {}",
                         stream_id,
@@ -63,7 +64,7 @@ async fn run_ngtcp2_client(
                     );
                     response_body.extend_from_slice(&data);
                 }
-                Http3Event::StreamEnd { stream_id } => {
+                Event::StreamEnd { stream_id } => {
                     eprintln!("[ngtcp2 client] ストリーム終了: stream_id = {}", stream_id);
                     return Ok(response_body);
                 }

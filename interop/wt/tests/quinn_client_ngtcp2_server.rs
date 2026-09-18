@@ -1,7 +1,8 @@
 //! quinn (h3-webtransport) クライアント ↔ ngtcp2 サーバー WebTransport 相互運用性テスト
 //!
-//! h3-webtransport は draft-02 を使用。
-//! ngtcp2 (nghttp3) は draft-15 を使用するためネゴシエーション失敗が想定される。
+//! h3-webtransport は draft-02 を使用し、SETTINGS_WT_ENABLED を送信しない。
+//! ngtcp2 (shiguredo_http3) は draft-15 を広告するため、ネゴシエーションに失敗し
+//! CONNECT が拒否されることを検証する。
 
 use std::time::Duration;
 
@@ -9,7 +10,7 @@ use serial_test::serial;
 use tokio::time::timeout;
 
 use interop_wt::{generate_shared_certificate, run_quinn_wt_client, save_certificate_files};
-use shiguredo_ngtcp2::Http3Event;
+use shiguredo_http3::Event;
 use tokio_ngtcp2::ServerWebTransportSession;
 
 #[serial]
@@ -37,7 +38,7 @@ async fn test_webtransport_session() {
             Duration::from_secs(10),
             server.run(|addr, session_id, event| {
                 match &event {
-                    Http3Event::HeadersEnd { stream_id, .. } => {
+                    Event::HeadersEnd { stream_id, .. } => {
                         eprintln!(
                             "[ngtcp2 server] CONNECT: addr={} session={} stream={}",
                             addr, session_id, stream_id
@@ -67,11 +68,16 @@ async fn test_webtransport_session() {
 
     match result {
         Ok(Ok(())) => {
-            eprintln!("[test] WT session established");
-            // サーバー側で CONNECT リクエスト (HeadersEnd) を受け取ったことを検証する
+            // draft-02 のクライアントは SETTINGS_WT_ENABLED を送らないため、
+            // draft-15 を広告するサーバーは CONNECT を拒否する
+            // (draft-ietf-webtrans-http3-15 Section 3.1)
+            panic!("WT session established (expected: rejected by draft mismatch)");
         }
         Ok(Err(e)) => {
-            panic!("WT session failed: {:?}", e);
+            eprintln!(
+                "[test] WT session rejected as expected (draft mismatch): {:?}",
+                e
+            );
         }
         Err(_) => {
             panic!("timeout");

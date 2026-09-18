@@ -1,9 +1,12 @@
-//! tokio ベースの I/O 実装
+//! crates.io の shiguredo_ngtcp2_tokio と shiguredo_http3 を組み合わせた
+//! 非同期 HTTP/3 / WebTransport クライアント / サーバー
 //!
-//! ngtcp2/nghttp3 を tokio と統合し、非同期 HTTP/3 クライアント/サーバーを提供する。
+//! QUIC トランスポートは [shiguredo_ngtcp2_tokio](https://crates.io/crates/shiguredo_ngtcp2_tokio)
+//! が提供するイベントベースの API を使用し、HTTP/3 の状態機械は
+//! `shiguredo_http3` が担う。このクレートは両者をつなぐドライバだけを提供する。
 
 mod client;
-mod conn;
+mod h3;
 mod server;
 mod webtransport;
 
@@ -11,44 +14,62 @@ pub use client::Client;
 pub use server::Server;
 pub use webtransport::{ClientWebTransportSession, ServerWebTransportSession};
 
-use std::net::SocketAddr;
-use std::time::Instant;
+use std::fmt;
 
-use tokio::net::UdpSocket;
-
-/// UDP ソケットのラッパー
-pub(crate) struct Socket {
-    inner: UdpSocket,
-    local_addr: SocketAddr,
+/// このクレートのエラー
+#[derive(Debug)]
+pub enum Error {
+    /// QUIC 層 (shiguredo_ngtcp2_tokio) のエラー
+    Quic(shiguredo_ngtcp2_tokio::Error),
+    /// HTTP/3 層 (shiguredo_http3) のエラー
+    Http3(shiguredo_http3::Error),
+    /// 操作がタイムアウトした
+    Timeout,
+    /// 引数が不正
+    InvalidArgument(String),
+    /// 役割に対して許可されない操作、または前提条件を満たしていない
+    InvalidState(&'static str),
+    /// WebTransport セッションが終了した
+    WebTransportClosed {
+        /// アプリケーションエラーコード
+        error_code: u32,
+        /// エラーメッセージ
+        message: String,
+    },
 }
 
-impl Socket {
-    /// 新しいソケットを作成
-    pub async fn bind(addr: SocketAddr) -> std::io::Result<Self> {
-        let inner = UdpSocket::bind(addr).await?;
-        let local_addr = inner.local_addr()?;
-        Ok(Self { inner, local_addr })
-    }
-
-    /// ローカルアドレスを取得
-    pub fn local_addr(&self) -> SocketAddr {
-        self.local_addr
-    }
-
-    /// データを送信
-    pub async fn send_to(&self, buf: &[u8], target: SocketAddr) -> std::io::Result<usize> {
-        self.inner.send_to(buf, target).await
-    }
-
-    /// データを受信
-    pub async fn recv_from(&self, buf: &mut [u8]) -> std::io::Result<(usize, SocketAddr)> {
-        self.inner.recv_from(buf).await
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Quic(e) => write!(f, "QUIC error: {e}"),
+            Self::Http3(e) => write!(f, "HTTP/3 error: {e}"),
+            Self::Timeout => write!(f, "operation timed out"),
+            Self::InvalidArgument(msg) => write!(f, "invalid argument: {msg}"),
+            Self::InvalidState(msg) => write!(f, "invalid state: {msg}"),
+            Self::WebTransportClosed {
+                error_code,
+                message,
+            } => write!(
+                f,
+                "WebTransport session closed: error_code={error_code} message={message}"
+            ),
+        }
     }
 }
 
-/// タイムスタンプを取得 (ナノ秒)
-pub(crate) fn timestamp() -> u64 {
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    let start = START.get_or_init(Instant::now);
-    start.elapsed().as_nanos() as u64
+impl std::error::Error for Error {}
+
+impl From<shiguredo_ngtcp2_tokio::Error> for Error {
+    fn from(value: shiguredo_ngtcp2_tokio::Error) -> Self {
+        Self::Quic(value)
+    }
 }
+
+impl From<shiguredo_http3::Error> for Error {
+    fn from(value: shiguredo_http3::Error) -> Self {
+        Self::Http3(value)
+    }
+}
+
+/// このクレートの結果型
+pub type Result<T> = std::result::Result<T, Error>;

@@ -12,7 +12,7 @@ use serial_test::serial;
 use tokio::time::timeout;
 
 use interop_wt::generate_shared_certificate;
-use shiguredo_ngtcp2::Http3Event;
+use shiguredo_http3::{Event, WebTransportEvent};
 use tokio_ngtcp2::ClientWebTransportSession;
 use tokio_s2n_quic::{ServerConfig, WtServer};
 
@@ -272,7 +272,9 @@ async fn test_server_opens_bidi_stream() {
             session.recv(Duration::from_millis(100)).await.ok();
 
             while let Some(event) = session.poll() {
-                if let Http3Event::WebTransportData { data, .. } = event {
+                if let Event::WebTransport(WebTransportEvent::BidiStreamData { data, .. })
+                | Event::WebTransport(WebTransportEvent::UniStreamData { data, .. }) = event
+                {
                     received_data.extend_from_slice(&data);
                 }
             }
@@ -563,11 +565,16 @@ async fn test_bidi_stream_echo() {
         loop {
             session.recv(Duration::from_millis(50)).await.ok();
             while let Some(event) = session.poll() {
-                if let Http3Event::WebTransportData {
-                    data,
-                    stream_id: sid,
-                    ..
-                } = event
+                if let Event::WebTransport(
+                    WebTransportEvent::BidiStreamData {
+                        data,
+                        stream_id: sid,
+                    }
+                    | WebTransportEvent::UniStreamData {
+                        data,
+                        stream_id: sid,
+                    },
+                ) = event
                     && sid == stream_id
                 {
                     echo_data.extend_from_slice(&data);
