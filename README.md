@@ -462,7 +462,7 @@ shiguredo_http3 (Sans I/O) と [s2n-quic](https://github.com/aws/s2n-quic) (AWS)
 
 TLS には [Rustls](https://github.com/rustls/rustls) を、暗号ライブラリには [aws-lc-rs](https://github.com/aws/aws-lc-rs) を使用しています。
 
-### ngtcp2-sys
+### shiguredo_ngtcp2_sys
 
 [ngtcp2](https://github.com/ngtcp2/ngtcp2) C ライブラリへの低レベル FFI バインディングです。WebTransport の `reset_stream_at` transport parameter (RFC 9221 / draft-ietf-quic-reliable-stream-reset) 対応のため [reliable-stream-reset ブランチ](https://github.com/ngtcp2/ngtcp2/tree/reliable-stream-reset)を使用しています。リリースされたらタグに切り替える予定です。
 
@@ -472,11 +472,11 @@ TLS には [Rustls](https://github.com/rustls/rustls) を、暗号ライブラ�
 
 ### shiguredo_ngtcp2
 
-ngtcp2/nghttp3 の Rust バインディングです。ngtcp2-sys/nghttp3-sys の上に安全な Rust API を提供します。
+ngtcp2/nghttp3 の Rust バインディングです。shiguredo_ngtcp2_sys/nghttp3-sys の上に安全な Rust API を提供します。
 
 TLS には [aws-lc-sys](https://github.com/aws/aws-lc-rs) (BoringSSL 互換) を使用しています。
 
-### tokio-ngtcp2
+### shiguredo_ngtcp2_tokio
 
 shiguredo_ngtcp2 を [Tokio](https://github.com/tokio-rs/tokio) と統合し、非同期 HTTP/3 クライアント/サーバーを提供します。
 

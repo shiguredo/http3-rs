@@ -13,7 +13,7 @@
 
 - `Server` / `ServerWebTransportSession` の `handle_new_connection` は、`parse_new_connection_packet` で取り出したバージョンが `QuicVersion::V1` と異なる場合、接続状態を作らずに破棄する (コメントで「RFC 9000 Section 5.2.2 の Version Negotiation パケット送信は未実装」と明記済み)
 - RFC 9000 Section 5.2.2 は「パケットがサポート済みバージョンの新規接続を開始できる大きさなら、サーバーは SHOULD で Version Negotiation パケットを送る」と定める (応答数を制限する MAY もある)
-- `ngtcp2_sys::ngtcp2_pkt_write_version_negotiation` は bindings.rs に定義済み
+- `shiguredo_ngtcp2_sys::ngtcp2_pkt_write_version_negotiation` は bindings.rs に定義済み
 - `QuicVersion::V2` (RFC 9369) は定数として定義済みだが、`Connection::server_new` は V1 固定
 
 ## 設計方針
@@ -36,7 +36,7 @@
 
 ### 関連ファイル
 
-- `crates/tokio-ngtcp2/src/server.rs` / `crates/tokio-ngtcp2/src/webtransport.rs` (`handle_new_connection` のバージョン判定と VN 送信)
-- `crates/ngtcp2-sys/src/bindings.rs` (`ngtcp2_pkt_write_version_negotiation` の doc)
-- `crates/ngtcp2-rs/src/types.rs` (`QuicVersion` enum)
+- `crates/shiguredo_ngtcp2_tokio/src/server.rs` / `crates/shiguredo_ngtcp2_tokio/src/webtransport.rs` (`handle_new_connection` のバージョン判定と VN 送信)
+- `crates/shiguredo_ngtcp2_sys/src/bindings.rs` (`ngtcp2_pkt_write_version_negotiation` の doc)
+- `crates/shiguredo_ngtcp2/src/types.rs` (`QuicVersion` enum)
 - 一次資料: `refs/quic/rfc9000.txt` Section 5.2.2 (Server Packet Handling)、Section 6.1 (Sending Version Negotiation Packets)、Section 17.2.1 (Version Negotiation Packet)

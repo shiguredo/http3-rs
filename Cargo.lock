@@ -1504,9 +1504,9 @@ dependencies = [
  "rustls-pki-types",
  "shiguredo_http3",
  "shiguredo_ngtcp2",
+ "shiguredo_ngtcp2_tokio",
  "tempfile",
  "tokio",
- "tokio-ngtcp2",
  "tokio-quiche",
  "tokio-s2n-quic",
  "tquic",
@@ -1528,9 +1528,9 @@ dependencies = [
  "serial_test",
  "shiguredo_http3",
  "shiguredo_ngtcp2",
+ "shiguredo_ngtcp2_tokio",
  "tempfile",
  "tokio",
- "tokio-ngtcp2",
  "tokio-s2n-quic",
 ]
 
@@ -1844,17 +1844,6 @@ dependencies = [
 name = "nghttp3-sys"
 version = "0.0.0"
 dependencies = [
- "bindgen",
- "libc",
- "shiguredo_cmake",
- "shiguredo_toml",
-]
-
-[[package]]
-name = "ngtcp2-sys"
-version = "0.0.0"
-dependencies = [
- "aws-lc-sys 0.43.0",
  "bindgen",
  "libc",
  "shiguredo_cmake",
@@ -3123,8 +3112,32 @@ dependencies = [
  "aws-lc-sys 0.43.0",
  "libc",
  "nghttp3-sys",
- "ngtcp2-sys",
  "rcgen",
+ "shiguredo_ngtcp2_sys",
+]
+
+[[package]]
+name = "shiguredo_ngtcp2_sys"
+version = "0.0.0"
+dependencies = [
+ "aws-lc-sys 0.43.0",
+ "bindgen",
+ "libc",
+ "shiguredo_cmake",
+ "shiguredo_toml",
+]
+
+[[package]]
+name = "shiguredo_ngtcp2_tokio"
+version = "0.0.0"
+dependencies = [
+ "nghttp3-sys",
+ "rcgen",
+ "serial_test",
+ "shiguredo_http3",
+ "shiguredo_ngtcp2",
+ "shiguredo_ngtcp2_sys",
+ "tokio",
 ]
 
 [[package]]
@@ -3539,19 +3552,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
-]
-
-[[package]]
-name = "tokio-ngtcp2"
-version = "0.0.0"
-dependencies = [
- "nghttp3-sys",
- "ngtcp2-sys",
- "rcgen",
- "serial_test",
- "shiguredo_http3",
- "shiguredo_ngtcp2",
- "tokio",
 ]
 
 [[package]]

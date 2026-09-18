@@ -1,6 +1,6 @@
 //! HTTP/3 相互運用性テスト用共通ヘルパー
 //!
-//! s2n-quic, quiche, ngtcp2, quinn, tquic の相互運用性テストを支援するためのユーティリティ。
+//! s2n-quic, quiche, shiguredo_ngtcp2, quinn, tquic の相互運用性テストを支援するためのユーティリティ。
 
 use std::error::Error;
 use std::net::SocketAddr;
@@ -28,7 +28,7 @@ pub fn generate_shared_certificate() -> Result<(String, String), Box<dyn Error +
     Ok((cert_pem, key_pem))
 }
 
-/// 証明書をファイルに保存 (quiche, ngtcp2 用)
+/// 証明書をファイルに保存 (quiche, shiguredo_ngtcp2 用)
 ///
 /// 一時ディレクトリを作成して証明書を保存する。戻り値の `TempDir` を
 /// テストのスコープ内で保持することで、テスト終了時に自動削除される。

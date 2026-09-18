@@ -8,7 +8,7 @@ on:
 
 jobs:
   interop-wt:
-    name: Interop WebTransport (ngtcp2 x s2n-quic)
+    name: Interop WebTransport (shiguredo_ngtcp2 x s2n-quic)
     runs-on: macos-26
     timeout-minutes: 30
     steps:
@@ -19,11 +19,11 @@ jobs:
         with:
           os: macos-26
           toolchain: stable
-      # ngtcp2/nghttp3 と s2n-quic の組み合わせのみを実行する
-      - name: Run WebTransport interop tests (ngtcp2 x s2n-quic)
+      # shiguredo_ngtcp2_tokio と s2n-quic の組み合わせのみを実行する
+      - name: Run WebTransport interop tests (shiguredo_ngtcp2 x s2n-quic)
         run: |
-          cargo test --manifest-path interop/wt/Cargo.toml --test ngtcp2_client_s2n_server
-          cargo test --manifest-path interop/wt/Cargo.toml --test s2n_client_ngtcp2_server
+          cargo test --manifest-path interop/wt/Cargo.toml --test shiguredo_ngtcp2_client_s2n_server
+          cargo test --manifest-path interop/wt/Cargo.toml --test s2n_client_shiguredo_ngtcp2_server
 
   slack_notify:
     needs: [interop-wt]

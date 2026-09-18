@@ -11,7 +11,7 @@ WebTransport 相互運用性テスト
 | 実装 | 種別 | WebTransport 対応 | 備考 |
 |---|---|---|---|
 | s2n-quic + shiguredo_http3 | tokio 統合 | draft-02 / draft-07 / draft-15 | 全ドラフトバージョン対応 |
-| ngtcp2 + nghttp3 | tokio 統合 | draft-15 のみ | RFC トラック版のみ |
+| shiguredo_ngtcp2 + nghttp3 | tokio 統合 | draft-15 のみ | RFC トラック版のみ |
 | quinn + h3-webtransport | tokio 統合 | draft-02 | h3-webtransport (0.1.2) + h3-quinn (0.0.10) |
 | tquic (Tencent) | Sans I/O | 未対応 | HTTP/3 のみ |
 | quiche (Cloudflare) | Sans I/O | 未対応 | HTTP/3 のみ |
@@ -22,12 +22,12 @@ WebTransport 相互運用性テスト
 interop/wt/
   src/lib.rs          -- 共通ヘルパー関数
   tests/
-    ngtcp2_client_s2n_server.rs   -- ngtcp2 クライアント ↔ s2n-quic サーバー
-    s2n_client_ngtcp2_server.rs   -- s2n-quic クライアント ↔ ngtcp2 サーバー
+    shiguredo_ngtcp2_client_s2n_server.rs   -- shiguredo_ngtcp2 クライアント ↔ s2n-quic サーバー
+    s2n_client_shiguredo_ngtcp2_server.rs   -- s2n-quic クライアント ↔ shiguredo_ngtcp2 サーバー
     quinn_client_s2n_server.rs    -- quinn クライアント ↔ s2n-quic サーバー
     s2n_client_quinn_server.rs    -- s2n-quic クライアント ↔ quinn サーバー
-    ngtcp2_client_quinn_server.rs -- ngtcp2 クライアント ↔ quinn サーバー (draft 不一致で失敗)
-    quinn_client_ngtcp2_server.rs -- quinn クライアント ↔ ngtcp2 サーバー (draft 不一致で失敗)
+    shiguredo_ngtcp2_client_quinn_server.rs -- shiguredo_ngtcp2 クライアント ↔ quinn サーバー (draft 不一致で失敗)
+    quinn_client_shiguredo_ngtcp2_server.rs -- quinn クライアント ↔ shiguredo_ngtcp2 サーバー (draft 不一致で失敗)
 ```
 
 ## テスト内容
@@ -75,7 +75,7 @@ SETTINGS_H3_DATAGRAM (0x33) = 1                       // RFC 9297
 
 これにより、どのドラフト版の実装とも接続可能。
 
-#### ngtcp2 / nghttp3
+#### shiguredo_ngtcp2 / nghttp3
 
 draft-15 (RFC トラック) のみ対応:
 
@@ -87,13 +87,13 @@ SETTINGS_H3_DATAGRAM (0x33) = 1                       // RFC 9297
 
 #### 相互運用性マトリクス (WebTransport)
 
-| クライアント \ サーバー | s2n-quic | ngtcp2 | quinn |
+| クライアント \ サーバー | s2n-quic | shiguredo_ngtcp2 | quinn |
 |---|---|---|---|
 | **s2n-quic** | -- | OK (draft-15) | OK (draft-02) |
-| **ngtcp2** | OK (draft-15) | -- | NG (*1) |
+| **shiguredo_ngtcp2** | OK (draft-15) | -- | NG (*1) |
 | **quinn** | OK (draft-02) | NG (*1) | -- |
 
-- *1: h3-webtransport (draft-02) と ngtcp2 (draft-15) の SETTINGS ドラフトバージョン不一致でセッション確立不可
+- *1: h3-webtransport (draft-02) と shiguredo_ngtcp2 (draft-15) の SETTINGS ドラフトバージョン不一致でセッション確立不可
 
 ### 今後の展望
 
@@ -107,8 +107,8 @@ SETTINGS_H3_DATAGRAM (0x33) = 1                       // RFC 9297
 cargo test -p interop_wt
 
 # 個別テスト実行
-cargo test -p interop_wt --test ngtcp2_client_s2n_server
-cargo test -p interop_wt --test s2n_client_ngtcp2_server
+cargo test -p interop_wt --test shiguredo_ngtcp2_client_s2n_server
+cargo test -p interop_wt --test s2n_client_shiguredo_ngtcp2_server
 ```
 
 ## 依存

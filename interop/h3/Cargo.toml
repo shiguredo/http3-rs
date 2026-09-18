@@ -22,10 +22,10 @@ rustls = { version = "0.23", default-features = false, features = [
 ] }
 rustls-pki-types = { version = "1.15", features = ["std"] }
 shiguredo_http3.workspace = true
-shiguredo_ngtcp2 = { path = "../../crates/ngtcp2-rs" }
+shiguredo_ngtcp2 = { path = "../../crates/shiguredo_ngtcp2" }
+shiguredo_ngtcp2_tokio = { path = "../../crates/shiguredo_ngtcp2_tokio" }
 tempfile = "3.27"
 tokio = { version = "1.53", features = ["full"] }
-tokio-ngtcp2 = { path = "../../crates/tokio-ngtcp2" }
 tokio-quiche = "0.19"
 tokio-s2n-quic = { path = "../../crates/tokio-s2n-quic" }
 tquic = { version = "1.6", optional = true }

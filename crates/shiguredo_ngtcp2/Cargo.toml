@@ -1,0 +1,24 @@
+[package]
+name = "shiguredo_ngtcp2"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# TLS / 暗号 (aws-lc)
+aws-lc-rs = "1.17"
+# OpenSSL 互換 SSL API (ngtcp2 crypto)
+aws-lc-sys = { version = "0.43", features = ["ssl"] }
+# C FFI
+libc = "0.2"
+# nghttp3 バインディング
+nghttp3-sys = { path = "../nghttp3-sys" }
+# ngtcp2 バインディング
+shiguredo_ngtcp2_sys = { path = "../shiguredo_ngtcp2_sys" }
+
+[dev-dependencies]
+rcgen = "0.14"

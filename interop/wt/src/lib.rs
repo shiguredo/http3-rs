@@ -1,6 +1,6 @@
 //! WebTransport 相互運用性テスト用共通ヘルパー
 //!
-//! tokio-ngtcp2, tokio-s2n-quic の WebTransport 相互運用性テストを支援するためのユーティリティ。
+//! shiguredo_ngtcp2_tokio, tokio-s2n-quic の WebTransport 相互運用性テストを支援するためのユーティリティ。
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -30,7 +30,7 @@ pub fn generate_shared_certificate() -> Result<(String, String), Box<dyn Error +
     Ok((cert_pem, key_pem))
 }
 
-/// 証明書をファイルに保存 (tokio-ngtcp2 用)
+/// 証明書をファイルに保存 (shiguredo_ngtcp2_tokio 用)
 pub fn save_certificate_files(
     cert_pem: &str,
     key_pem: &str,

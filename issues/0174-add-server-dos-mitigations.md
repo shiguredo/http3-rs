@@ -1,4 +1,4 @@
-# tokio-ngtcp2 サーバーにアドレス検証とリソース消費の上限を追加する
+# shiguredo_ngtcp2_tokio サーバーにアドレス検証とリソース消費の上限を追加する
 
 - Created: 2026-08-13
 - Completed: {YYYY-MM-DD}
@@ -13,7 +13,7 @@
 
 - `Server` / `ServerWebTransportSession` に接続数上限・レート制限・アドレス検証のいずれも無い
 - `Connection::server_new` は `settings.tokenlen` を設定しておらず、ngtcp2 は `read_pkt` で NGTCP2_ERR_RETRY を返すケースがあるものの (クライアントの ClientHello が 1 つの Initial に収まらない場合など)、`Error::classify_connection_error` が RETRY を SilentDrop に分類して黙って破棄している (Retry パケットを送らない設計としてコメントで明記済み)
-- 新規接続パケットのパース (`crates/tokio-ngtcp2/src/conn.rs` の `parse_new_connection_packet`) は状態を作らない不正パケットを弾くが、有効な Initial に対する制限は無い
+- 新規接続パケットのパース (`crates/shiguredo_ngtcp2_tokio/src/conn.rs` の `parse_new_connection_packet`) は状態を作らない不正パケットを弾くが、有効な Initial に対する制限は無い
 
 ## 設計方針
 
@@ -35,8 +35,8 @@
 
 ### 関連ファイル
 
-- `crates/tokio-ngtcp2/src/server.rs` / `crates/tokio-ngtcp2/src/webtransport.rs` (`handle_new_connection`、Retry 送信、接続数上限、レート制限)
-- `crates/ngtcp2-rs/src/error.rs` (`classify_connection_error` の RETRY 分類)
-- `crates/ngtcp2-rs/src/conn.rs` (`server_new` の settings、token 検証のための設定)
-- `crates/ngtcp2-sys/src/bindings.rs` (`ngtcp2_crypto_write_retry` / `ngtcp2_pkt_write_retry` の doc)
+- `crates/shiguredo_ngtcp2_tokio/src/server.rs` / `crates/shiguredo_ngtcp2_tokio/src/webtransport.rs` (`handle_new_connection`、Retry 送信、接続数上限、レート制限)
+- `crates/shiguredo_ngtcp2/src/error.rs` (`classify_connection_error` の RETRY 分類)
+- `crates/shiguredo_ngtcp2/src/conn.rs` (`server_new` の settings、token 検証のための設定)
+- `crates/shiguredo_ngtcp2_sys/src/bindings.rs` (`ngtcp2_crypto_write_retry` / `ngtcp2_pkt_write_retry` の doc)
 - 一次資料: `refs/quic/rfc9000.txt` Section 8.1 (Address Validation)、Section 8.1.1 (Token Construction)、Section 8.1.2 (Retry)、Section 5.2.2 (Server Packet Handling)

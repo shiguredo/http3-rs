@@ -14,7 +14,7 @@ HTTP/3 相互運用性テスト
 | s2n-quic (AWS) | tokio 統合 | s2n-tls | shiguredo_http3 による HTTP/3 処理 |
 | quiche (Cloudflare) | Sans I/O | BoringSSL | HTTP/3 内蔵 |
 | quinn (hyperium) | tokio 統合 | rustls (aws-lc-rs) | h3 + h3-quinn による HTTP/3 処理 |
-| ngtcp2 / nghttp3 | tokio 統合 | wolfSSL | IETF リファレンス実装 |
+| shiguredo_ngtcp2 / nghttp3 | tokio 統合 | wolfSSL | IETF リファレンス実装 |
 | tquic (Tencent) | Sans I/O | BoringSSL | HTTP/3 内蔵 |
 
 ## テスト構成
@@ -31,12 +31,12 @@ interop/h3/
 
 全組み合わせの GET リクエスト/レスポンスをテストする。
 
-| クライアント \ サーバー | s2n-quic | quiche | quinn | ngtcp2 | tquic |
+| クライアント \ サーバー | s2n-quic | quiche | quinn | shiguredo_ngtcp2 | tquic |
 |---|---|---|---|---|---|
 | **s2n-quic** | -- | OK | OK | OK | OK |
 | **quiche** | OK | -- | OK | -- | OK |
 | **quinn** | OK | OK | -- | OK | OK |
-| **ngtcp2** | OK | -- | OK | -- | OK |
+| **shiguredo_ngtcp2** | OK | -- | OK | -- | OK |
 | **tquic** | OK | OK | OK | OK | -- |
 
 ### 証明書検証の扱い
@@ -57,7 +57,7 @@ cargo test -p interop_h3
 
 # 個別テスト実行
 cargo test -p interop_h3 --test quinn_client_s2n_server
-cargo test -p interop_h3 --test tquic_client_ngtcp2_server
+cargo test -p interop_h3 --test tquic_client_shiguredo_ngtcp2_server
 ```
 
 ## 依存
