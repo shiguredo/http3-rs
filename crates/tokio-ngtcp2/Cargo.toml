@@ -15,7 +15,7 @@ shiguredo_http3.workspace = true
 #
 # 3 クレートは同時にリリースされるため、揃ったバージョンを指定する。
 # 直接使うのは shiguredo_ngtcp2_tokio (sans-IO 層は再公開経由で使う)。
-shiguredo_ngtcp2_tokio = "=2026.1.0-canary.0"
+shiguredo_ngtcp2_tokio = "=2026.1.0-canary.1"
 tokio = { version = "1.53", features = ["full"] }
 
 [dev-dependencies]

@@ -737,7 +737,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1551,7 +1551,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1878,7 +1878,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2383,7 +2383,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2665,7 +2665,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3081,9 +3081,9 @@ version = "2026.1.0-canary.12"
 
 [[package]]
 name = "shiguredo_ngtcp2"
-version = "2026.1.0-canary.0"
+version = "2026.1.0-canary.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15e8b20a5c5ec9983ed0fc18e3a7014790c58d60794dff876e638d302e9c3663"
+checksum = "944da755c21721d5234b1060dadab170883e7bbf2f9cfdbf36ae1a0a2672b0e8"
 dependencies = [
  "aws-lc-rs",
  "libc",
@@ -3092,9 +3092,9 @@ dependencies = [
 
 [[package]]
 name = "shiguredo_ngtcp2_sys"
-version = "2026.1.0-canary.0"
+version = "2026.1.0-canary.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12dbea40db711055559543311b6e97a3be9d550c58444b7a74bcd33393048f14"
+checksum = "6a595ef0a98fe65b7d2b8583cc8fca6f6e404f093e175ed4bb5a899425e426fc"
 dependencies = [
  "aws-lc-sys",
  "libc",
@@ -3104,9 +3104,9 @@ dependencies = [
 
 [[package]]
 name = "shiguredo_ngtcp2_tokio"
-version = "2026.1.0-canary.0"
+version = "2026.1.0-canary.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c52b8ac58ec56526611e08e3712bb99d7065d3a7df173215fa2599ca3edcda7"
+checksum = "cbae68f0820513a1be0163414bf815cf39e2a4700872986fc75ff393d82add43"
 dependencies = [
  "libc",
  "shiguredo_ngtcp2",
@@ -3370,10 +3370,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3382,7 +3382,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8c27177b12a6399ffc08b98f76f7c9a1f4fe9fc967c784c5a071fa8d93cf7e1"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
