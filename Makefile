@@ -52,7 +52,7 @@ check:
 
 # cargo clippy を実行する
 clippy:
-	cargo clippy --workspace -- -D warnings
+	cargo clippy --workspace --all-targets -- -D warnings
 
 # cargo fmt を実行する
 fmt:

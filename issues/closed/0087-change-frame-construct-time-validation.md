@@ -79,7 +79,8 @@ impl DataPayload {
 
 DATA ペイロードは RFC 上「任意のバイト列」のため検査は無いが、フィールド private 化
 で構築後の改ざんを防ぐ。`const fn from_static` は内部表現が `Vec<u8>` のため
-実装できず、issue 0059 (Bytes 化) 完了後に検討する。
+実装できず、issue 0059 (Bytes 化) 完了後に
+検討する。
 
 ### HeadersPayload
 

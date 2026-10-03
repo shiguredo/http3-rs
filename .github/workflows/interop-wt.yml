@@ -14,11 +14,11 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: rustup update stable
+      - run: rustup show
       - uses: shiguredo/github-actions/.github/actions/rust-cache@main
         with:
           os: macos-26
-          toolchain: stable
+          toolchain: "1.93"
       # ngtcp2/nghttp3 と s2n-quic の組み合わせのみを実行する
       - name: Run WebTransport interop tests (ngtcp2 x s2n-quic)
         run: |

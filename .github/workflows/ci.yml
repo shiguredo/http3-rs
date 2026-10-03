@@ -15,17 +15,18 @@ jobs:
           - ubuntu-24.04
           - ubuntu-24.04-arm
           - macos-26
-          - windows-2025
+          - windows-2025-vs2026
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - name: Checkout sources
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: rustup update stable
+      # rust-toolchain.toml に固定した MSRV のツールチェーンを導入する
+      - run: rustup show
       - uses: shiguredo/github-actions/.github/actions/rust-cache@main
         with:
           os: ${{ matrix.os }}
-          toolchain: stable
+          toolchain: "1.93"
       - run: cargo fmt --all --check
       # interop/h3 / interop/wt は専用ステップでのみ実行する。
       # また tokio-ngtcp2 は POSIX ソケット型に依存する shiguredo_ngtcp2_tokio を
@@ -39,7 +40,7 @@ jobs:
             EXCLUDES="$EXCLUDES --exclude tokio-ngtcp2"
           fi
           echo "flags=$EXCLUDES" >> "$GITHUB_OUTPUT"
-      - run: cargo clippy --workspace ${{ steps.excludes.outputs.flags }} -- -D warnings
+      - run: cargo clippy --workspace ${{ steps.excludes.outputs.flags }} --all-targets -- -D warnings
       - run: cargo test --workspace ${{ steps.excludes.outputs.flags }}
       # interop/h3 / interop/wt は quiche (BoringSSL) と neqo (NSS) のシンボル衝突により
       # Linux ではリンクに失敗するため macOS でのみテストする
