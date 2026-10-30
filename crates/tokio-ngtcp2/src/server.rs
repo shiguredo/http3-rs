@@ -164,16 +164,32 @@ where
             .pump_wait(&mut quic, Duration::from_millis(1))
             .await?;
     }
+    // ストリームエラーは該当ストリームだけの問題であり、接続を維持したまま
+    // 警告ログに出す (ハンドラーはイベントのみを受け取るため返却経路が無い)
+    state.h3.log_stream_errors();
     while let Some(event) = state.h3.poll_event() {
         let stream_id = event.stream_id();
         if let Some((headers, body)) = handler(addr, event)
             && let Some(stream_id) = stream_id
         {
-            state.h3.send_response(stream_id, &headers, false)?;
-            state.h3.send_body(stream_id, &body, true)?;
+            let result = state
+                .h3
+                .send_response(stream_id, &headers, false)
+                .and_then(|()| state.h3.send_body(stream_id, &body, true));
+            if let Err(e) = result {
+                // 応答送信時のストリームエラーも接続全体を閉じる根拠にしない
+                if e.is_stream_error() {
+                    eprintln!(
+                        "[tokio-ngtcp2 server] HTTP/3 stream error on response (connection kept): {e}"
+                    );
+                } else {
+                    return Err(e);
+                }
+            }
         }
     }
     let mut quic = QuicConnectionRef::Server(&mut state.conn);
     state.h3.pump(&mut quic).await?;
+    state.h3.log_stream_errors();
     Ok(())
 }

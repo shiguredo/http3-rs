@@ -258,6 +258,12 @@ pub(crate) struct H3State {
     conn: H3Connection,
     /// 受信済みで未処理のイベント
     events: VecDeque<Event>,
+    /// 接続を維持したまま保持しているストリームエラー
+    ///
+    /// ストリームエラーは該当ストリームのみの問題であり、接続を閉じる根拠に
+    /// ならない (RFC 9114 Section 8.1)。接続を破棄せず、呼び出し元の次の API
+    /// 呼び出しで返すために保持する。
+    stream_errors: VecDeque<Error>,
 }
 
 impl H3State {
@@ -266,6 +272,7 @@ impl H3State {
         Self {
             conn: H3Connection::Client(ClientConnection::new(settings)),
             events: VecDeque::new(),
+            stream_errors: VecDeque::new(),
         }
     }
 
@@ -274,6 +281,7 @@ impl H3State {
         Self {
             conn: H3Connection::Server(ServerConnection::new(settings)),
             events: VecDeque::new(),
+            stream_errors: VecDeque::new(),
         }
     }
 
@@ -322,6 +330,35 @@ impl H3State {
     /// 未処理のイベントを 1 つ取り出す
     pub(crate) fn poll_event(&mut self) -> Option<Event> {
         self.events.pop_front()
+    }
+
+    /// 接続を維持したまま保持しているストリームエラーを 1 つ取り出す
+    pub(crate) fn take_stream_error(&mut self) -> Option<Error> {
+        self.stream_errors.pop_front()
+    }
+
+    /// 接続を維持したまま保持しているストリームエラーを警告ログに出す
+    ///
+    /// サーバー側はハンドラーがイベントだけを受け取るため、ストリームエラーを
+    /// アプリケーションへ返す経路が無い。接続は継続させ、警告ログのみ残す。
+    pub(crate) fn log_stream_errors(&mut self) {
+        while let Some(error) = self.take_stream_error() {
+            eprintln!("[tokio-ngtcp2] HTTP/3 stream error (connection kept): {error}");
+        }
+    }
+
+    /// HTTP/3 のエラーを分類して記録する
+    ///
+    /// ストリームエラーは接続を維持したまま保持し、呼び出し元の次の API 呼び出しで
+    /// 返す。それ以外 (HTTP/3 の接続エラー、QUIC 層のエラー) は回復不能なため
+    /// そのまま呼び出し元へ返す。
+    fn record_error(&mut self, error: Error) -> Result<()> {
+        if error.is_stream_error() {
+            self.stream_errors.push_back(error);
+            Ok(())
+        } else {
+            Err(error)
+        }
     }
 
     /// ピアの SETTINGS を取得する
@@ -474,13 +511,18 @@ impl H3State {
     }
 
     /// QUIC と HTTP/3 のデータを 1 往復やり取りする (待たない)
+    ///
+    /// 接続エラーは呼び出し元へ返す。ストリームエラーは接続を維持したまま
+    /// `take_stream_error` で取り出せるよう保持する。
     pub(crate) async fn pump(&mut self, quic: &mut QuicConnectionRef<'_>) -> Result<()> {
         let mut closed = false;
         while let Some(event) = quic.poll_event() {
             if matches!(event, ConnectionEvent::ConnectionClosed { .. }) {
                 closed = true;
             }
-            self.handle_quic_event(event, quic)?;
+            if let Err(e) = self.handle_quic_event(event, quic) {
+                self.record_error(e)?;
+            }
         }
         if !closed {
             self.write_pending(quic)?;
@@ -488,15 +530,28 @@ impl H3State {
         quic.flush().await?;
         while let Some(event) = quic.poll_event() {
             // flush で発生したイベントも取り込む (終了イベントは次の pump で扱う)
-            self.handle_quic_event(event, quic)?;
+            if let Err(e) = self.handle_quic_event(event, quic) {
+                self.record_error(e)?;
+            }
         }
-        for event in self.conn.drain_events()? {
-            self.events.push_back(event);
+        // QPACK ブロック解除などで発生したストリームエラーも、接続を閉じる根拠に
+        // しない。該当ストリームはこの API では特定できないため、接続を維持した
+        // まま呼び出し元へエラーを返す。
+        match self.conn.drain_events() {
+            Ok(events) => {
+                for event in events {
+                    self.events.push_back(event);
+                }
+            }
+            Err(e) => self.record_error(e)?,
         }
         Ok(())
     }
 
     /// イベントが発生するか `timeout` が経過するまで接続を駆動する
+    ///
+    /// 接続エラーのみ `Err` を返す。ストリームエラーは接続を維持したまま保持され、
+    /// `take_stream_error` で取り出せる。
     pub(crate) async fn pump_wait(
         &mut self,
         quic: &mut QuicConnectionRef<'_>,
@@ -515,7 +570,9 @@ impl H3State {
             match tokio::time::timeout(deadline - now, quic.recv_event()).await {
                 Ok(Ok(event)) => {
                     let closed = matches!(event, ConnectionEvent::ConnectionClosed { .. });
-                    self.handle_quic_event(event, quic)?;
+                    if let Err(e) = self.handle_quic_event(event, quic) {
+                        self.record_error(e)?;
+                    }
                     if closed {
                         break;
                     }
@@ -528,5 +585,65 @@ impl H3State {
         }
         self.pump(quic).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_error_keeps_stream_error() {
+        // ストリームエラーは接続を維持したまま保持されること
+        let mut state = H3State::new_client(Settings::default());
+        let error = Error::Http3(shiguredo_http3::Error::StreamError(
+            shiguredo_http3::ErrorCode::MessageError,
+        ));
+        state
+            .record_error(error)
+            .expect("ストリームエラーは呼び出し元へ返さないこと");
+
+        let queued = state
+            .take_stream_error()
+            .expect("保持したストリームエラーを取り出せること");
+        assert!(
+            queued.is_stream_error(),
+            "取り出したエラーがストリームエラーであること"
+        );
+        assert!(
+            state.take_stream_error().is_none(),
+            "取り出した後に保持領域が空になること"
+        );
+    }
+
+    #[test]
+    fn test_record_error_returns_connection_error() {
+        // HTTP/3 の接続エラーは呼び出し元へ返し、保持しないこと
+        let mut state = H3State::new_client(Settings::default());
+        let error = Error::Http3(shiguredo_http3::Error::ConnectionError(
+            shiguredo_http3::ErrorCode::FrameUnexpected,
+        ));
+        assert!(
+            state.record_error(error).is_err(),
+            "接続エラーは呼び出し元へ返すこと"
+        );
+        assert!(
+            state.take_stream_error().is_none(),
+            "接続エラーはストリームエラーとして保持しないこと"
+        );
+    }
+
+    #[test]
+    fn test_record_error_returns_non_http3_error() {
+        // QUIC 層のエラー等 (HTTP/3 以外) は接続エラーとして呼び出し元へ返すこと
+        let mut state = H3State::new_client(Settings::default());
+        assert!(
+            state.record_error(Error::Timeout).is_err(),
+            "HTTP/3 以外のエラーは呼び出し元へ返すこと"
+        );
+        assert!(
+            state.take_stream_error().is_none(),
+            "HTTP/3 以外のエラーはストリームエラーとして保持しないこと"
+        );
     }
 }

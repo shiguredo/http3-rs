@@ -14,6 +14,22 @@ use crate::{Error, Result};
 /// ハンドシェイク完了までの最大待ち時間
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// HTTP/3 クライアントの QUIC 設定を組み立てる
+///
+/// `verify_peer` はピア証明書の検証可否 (RFC 9001 Section 4.4)。`datagram` は
+/// QUIC DATAGRAM (RFC 9221) の送信上限を 1 パケットに収まる値へ切り替えるかどうか。
+fn build_client_config(verify_peer: bool, datagram: bool) -> ClientConfig {
+    let config = ClientConfig::new(&[b"h3"]).with_verify_peer(verify_peer);
+    if datagram {
+        config.with_datagram(DatagramConfig {
+            max_datagram_frame_size: 65535,
+            max_tx_datagram_size: 1350,
+        })
+    } else {
+        config
+    }
+}
+
 /// HTTP/3 クライアント
 pub struct Client {
     /// QUIC 接続
@@ -23,42 +39,47 @@ pub struct Client {
 }
 
 impl Client {
-    /// 証明書検証を行わずに接続する
-    pub async fn connect_insecure(remote_addr: SocketAddr, server_name: &str) -> Result<Self> {
-        let config = ClientConfig::new(&[b"h3"]).with_verify_peer(false);
-        Self::connect_with_config(remote_addr, server_name, config, Settings::default(), false)
-            .await
+    /// 証明書検証の有無を指定して接続する
+    ///
+    /// `verify_peer` が true の場合、ピアの証明書チェーンとホスト名を検証する
+    /// (RFC 9001 Section 4.4)。トラストストアは shiguredo_ngtcp2_tokio の既定で
+    /// あり、システムの CA 証明書と `SSL_CERT_FILE` / `SSL_CERT_DIR` から読み込む。
+    /// 自己署名証明書を使うサーバーへ接続する場合は
+    /// [`Client::connect_insecure`] を使う。
+    pub async fn connect_with_verify_peer(
+        remote_addr: SocketAddr,
+        server_name: &str,
+        verify_peer: bool,
+    ) -> Result<Self> {
+        Self::connect_with_settings(
+            remote_addr,
+            server_name,
+            verify_peer,
+            Settings::default(),
+            false,
+        )
+        .await
     }
 
-    /// HTTP/3 の設定と DATAGRAM の有無を指定して接続する
+    /// 証明書検証を行わずに接続する
+    ///
+    /// このメソッドは常に証明書検証を行わない。
+    /// [`Client::connect_with_verify_peer`] に `false` を渡す省略形である。
+    pub async fn connect_insecure(remote_addr: SocketAddr, server_name: &str) -> Result<Self> {
+        Self::connect_with_verify_peer(remote_addr, server_name, false).await
+    }
+
+    /// 証明書検証の有無・HTTP/3 設定・DATAGRAM の有無を指定して接続する
+    ///
+    /// 接続後に HTTP/3 の制御ストリームと QPACK ストリームを開く。
     pub(crate) async fn connect_with_settings(
         remote_addr: SocketAddr,
         server_name: &str,
+        verify_peer: bool,
         h3_settings: Settings,
         datagram: bool,
     ) -> Result<Self> {
-        let config = ClientConfig::new(&[b"h3"]).with_verify_peer(false);
-        Self::connect_with_config(remote_addr, server_name, config, h3_settings, datagram).await
-    }
-
-    /// 設定を指定して接続する
-    ///
-    /// 接続後に HTTP/3 の制御ストリームと QPACK ストリームを開く。
-    async fn connect_with_config(
-        remote_addr: SocketAddr,
-        server_name: &str,
-        config: ClientConfig,
-        h3_settings: Settings,
-        datagram: bool,
-    ) -> Result<Self> {
-        let config = if datagram {
-            config.with_datagram(DatagramConfig {
-                max_datagram_frame_size: 65535,
-                max_tx_datagram_size: 1350,
-            })
-        } else {
-            config
-        };
+        let config = build_client_config(verify_peer, datagram);
         let local_addr: SocketAddr = if remote_addr.is_ipv4() {
             "0.0.0.0:0".parse().expect("valid address")
         } else {
@@ -70,6 +91,8 @@ impl Client {
         {
             let mut conn = QuicConnectionRef::Client(&mut quic);
             h3.init_h3_streams(&mut conn).await?;
+            // 接続直後は接続エラーのみを返す。ストリームエラーは H3State に保持され、
+            // 最初の flush / recv / handshake で呼び出し元へ返される。
             h3.pump(&mut conn).await?;
         }
         Ok(Self { quic, h3 })
@@ -91,6 +114,8 @@ impl Client {
             self.h3
                 .pump_wait(&mut conn, Duration::from_millis(50))
                 .await?;
+            // 接続は維持したまま、保留中のストリームエラーを呼び出し元へ返す
+            self.take_stream_error()?;
         }
         Ok(())
     }
@@ -182,6 +207,9 @@ impl Client {
     }
 
     /// 受信済みのイベントを 1 つ取り出す
+    ///
+    /// 接続を維持したまま保留しているストリームエラーがある場合は、次の
+    /// [`Client::flush`] または [`Client::recv`] がそのエラーを返す。
     pub fn poll(&mut self) -> Option<Event> {
         self.h3.poll_event()
     }
@@ -192,15 +220,30 @@ impl Client {
     }
 
     /// 送信待ちのデータを書き出す
+    ///
+    /// 接続エラーの場合は `Err` を返す。ストリームエラーの場合は接続を維持した
+    /// まま `Err` を返すため、呼び出し側は接続を使い続けられる。
     pub async fn flush(&mut self) -> Result<()> {
         let mut conn = QuicConnectionRef::Client(&mut self.quic);
-        self.h3.pump(&mut conn).await
+        self.h3.pump(&mut conn).await?;
+        self.take_stream_error()
     }
 
     /// `timeout` の間、接続を駆動する
+    ///
+    /// エラーの扱いは [`Client::flush`] と同じ。
     pub async fn recv(&mut self, timeout: Duration) -> Result<()> {
         let mut conn = QuicConnectionRef::Client(&mut self.quic);
-        self.h3.pump_wait(&mut conn, timeout).await
+        self.h3.pump_wait(&mut conn, timeout).await?;
+        self.take_stream_error()
+    }
+
+    /// 接続を維持したまま保留しているストリームエラーを返す
+    fn take_stream_error(&mut self) -> Result<()> {
+        match self.h3.take_stream_error() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// HTTP/3 が割り当てたストリーム ID に対応する QUIC ストリームを開く
@@ -216,5 +259,43 @@ impl Client {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_client_config_verify_peer() {
+        // 証明書検証を有効にした設定を組み立てられること
+        let config = build_client_config(true, false);
+        assert!(config.verify_peer, "verify_peer が true であること");
+
+        // 証明書検証を無効にした設定を組み立てられること
+        let config = build_client_config(false, false);
+        assert!(!config.verify_peer, "verify_peer が false であること");
+
+        // ALPN は HTTP/3 であること
+        assert_eq!(
+            config.alpn_protocols,
+            vec![b"h3".to_vec()],
+            "ALPN が h3 であること"
+        );
+    }
+
+    #[test]
+    fn test_build_client_config_datagram() {
+        // DATAGRAM を有効にすると 1 パケットに収まる送信上限になること
+        let config = build_client_config(false, true);
+        assert!(config.datagram.is_enabled(), "DATAGRAM が有効であること");
+        assert_eq!(
+            config.datagram.max_datagram_frame_size, 65535,
+            "受信上限が 65535 であること"
+        );
+        assert_eq!(
+            config.datagram.max_tx_datagram_size, 1350,
+            "送信上限が 1350 であること"
+        );
     }
 }

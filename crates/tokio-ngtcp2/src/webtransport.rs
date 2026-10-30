@@ -49,19 +49,42 @@ pub struct ClientWebTransportSession {
 }
 
 impl ClientWebTransportSession {
+    /// 証明書検証の有無を指定して接続する
+    ///
+    /// `verify_peer` が true の場合、ピアの証明書チェーンとホスト名を検証する
+    /// (RFC 9001 Section 4.4)。トラストストアは shiguredo_ngtcp2_tokio の既定で
+    /// あり、システムの CA 証明書と `SSL_CERT_FILE` / `SSL_CERT_DIR` から読み込む。
+    pub async fn connect_with_verify_peer(
+        remote_addr: SocketAddr,
+        server_name: &str,
+        _path: &str,
+        verify_peer: bool,
+    ) -> Result<Self> {
+        let client = Client::connect_with_settings(
+            remote_addr,
+            server_name,
+            verify_peer,
+            client_settings(),
+            true,
+        )
+        .await?;
+        Ok(Self {
+            client,
+            session_id: None,
+        })
+    }
+
     /// 証明書検証を行わずに接続する
+    ///
+    /// このメソッドは常に証明書検証を行わない。
+    /// [`ClientWebTransportSession::connect_with_verify_peer`] に `false` を渡す
+    /// 省略形である。
     pub async fn connect_insecure(
         remote_addr: SocketAddr,
         server_name: &str,
         _path: &str,
     ) -> Result<Self> {
-        let client =
-            Client::connect_with_settings(remote_addr, server_name, client_settings(), true)
-                .await?;
-        Ok(Self {
-            client,
-            session_id: None,
-        })
+        Self::connect_with_verify_peer(remote_addr, server_name, _path, false).await
     }
 
     /// 確立済みセッション ID
@@ -333,6 +356,8 @@ impl ServerWebTransportSession {
                 let mut quic = QuicConnectionRef::Server(&mut state.conn);
                 state.h3.pump(&mut quic).await?;
                 pending |= quic.has_pending_data();
+                // ストリームエラーは接続を維持したまま警告ログに出す
+                state.h3.log_stream_errors();
             }
             if !pending {
                 return Ok(());
@@ -475,6 +500,9 @@ where
             .pump_wait(&mut quic, Duration::from_millis(1))
             .await?;
     }
+    // ストリームエラーは該当ストリームだけの問題であり、接続を維持したまま
+    // 警告ログに出す (ハンドラーはイベントのみを受け取るため返却経路が無い)
+    state.h3.log_stream_errors();
     while let Some(event) = state.h3.poll_event() {
         match event {
             Event::Header {
@@ -503,7 +531,17 @@ where
                         let response = ConnectResponse::new(200).to_headers().map_err(|e| {
                             Error::InvalidArgument(format!("invalid CONNECT response: {e}"))
                         })?;
-                        state.h3.send_response(stream_id, &response, false)?;
+                        // 応答送信時のストリームエラーは該当ストリームだけの問題であり、
+                        // 接続全体を閉じる根拠にしない
+                        if let Err(e) = state.h3.send_response(stream_id, &response, false) {
+                            if e.is_stream_error() {
+                                eprintln!(
+                                    "[tokio-ngtcp2 server] HTTP/3 stream error on CONNECT response (connection kept): {e}"
+                                );
+                            } else {
+                                return Err(e);
+                            }
+                        }
                     }
                 }
             }
@@ -560,5 +598,6 @@ where
     }
     let mut quic = QuicConnectionRef::Server(&mut state.conn);
     state.h3.pump(&mut quic).await?;
+    state.h3.log_stream_errors();
     Ok(())
 }

@@ -22,6 +22,9 @@ pub enum Error {
     /// QUIC 層 (shiguredo_ngtcp2_tokio) のエラー
     Quic(shiguredo_ngtcp2_tokio::Error),
     /// HTTP/3 層 (shiguredo_http3) のエラー
+    ///
+    /// `shiguredo_http3::Error::StreamError` は該当ストリームのみの問題であり、
+    /// 接続を維持したまま呼び出し元に返される。
     Http3(shiguredo_http3::Error),
     /// 操作がタイムアウトした
     Timeout,
@@ -71,5 +74,48 @@ impl From<shiguredo_http3::Error> for Error {
     }
 }
 
+impl Error {
+    /// HTTP/3 のストリームエラーかどうか
+    ///
+    /// ストリームエラーは該当ストリームだけの問題であり、接続を閉じる根拠に
+    /// ならない (RFC 9114 Section 8.1)。接続エラー (`ConnectionError`) や QUIC 層の
+    /// エラーは接続が回復不能なため `false` を返す。
+    pub(crate) fn is_stream_error(&self) -> bool {
+        matches!(self, Self::Http3(shiguredo_http3::Error::StreamError(_)))
+    }
+}
+
 /// このクレートの結果型
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_stream_error() {
+        // HTTP/3 のストリームエラーは接続を閉じない対象であること
+        let stream_error = Error::Http3(shiguredo_http3::Error::StreamError(
+            shiguredo_http3::ErrorCode::MessageError,
+        ));
+        assert!(
+            stream_error.is_stream_error(),
+            "StreamError は接続を閉じない対象であること"
+        );
+
+        // HTTP/3 の接続エラーは接続を閉じる対象であること
+        let connection_error = Error::Http3(shiguredo_http3::Error::ConnectionError(
+            shiguredo_http3::ErrorCode::FrameUnexpected,
+        ));
+        assert!(
+            !connection_error.is_stream_error(),
+            "ConnectionError は接続を閉じる対象であること"
+        );
+
+        // タイムアウト等の HTTP/3 以外のエラーはストリームエラーではないこと
+        assert!(
+            !Error::Timeout.is_stream_error(),
+            "Timeout は接続を閉じる対象であること"
+        );
+    }
+}
