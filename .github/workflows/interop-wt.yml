@@ -18,7 +18,7 @@ jobs:
       - uses: shiguredo/github-actions/.github/actions/rust-cache@main
         with:
           os: macos-26
-          toolchain: "1.93"
+          toolchain: "1.95"
       # ngtcp2/nghttp3 と s2n-quic の組み合わせのみを実行する
       - name: Run WebTransport interop tests (ngtcp2 x s2n-quic)
         run: |

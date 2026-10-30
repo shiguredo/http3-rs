@@ -26,7 +26,7 @@ jobs:
       - uses: shiguredo/github-actions/.github/actions/rust-cache@main
         with:
           os: ${{ matrix.os }}
-          toolchain: "1.93"
+          toolchain: "1.95"
       - run: cargo fmt --all --check
       # interop/h3 / interop/wt は専用ステップでのみ実行する。
       # また tokio-ngtcp2 は POSIX ソケット型に依存する shiguredo_ngtcp2_tokio を
