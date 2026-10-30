@@ -33,7 +33,7 @@ pub mod settings;
 pub mod stream;
 
 pub use capsule::{
-    Capsule, CapsuleType, CapsuleValidationError, H3_DATAGRAM_ERROR, MAX_STREAMS_LIMIT,
+    Capsule, CapsuleType, CapsuleValidationError, MAX_STREAMS_LIMIT,
     PROHIBITED_WT_MAX_STREAM_DATA_CAPSULE_TYPE, PROHIBITED_WT_STREAM_DATA_BLOCKED_CAPSULE_TYPE,
 };
 pub use connect::{
@@ -49,5 +49,5 @@ pub use session::{
 pub use settings::Settings;
 pub use stream::{
     BIDIRECTIONAL_SIGNAL_VALUE, ClassifiedUniStream, Stream, StreamHeader, StreamHeaderDecodeError,
-    UNIDIRECTIONAL_STREAM_TYPE, classify_uni_stream, classify_uni_stream_checked, stream_type,
+    UNIDIRECTIONAL_STREAM_TYPE, classify_uni_stream_checked, stream_type,
 };

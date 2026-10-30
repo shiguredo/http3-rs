@@ -113,7 +113,7 @@ impl StreamHeader {
 
     /// 単方向ストリームヘッダーをデコード
     ///
-    /// # Returns
+    /// # 戻り値
     ///
     /// デコードしたヘッダーと消費したバイト数、またはバッファが不足している場合は `None`
     pub fn decode_unidirectional(buf: &[u8]) -> Option<(Self, usize)> {
@@ -126,7 +126,7 @@ impl StreamHeader {
     ) -> Result<(Self, usize), StreamHeaderDecodeError> {
         let mut offset = 0;
 
-        // Stream Type
+        // ストリームタイプ
         let (stream_type, len) =
             decode_varint(&buf[offset..]).ok_or(StreamHeaderDecodeError::BufferTooShort)?;
         offset += len;
@@ -135,7 +135,7 @@ impl StreamHeader {
             return Err(StreamHeaderDecodeError::InvalidFormat);
         }
 
-        // Session ID
+        // セッション ID
         let (session_id, len) =
             decode_varint(&buf[offset..]).ok_or(StreamHeaderDecodeError::BufferTooShort)?;
         offset += len;
@@ -151,7 +151,7 @@ impl StreamHeader {
 
     /// 双方向ストリームヘッダーをデコード
     ///
-    /// # Returns
+    /// # 戻り値
     ///
     /// デコードしたヘッダーと消費したバイト数、またはバッファが不足している場合は `None`
     pub fn decode_bidirectional(buf: &[u8]) -> Option<(Self, usize)> {
@@ -164,7 +164,7 @@ impl StreamHeader {
     ) -> Result<(Self, usize), StreamHeaderDecodeError> {
         let mut offset = 0;
 
-        // Signal Value
+        // シグナル値
         let (signal_value, len) =
             decode_varint(&buf[offset..]).ok_or(StreamHeaderDecodeError::BufferTooShort)?;
         offset += len;
@@ -173,7 +173,7 @@ impl StreamHeader {
             return Err(StreamHeaderDecodeError::InvalidFormat);
         }
 
-        // Session ID
+        // セッション ID
         let (session_id, len) =
             decode_varint(&buf[offset..]).ok_or(StreamHeaderDecodeError::BufferTooShort)?;
         offset += len;
@@ -189,7 +189,7 @@ impl StreamHeader {
 
     /// エンコードサイズを計算
     pub fn encoded_size(&self) -> usize {
-        // Signal/Type + Session ID
+        // シグナル値/ストリームタイプ + セッション ID
         BIDI_SIGNAL_VARINT.encoded_len() + session_id_to_varint(self.session_id).encoded_len()
     }
 }
@@ -203,10 +203,6 @@ pub struct Stream {
     session_id: u64,
     /// 双方向ストリームかどうか
     bidirectional: bool,
-    /// ヘッダー送信済み
-    header_sent: bool,
-    /// ヘッダー受信済み
-    header_received: bool,
     /// 送信データ量
     bytes_sent: u64,
     /// 受信データ量
@@ -220,8 +216,6 @@ impl Stream {
             stream_id,
             session_id,
             bidirectional,
-            header_sent: false,
-            header_received: false,
             bytes_sent: 0,
             bytes_received: 0,
         }
@@ -240,26 +234,6 @@ impl Stream {
     /// 双方向ストリームかどうか
     pub fn is_bidirectional(&self) -> bool {
         self.bidirectional
-    }
-
-    /// ヘッダー送信済みかどうか
-    pub fn is_header_sent(&self) -> bool {
-        self.header_sent
-    }
-
-    /// ヘッダー受信済みかどうか
-    pub fn is_header_received(&self) -> bool {
-        self.header_received
-    }
-
-    /// ヘッダー送信済みを設定
-    pub fn set_header_sent(&mut self) {
-        self.header_sent = true;
-    }
-
-    /// ヘッダー受信済みを設定
-    pub fn set_header_received(&mut self) {
-        self.header_received = true;
     }
 
     /// 送信データ量を取得
@@ -302,39 +276,16 @@ pub enum ClassifiedUniStream {
     },
 }
 
-/// 単方向ストリームの先頭バイトからストリームタイプを分類する
-///
-/// バッファ不足の場合は `Err(varint::DecodeError::BufferTooShort)` を返す。
-/// WebTransport ストリームの場合は session_id もデコードする必要があるため、
-/// session_id のデコードにもバッファが不足している場合は `Err` を返す。
-///
-/// この関数は最小限のパースのみ行い、session_id の正当性 (`session_id % 4 == 0`) は
-/// 検証しない。呼び出し側で検証する必要がある
-/// (draft-ietf-webtrans-http3-15 Section 4)。
-pub fn classify_uni_stream(buf: &[u8]) -> Result<ClassifiedUniStream, varint::DecodeError> {
-    let (stream_type, type_len) = varint::decode(buf)?;
-    if stream_type.get() == UNIDIRECTIONAL_STREAM_TYPE {
-        let (session_id, session_id_len) = varint::decode(&buf[type_len..])?;
-        Ok(ClassifiedUniStream::WebTransport {
-            session_id: session_id.get(),
-            data_offset: type_len + session_id_len,
-        })
-    } else {
-        Ok(ClassifiedUniStream::Http3 {
-            stream_type: stream_type.get(),
-            data_offset: type_len,
-        })
-    }
-}
-
 /// 単方向ストリームの先頭バイトからストリームタイプを分類する (session_id 検証付き)
 ///
-/// `classify_uni_stream()` と同様だが、WebTransport ストリームの場合に
-/// session_id が client-initiated bidirectional stream ID (`session_id % 4 == 0`)
+/// WebTransport ストリームの場合は session_id が
+/// client-initiated bidirectional stream ID (`session_id % 4 == 0`)
 /// であることを検証する (draft-ietf-webtrans-http3-15 Section 4)。
+/// HTTP/3 ストリームの場合はストリームタイプのみを返す。
 ///
+/// バッファ不足の場合は `Err(StreamHeaderDecodeError::BufferTooShort)`、
 /// 不正な session_id の場合は `Err(StreamHeaderDecodeError::InvalidSessionId)` を返す。
-/// 呼び出し側は H3_ID_ERROR で接続を閉じる必要がある。
+/// 不正な session_id の場合、呼び出し側は H3_ID_ERROR で接続を閉じる必要がある。
 pub fn classify_uni_stream_checked(
     buf: &[u8],
 ) -> Result<ClassifiedUniStream, StreamHeaderDecodeError> {
@@ -435,8 +386,6 @@ mod tests {
         assert_eq!(stream.stream_id(), 4);
         assert_eq!(stream.session_id(), 0);
         assert!(stream.is_bidirectional());
-        assert!(!stream.is_header_sent());
-        assert!(!stream.is_header_received());
         assert_eq!(stream.bytes_sent(), 0);
         assert_eq!(stream.bytes_received(), 0);
     }
@@ -455,19 +404,19 @@ mod tests {
 
     #[test]
     fn test_stream_type_helpers() {
-        // Client-initiated bidirectional (0b00)
+        // クライアント開始の双方向ストリーム (0b00)
         assert!(stream_type::is_client_initiated(0));
         assert!(stream_type::is_bidirectional(0));
 
-        // Server-initiated bidirectional (0b01)
+        // サーバー開始の双方向ストリーム (0b01)
         assert!(stream_type::is_server_initiated(1));
         assert!(stream_type::is_bidirectional(1));
 
-        // Client-initiated unidirectional (0b10)
+        // クライアント開始の単方向ストリーム (0b10)
         assert!(stream_type::is_client_initiated(2));
         assert!(stream_type::is_unidirectional(2));
 
-        // Server-initiated unidirectional (0b11)
+        // サーバー開始の単方向ストリーム (0b11)
         assert!(stream_type::is_server_initiated(3));
         assert!(stream_type::is_unidirectional(3));
     }

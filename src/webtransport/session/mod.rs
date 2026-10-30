@@ -10,7 +10,7 @@ pub use flow_control::{FlowControlLimits, FlowControlState};
 
 use std::collections::HashMap;
 
-use super::capsule::{Capsule, MAX_STREAMS_LIMIT};
+use super::capsule::{Capsule, MAX_CLOSE_SESSION_MESSAGE_LEN, MAX_STREAMS_LIMIT};
 use super::error::{Error, ErrorCode};
 use super::stream::Stream;
 
@@ -216,11 +216,6 @@ impl Session {
         self.streams.get(&stream_id)
     }
 
-    /// ストリームを可変参照で取得
-    pub fn get_stream_mut(&mut self, stream_id: u64) -> Option<&mut Stream> {
-        self.streams.get_mut(&stream_id)
-    }
-
     /// ストリームを削除
     pub fn remove_stream(&mut self, stream_id: u64) -> Option<Stream> {
         self.streams.remove(&stream_id)
@@ -277,6 +272,27 @@ impl Session {
         self.recv_stream_fc_uni = DirectionalStreamFlowControl::new(limits.max_streams_uni);
         self.recv_stream_fc_bidi = DirectionalStreamFlowControl::new(limits.max_streams_bidi);
         self.recv_data_fc = DataFlowControl::new(limits.max_data);
+    }
+
+    /// ピアの SETTINGS から得た送信側フロー制御の初期値を設定
+    ///
+    /// ピアが SETTINGS で宣言した `wt_initial_max_streams_uni` /
+    /// `wt_initial_max_streams_bidi` / `wt_initial_max_data` の値を渡す。
+    /// 以後、[`Session::can_create_unidirectional_stream`] /
+    /// [`Session::can_create_bidirectional_stream`] / [`Session::can_send_data`] /
+    /// [`Session::try_open_stream`] / [`Session::try_send_data`] の送信側上限と、
+    /// [`Session::process_capsule`] の WT_MAX_STREAMS / WT_MAX_DATA の
+    /// 単調性検証の基準値として使われる。
+    ///
+    /// セッション確立前に 1 回だけ呼ぶこと。セッション確立後に呼ぶと、
+    /// 既に受信したカプセルで増加した上限を巻き戻してしまう。
+    /// ピアが SETTINGS で初期値を宣言していない場合 (全フィールド 0) は
+    /// 呼ばなくても [`FlowControlLimits::new`] と同じ状態になる。
+    ///
+    /// draft-ietf-webtrans-http3-16 Section 5.5, 5.6.2, 5.6.4
+    /// 将来のドラフトで変更される可能性がある
+    pub fn initialize_remote_limits(&mut self, limits: FlowControlLimits) {
+        self.remote_limits = limits;
     }
 
     /// 初期フロー制御カプセルをキューに追加する
@@ -559,10 +575,10 @@ impl Session {
         }
         let mut message = message.into();
         // エラーメッセージは 1024 バイトを超えてはならない
-        // (draft-ietf-webtrans-http3-15 Section 6)
-        if message.len() > 1024 {
+        // (draft-ietf-webtrans-http3-16 Section 6)
+        if message.len() > MAX_CLOSE_SESSION_MESSAGE_LEN {
             // UTF-8 境界で安全に切り詰める
-            let mut end = 1024;
+            let mut end = MAX_CLOSE_SESSION_MESSAGE_LEN;
             while end > 0 && !message.is_char_boundary(end) {
                 end -= 1;
             }
@@ -587,7 +603,7 @@ impl Session {
     }
 
     // =========================================================================
-    // Section 4.6: Buffering Incoming Streams and Datagrams
+    // Section 4.6: 未確立セッション向けのストリームとデータグラムのバッファリング
     // =========================================================================
 
     /// 未確立セッション向けの受信ストリームをバッファリング (draft-ietf-webtrans-http3-15 Section 4.6)
@@ -629,7 +645,7 @@ impl Session {
     }
 
     // =========================================================================
-    // Section 4.7: Interaction with the HTTP/3 GOAWAY frame
+    // Section 4.7: HTTP/3 GOAWAY フレームとの相互作用
     // =========================================================================
 
     /// HTTP/3 GOAWAY 受信時の処理 (draft-ietf-webtrans-http3-15 Section 4.7)
@@ -646,7 +662,7 @@ impl Session {
     }
 
     // =========================================================================
-    // Section 6: Session Termination
+    // Section 6: セッション終了
     // =========================================================================
 
     /// WT_CLOSE_SESSION を受信したかどうか (draft-ietf-webtrans-http3-15 Section 6)
@@ -720,6 +736,9 @@ impl Session {
 
             Capsule::MaxData { maximum } => {
                 // 増加しない値はエラー (draft-16 Section 5.6.4: "does not increase")
+                // 基準値はピアの SETTINGS_WT_INITIAL_MAX_DATA で宣言された初期値
+                // (`initialize_remote_limits` で設定) であり、初期値以下へ戻す
+                // カプセルもフロー制御エラーになる。
                 // 将来のドラフトで変更される可能性がある
                 if *maximum <= self.remote_limits.max_data {
                     return Err(CapsuleProcessError::Session(Error::Protocol(
@@ -746,6 +765,9 @@ impl Session {
                 }
                 if *bidirectional {
                     // 増加しない値はエラー (draft-16 Section 5.6.2: "does not increase")
+                    // 基準値はピアの SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI で宣言された
+                    // 初期値 (`initialize_remote_limits` で設定)。初期値以下の値は
+                    // フロー制御エラーになる。
                     // 将来のドラフトで変更される可能性がある
                     if *maximum <= self.remote_limits.max_streams_bidi {
                         return Err(CapsuleProcessError::Session(Error::Protocol(
@@ -757,6 +779,9 @@ impl Session {
                     self.send_blocked.last_streams_blocked_bidi = None;
                 } else {
                     // 増加しない値はエラー (draft-16 Section 5.6.2: "does not increase")
+                    // 基準値はピアの SETTINGS_WT_INITIAL_MAX_STREAMS_UNI で宣言された
+                    // 初期値 (`initialize_remote_limits` で設定)。初期値以下の値は
+                    // フロー制御エラーになる。
                     // 将来のドラフトで変更される可能性がある
                     if *maximum <= self.remote_limits.max_streams_uni {
                         return Err(CapsuleProcessError::Session(Error::Protocol(
@@ -1326,6 +1351,147 @@ mod tests {
         // check_received_stream は initialize_local_limits で設定した上限に従う
         assert!(session.check_received_stream(false));
         assert!(session.check_received_stream(true));
+    }
+
+    // =========================================================================
+    // SETTINGS 初期値と送信側フロー制御テスト
+    // (draft-ietf-webtrans-http3-16 Section 5.5, 5.6.2, 5.6.4)
+    // =========================================================================
+
+    #[test]
+    fn test_initialize_remote_limits_applied() {
+        // ピアの SETTINGS で宣言された初期値が送信側上限として使われること
+        let mut session = Session::new(0);
+        session.initialize_remote_limits(FlowControlLimits {
+            max_streams_uni: 10,
+            max_streams_bidi: 5,
+            max_data: 1024,
+        });
+        session.set_established();
+
+        assert_eq!(session.remote_limits().max_streams_uni, 10);
+        assert_eq!(session.remote_limits().max_streams_bidi, 5);
+        assert_eq!(session.remote_limits().max_data, 1024);
+
+        // can_create_* / can_send_data が初期値に従うこと
+        assert!(session.can_create_unidirectional_stream());
+        assert!(session.can_create_bidirectional_stream());
+        assert!(session.can_send_data(1024));
+        assert!(!session.can_send_data(1025));
+
+        // 初期値まで開くと作成不可になること
+        for _ in 0..10 {
+            assert!(session.try_open_stream(false));
+        }
+        assert!(!session.can_create_unidirectional_stream());
+        assert!(session.can_create_bidirectional_stream());
+    }
+
+    #[test]
+    fn test_initialize_remote_limits_is_max_data_baseline() {
+        // SETTINGS_WT_INITIAL_MAX_DATA の初期値 100 を設定した状態では、
+        // 100 以下に戻す WT_MAX_DATA は WT_FLOW_CONTROL_ERROR になる
+        // (draft-ietf-webtrans-http3-16 Section 5.6.4: "does not increase")
+        let mut session = Session::new(0);
+        session.initialize_remote_limits(FlowControlLimits {
+            max_data: 100,
+            ..FlowControlLimits::default()
+        });
+        session.set_established();
+
+        let result = session.process_capsule(&Capsule::MaxData { maximum: 50 });
+        assert_eq!(
+            result,
+            Err(CapsuleProcessError::Session(Error::Protocol(
+                ErrorCode::FlowControlError
+            ))),
+            "初期値 (100) より小さい WT_MAX_DATA はセッションエラーになること"
+        );
+
+        // 初期値と同じ値も "does not increase" なのでエラー
+        let result = session.process_capsule(&Capsule::MaxData { maximum: 100 });
+        assert_eq!(
+            result,
+            Err(CapsuleProcessError::Session(Error::Protocol(
+                ErrorCode::FlowControlError
+            ))),
+            "初期値と同じ WT_MAX_DATA はセッションエラーになること"
+        );
+
+        // 初期値より大きい値は受理される
+        session
+            .process_capsule(&Capsule::MaxData { maximum: 101 })
+            .expect("初期値より大きい WT_MAX_DATA は受理されること");
+        assert_eq!(session.remote_limits().max_data, 101);
+    }
+
+    #[test]
+    fn test_initialize_remote_limits_is_max_streams_baseline() {
+        // SETTINGS_WT_INITIAL_MAX_STREAMS_{UNI,BIDI} の初期値を設定した状態では、
+        // 初期値以下に戻す WT_MAX_STREAMS は WT_FLOW_CONTROL_ERROR になる
+        // (draft-ietf-webtrans-http3-16 Section 5.6.2: "does not increase")
+        let mut session = Session::new(0);
+        session.initialize_remote_limits(FlowControlLimits {
+            max_streams_uni: 100,
+            max_streams_bidi: 200,
+            ..FlowControlLimits::default()
+        });
+        session.set_established();
+
+        // 単方向: 初期値未満はエラー
+        let result = session.process_capsule(&Capsule::MaxStreams {
+            bidirectional: false,
+            maximum: 99,
+        });
+        assert_eq!(
+            result,
+            Err(CapsuleProcessError::Session(Error::Protocol(
+                ErrorCode::FlowControlError
+            ))),
+            "初期値 (100) より小さい WT_MAX_STREAMS (uni) はセッションエラーになること"
+        );
+
+        // 双方向: 初期値と同じ値はエラー
+        let result = session.process_capsule(&Capsule::MaxStreams {
+            bidirectional: true,
+            maximum: 200,
+        });
+        assert_eq!(
+            result,
+            Err(CapsuleProcessError::Session(Error::Protocol(
+                ErrorCode::FlowControlError
+            ))),
+            "初期値と同じ WT_MAX_STREAMS (bidi) はセッションエラーになること"
+        );
+
+        // 初期値より大きい値は受理される
+        session
+            .process_capsule(&Capsule::MaxStreams {
+                bidirectional: false,
+                maximum: 101,
+            })
+            .expect("初期値より大きい WT_MAX_STREAMS (uni) は受理されること");
+        session
+            .process_capsule(&Capsule::MaxStreams {
+                bidirectional: true,
+                maximum: 201,
+            })
+            .expect("初期値より大きい WT_MAX_STREAMS (bidi) は受理されること");
+        assert_eq!(session.remote_limits().max_streams_uni, 101);
+        assert_eq!(session.remote_limits().max_streams_bidi, 201);
+    }
+
+    #[test]
+    fn test_initialize_remote_limits_defaults_to_zero() {
+        // 呼ばない場合は 0 のままで、最初の WT_MAX_DATA は 1 以上なら受理される
+        let mut session = Session::new(0);
+        session.set_established();
+        assert_eq!(session.remote_limits().max_data, 0);
+        assert_eq!(session.remote_limits().max_streams_uni, 0);
+
+        session
+            .process_capsule(&Capsule::MaxData { maximum: 1 })
+            .expect("初期値 0 のときは 1 以上の WT_MAX_DATA が受理されること");
     }
 
     #[test]

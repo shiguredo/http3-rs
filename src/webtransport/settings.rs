@@ -221,15 +221,31 @@ impl Settings {
     /// フロー制御が有効かどうか
     ///
     /// 以下のいずれかを満たす場合に「フロー制御を使う意図を宣言」する:
-    /// - SETTINGS_WT_MAX_SESSIONS > 1 (draft-14 Section 5.1)
     /// - SETTINGS_WT_INITIAL_MAX_STREAMS_UNI != 0
     /// - SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI != 0
     /// - SETTINGS_WT_INITIAL_MAX_DATA != 0
+    /// - SETTINGS_WT_MAX_SESSIONS > 1 (draft-14 以前のみ)
     ///
-    /// draft-ietf-webtrans-http3-14 Section 5.1, draft-ietf-webtrans-http3-15 Section 5.1
+    /// draft-15 以降では `SETTINGS_WT_MAX_SESSIONS` が廃止され、宣言条件は
+    /// `SETTINGS_WT_INITIAL_MAX_*` のいずれかが非ゼロであることだけになった
+    /// (draft-ietf-webtrans-http3-15 Section 5.1)。
+    /// そのため `SETTINGS_WT_ENABLED` を送る draft-15/16 の端点が互換のために
+    /// `SETTINGS_WT_MAX_SESSIONS` を併送しても、それをフロー制御の宣言として
+    /// 扱わない。draft-14 以前は `SETTINGS_WT_MAX_SESSIONS > 1` も宣言条件に
+    /// 含まれるため、`SETTINGS_WT_ENABLED` を送らない端点に対しては
+    /// 従来どおり宣言として扱う。
+    ///
+    /// draft-ietf-webtrans-http3-14 Section 5.1,
+    /// draft-ietf-webtrans-http3-15 Section 5.1,
+    /// draft-ietf-webtrans-http3-16 Section 5.1
     /// 将来のドラフトで変更される可能性がある
     pub fn declares_flow_control(&self) -> bool {
-        self.wt_max_sessions_draft14.is_some_and(|v| v.get() > 1)
+        // SETTINGS_WT_ENABLED は draft-15 以降の識別子である。それを送る端点は
+        // draft-15/16 の宣言条件に従うため、draft-14 のヒューリスティック
+        // (WT_MAX_SESSIONS > 1) は適用しない。
+        let draft14_max_sessions_declaration =
+            self.wt_enabled.get() == 0 && self.wt_max_sessions_draft14.is_some_and(|v| v.get() > 1);
+        draft14_max_sessions_declaration
             || self.wt_initial_max_streams_uni.get() != 0
             || self.wt_initial_max_streams_bidi.get() != 0
             || self.wt_initial_max_data.get() != 0
@@ -388,6 +404,13 @@ mod tests {
 
         let peer = Settings::new().wt_initial_max_data(v(1));
         assert!(local.flow_control_enabled_with_peer(&peer));
+
+        // draft-15/16 のピアが互換のために WT_MAX_SESSIONS を併送しても
+        // フロー制御宣言にはならない (draft-ietf-webtrans-http3-15 Section 5.1)
+        let peer = Settings::new()
+            .wt_enabled(v(1))
+            .wt_max_sessions_draft14(v(2));
+        assert!(!local.flow_control_enabled_with_peer(&peer));
     }
 
     #[test]
@@ -535,12 +558,32 @@ mod tests {
     #[test]
     fn test_declares_flow_control_draft14_max_sessions() {
         // draft-14: WT_MAX_SESSIONS > 1 でフロー制御宣言
+        // (SETTINGS_WT_ENABLED を送らないため draft-14 以前の端点として扱う)
         let settings = Settings::new().wt_max_sessions_draft14(v(2));
         assert!(settings.declares_flow_control());
 
         // WT_MAX_SESSIONS = 1 ではフロー制御宣言にならない
         let settings = Settings::new().wt_max_sessions_draft14(v(1));
         assert!(!settings.declares_flow_control());
+    }
+
+    #[test]
+    fn test_declares_flow_control_ignores_max_sessions_for_draft15() {
+        // draft-15/16 の端点は SETTINGS_WT_ENABLED を送る。互換のために
+        // SETTINGS_WT_MAX_SESSIONS を併送しても、draft-15 以降の宣言条件は
+        // SETTINGS_WT_INITIAL_MAX_* のみなのでフロー制御宣言にならない
+        // (draft-ietf-webtrans-http3-15 Section 5.1)。
+        let settings = Settings::new()
+            .wt_enabled(v(1))
+            .wt_max_sessions_draft14(v(2));
+        assert!(!settings.declares_flow_control());
+
+        // INITIAL_MAX_* が非ゼロなら draft-15/16 でも宣言になる
+        let settings = Settings::new()
+            .wt_enabled(v(1))
+            .wt_max_sessions_draft14(v(2))
+            .wt_initial_max_data(v(1));
+        assert!(settings.declares_flow_control());
     }
 
     #[test]

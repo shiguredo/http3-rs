@@ -18,12 +18,13 @@ use crate::varint::{self, VarInt};
 /// 将来のドラフトで変更される可能性がある
 pub const MAX_STREAMS_LIMIT: u64 = 1u64 << 60;
 
-/// H3_DATAGRAM_ERROR エラーコード (RFC 9297 Section 5.2)
+/// WT_CLOSE_SESSION の Application Error Message の最大長 (バイト)
 ///
-/// HTTP/3 datagram / capsule プロトコルのパースエラーを示す接続レベルエラー。
-/// WT_MAX_STREAMS の値が 2^60 を超えた場合に使用する。
-/// (draft-ietf-webtrans-http3-15 Section 5.6.2)
-pub const H3_DATAGRAM_ERROR: u64 = 0x33;
+/// `encode` はこの長さを超えるメッセージを UTF-8 文字境界で切り詰める。
+/// `decode` はこの長さを超えるメッセージを malformed として拒否する。
+/// draft-ietf-webtrans-http3-16 Section 6
+/// 将来のドラフトで変更される可能性がある
+pub(crate) const MAX_CLOSE_SESSION_MESSAGE_LEN: usize = 1024;
 
 /// Capsule デコードエラー
 ///
@@ -119,7 +120,11 @@ pub enum Capsule {
     CloseSession {
         /// アプリケーションエラーコード (32-bit)
         error_code: u32,
-        /// エラーメッセージ (UTF-8, 最大 1024 バイト)
+        /// エラーメッセージ (UTF-8)
+        ///
+        /// 1024 バイトを超える場合、[`Capsule::encode`] は UTF-8 文字境界で
+        /// 切り詰めてからエンコードする
+        /// (draft-ietf-webtrans-http3-16 Section 6)。
         message: String,
     },
 
@@ -184,6 +189,28 @@ fn decode_varint(buf: &[u8]) -> Option<(u64, usize)> {
     varint::decode(buf).ok().map(|(v, n)| (v.get(), n))
 }
 
+/// WT_CLOSE_SESSION の Application Error Message を 1024 バイト以下に切り詰める
+///
+/// 送信側がアプリケーション由来のメッセージを切り詰める場合は
+/// UTF-8 文字境界で行わなければならない。
+/// (draft-ietf-webtrans-http3-16 Section 6)
+/// 将来のドラフトで変更される可能性がある
+///
+/// 受信側 (`decode_payload`) は 1024 バイト超のメッセージを malformed として
+/// 拒否するため、送信側でこの上限を守ることで全送信経路が
+/// デコード可能なカプセルを生成することを保証する。
+fn truncate_close_session_message(message: &str) -> &[u8] {
+    if message.len() <= MAX_CLOSE_SESSION_MESSAGE_LEN {
+        return message.as_bytes();
+    }
+    let mut end = MAX_CLOSE_SESSION_MESSAGE_LEN;
+    // UTF-8 の 1 文字は最大 4 バイトなので、境界合わせは最大 3 回で終わる
+    while end > 0 && !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    &message.as_bytes()[..end]
+}
+
 impl Capsule {
     /// Capsule タイプが HTTP/3 で禁止されるかどうか
     ///
@@ -206,6 +233,8 @@ impl Capsule {
     ///
     /// 1 カプセル = 1 DATA フレームとして buf に追記する。
     /// CONNECT ストリーム上での WebTransport カプセル送信に使用する。
+    /// 内部で [`Capsule::encode`] を呼ぶため、WT_CLOSE_SESSION の
+    /// メッセージ長切り詰めも本メソッド経由で適用される。
     pub fn encode_as_data_frame(&self, buf: &mut Vec<u8>) {
         let mut capsule_bytes = Vec::new();
         self.encode(&mut capsule_bytes);
@@ -216,19 +245,25 @@ impl Capsule {
     }
 
     /// Capsule をエンコード
+    ///
+    /// WT_CLOSE_SESSION の Application Error Message は 1024 バイトを超えない。
+    /// `message` が 1024 バイトを超える場合は UTF-8 文字境界で切り詰める。
+    /// (draft-ietf-webtrans-http3-16 Section 6)
+    /// 将来のドラフトで変更される可能性がある
     pub fn encode(&self, buf: &mut Vec<u8>) {
         match self {
             Self::CloseSession {
                 error_code,
                 message,
             } => {
+                let message_bytes = truncate_close_session_message(message);
                 Self::encode_capsule_header(
                     buf,
                     CapsuleType::CloseSession as u64,
-                    4 + message.len(),
+                    4 + message_bytes.len(),
                 );
                 buf.extend_from_slice(&error_code.to_be_bytes());
-                buf.extend_from_slice(message.as_bytes());
+                buf.extend_from_slice(message_bytes);
             }
 
             Self::DrainSession => {
@@ -304,13 +339,13 @@ impl Capsule {
     pub fn decode(buf: &[u8]) -> Result<Option<(Self, usize)>, CapsuleDecodeError> {
         let mut offset = 0;
 
-        // Capsule Type
+        // Capsule タイプ
         let Some((capsule_type, len)) = decode_varint(&buf[offset..]) else {
             return Ok(None);
         };
         offset += len;
 
-        // Length
+        // ペイロード長
         let Some((length, len)) = decode_varint(&buf[offset..]) else {
             return Ok(None);
         };
@@ -352,7 +387,7 @@ impl Capsule {
                 let message_bytes = &payload[4..];
                 // メッセージ長は 1024 バイトを超えてはならない
                 // (draft-ietf-webtrans-http3-15 Section 6)
-                if message_bytes.len() > 1024 {
+                if message_bytes.len() > MAX_CLOSE_SESSION_MESSAGE_LEN {
                     return Err(CapsuleDecodeError::Malformed);
                 }
                 let message = String::from_utf8(message_bytes.to_vec())
@@ -622,5 +657,188 @@ mod tests {
             payload: vec![],
         };
         assert!(c.is_prohibited_in_http3());
+    }
+
+    // ---------------------------------------------------------------
+    // WT_CLOSE_SESSION の Application Error Message 長
+    // (draft-ietf-webtrans-http3-16 Section 6)
+    // ---------------------------------------------------------------
+
+    /// エンコード済みバイト列がちょうど 1 カプセルであることを確認してデコードする
+    fn decode_single_capsule(buf: &[u8]) -> Capsule {
+        let (capsule, consumed) = Capsule::decode(buf)
+            .expect("テスト用のカプセルデコードに成功すること")
+            .expect("テスト用のカプセルが 1 つ分揃っていること");
+        assert_eq!(
+            consumed,
+            buf.len(),
+            "エンコード結果はちょうど 1 カプセルであること"
+        );
+        capsule
+    }
+
+    /// CloseSession カプセルをデコードして (エラーコード, メッセージ) を取り出す
+    fn decode_close_session(buf: &[u8]) -> (u32, String) {
+        match decode_single_capsule(buf) {
+            Capsule::CloseSession {
+                error_code,
+                message,
+            } => (error_code, message),
+            other => panic!("CloseSession にデコードされること: {other:?}"),
+        }
+    }
+
+    /// 任意のメッセージバイト列を持つ WT_CLOSE_SESSION カプセルを組み立てる
+    fn build_close_session_capsule(error_code: u32, message_bytes: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        encode_varint(&mut buf, CapsuleType::CloseSession as u64);
+        encode_varint(&mut buf, (4 + message_bytes.len()) as u64);
+        buf.extend_from_slice(&error_code.to_be_bytes());
+        buf.extend_from_slice(message_bytes);
+        buf
+    }
+
+    #[test]
+    fn test_encode_close_session_message_1023_and_1024_bytes() {
+        // 1023 / 1024 バイトは上限以内なので切り詰められない
+        for len in [1023usize, 1024] {
+            let message = "a".repeat(len);
+            let capsule = Capsule::CloseSession {
+                error_code: 7,
+                message: message.clone(),
+            };
+            let mut buf = Vec::new();
+            capsule.encode(&mut buf);
+            let (error_code, decoded) = decode_close_session(&buf);
+            assert_eq!(error_code, 7);
+            assert_eq!(
+                decoded, message,
+                "{len} バイトのメッセージは切り詰められないこと"
+            );
+            assert_eq!(decoded.len(), len);
+        }
+    }
+
+    #[test]
+    fn test_encode_close_session_message_1025_bytes() {
+        // 1025 バイトは 1024 バイトに切り詰められる
+        let message = "a".repeat(1025);
+        let capsule = Capsule::CloseSession {
+            error_code: 9,
+            message,
+        };
+        let mut buf = Vec::new();
+        capsule.encode(&mut buf);
+        let (error_code, decoded) = decode_close_session(&buf);
+        assert_eq!(error_code, 9);
+        assert_eq!(decoded.len(), 1024, "切り詰め後のメッセージは 1024 バイト");
+        assert_eq!(decoded, "a".repeat(1024));
+    }
+
+    #[test]
+    fn test_encode_close_session_message_empty() {
+        // 空文字列はそのままエンコードされる
+        let capsule = Capsule::CloseSession {
+            error_code: 0,
+            message: String::new(),
+        };
+        let mut buf = Vec::new();
+        capsule.encode(&mut buf);
+        let (error_code, decoded) = decode_close_session(&buf);
+        assert_eq!(error_code, 0);
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn test_encode_close_session_message_truncates_at_utf8_boundary() {
+        // 1024 境界をまたぐマルチバイト文字は、文字全体を捨てて
+        // UTF-8 文字境界で切り詰められる (2 / 3 / 4 バイト文字を網羅する)
+        for (ch, char_len) in [('é', 2usize), ('あ', 3), ('😀', 4)] {
+            for offset in 0..char_len {
+                // base バイトの ASCII の直後にマルチバイト文字を置く。
+                // offset = 0 のとき全長はちょうど 1024 バイトになる。
+                let base = 1024 - char_len + offset;
+                let message = format!("{}{}", "a".repeat(base), ch);
+                let capsule = Capsule::CloseSession {
+                    error_code: 1,
+                    message: message.clone(),
+                };
+                let mut buf = Vec::new();
+                capsule.encode(&mut buf);
+                let (_, decoded) = decode_close_session(&buf);
+
+                if offset == 0 {
+                    // 境界ちょうどに収まる場合は切り詰められない
+                    assert_eq!(
+                        decoded, message,
+                        "全長 1024 バイトのメッセージは切り詰められないこと"
+                    );
+                } else {
+                    // 文字の途中で切らず、文字全体を捨てる
+                    assert_eq!(
+                        decoded,
+                        "a".repeat(base),
+                        "マルチバイト文字 ({char_len} バイト, offset {offset}) は文字境界で切り詰められること"
+                    );
+                }
+                assert!(
+                    decoded.len() <= MAX_CLOSE_SESSION_MESSAGE_LEN,
+                    "切り詰め結果は 1024 バイト以下であること"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_encode_as_data_frame_truncates_close_session_message() {
+        // encode_as_data_frame は encode 経由なので、DATA フレーム経路でも
+        // 1024 バイト上限が適用される
+        let capsule = Capsule::CloseSession {
+            error_code: 3,
+            message: "あ".repeat(500), // 1500 バイト
+        };
+        let mut buf = Vec::new();
+        capsule.encode_as_data_frame(&mut buf);
+
+        // DATA フレーム: タイプ (0x00) + ペイロード長 + ペイロード
+        let (frame_type, type_len) =
+            decode_varint(&buf).expect("DATA フレームタイプをデコードできること");
+        assert_eq!(frame_type, 0, "DATA フレームのタイプは 0x00");
+        let (frame_len, len_len) =
+            decode_varint(&buf[type_len..]).expect("DATA フレーム長をデコードできること");
+        let payload_start = type_len + len_len;
+        assert_eq!(
+            payload_start + frame_len as usize,
+            buf.len(),
+            "DATA フレーム長はペイロード全体と一致すること"
+        );
+
+        let (error_code, decoded) = decode_close_session(&buf[payload_start..]);
+        assert_eq!(error_code, 3);
+        assert_eq!(
+            decoded.len(),
+            1023,
+            "3 バイト文字 'あ' は 1024 バイトを超えない 341 文字に切り詰められること"
+        );
+        assert_eq!(decoded, "あ".repeat(341), "342 文字目以降の 'あ' は捨てる");
+    }
+
+    #[test]
+    fn test_decode_close_session_message_over_1024_bytes_is_malformed() {
+        // decode 側は 1024 バイト超のメッセージを malformed として拒否する
+        // (変更しない既存挙動の確認)
+        let over = build_close_session_capsule(0, &vec![b'a'; 1025]);
+        assert_eq!(
+            Capsule::decode(&over),
+            Err(CapsuleDecodeError::Malformed),
+            "1025 バイトのメッセージは malformed"
+        );
+
+        let at_limit = build_close_session_capsule(0, &vec![b'a'; 1024]);
+        let (capsule, consumed) = Capsule::decode(&at_limit)
+            .expect("テスト用のカプセルデコードに成功すること")
+            .expect("テスト用のカプセルが 1 つ分揃っていること");
+        assert_eq!(consumed, at_limit.len());
+        assert!(matches!(capsule, Capsule::CloseSession { .. }));
     }
 }

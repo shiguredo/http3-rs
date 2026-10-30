@@ -72,6 +72,12 @@ impl Connection {
     }
 
     /// デコードされた Capsule を処理してイベントに変換する
+    ///
+    /// フロー制御カプセル (WT_MAX_STREAMS / WT_MAX_DATA / WT_STREAMS_BLOCKED /
+    /// WT_DATA_BLOCKED) は値域・単調性を検証せず `WebTransportEvent::Capsule` として
+    /// 上位層へ転送する。検証はアプリケーション側の
+    /// `webtransport::Session::process_capsule` の責務である
+    /// (draft-ietf-webtrans-http3-16 Section 5.6)。
     pub(crate) fn handle_wt_capsule(
         &mut self,
         session_id: u64,
@@ -116,6 +122,18 @@ impl Connection {
             | Capsule::DataBlocked { .. }
             | Capsule::StreamsBlocked { .. } => {
                 // フロー制御カプセル: セッションのフロー制御有効性を確認
+                //
+                // Connection 層はここで値域・単調性の検証を行わない。
+                // 送信側の上限 (ピアが SETTINGS_WT_INITIAL_MAX_* で宣言した初期値と、
+                // 受信済み WT_MAX_STREAMS / WT_MAX_DATA の増加) を管理するのは
+                // アプリケーション側の `webtransport::Session` の責務であり、
+                // ここで重複実装すると状態が二重管理になる。
+                //
+                // 受信したカプセルは `WebTransportEvent::Capsule` で上位層へ転送し、
+                // 上位層は `webtransport::Session::process_capsule` に渡すこと。
+                // 単調性違反は WT_FLOW_CONTROL_ERROR による「セッション」エラーであり、
+                // 接続エラーではないため、接続を閉じる判断は Connection 層では行わない。
+                // (draft-ietf-webtrans-http3-16 Section 5.6)
                 let fc_enabled = self
                     .wt_sessions
                     .get(&session_id)
