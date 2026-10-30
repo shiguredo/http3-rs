@@ -182,6 +182,15 @@ session.initialize_local_limits(FlowControlLimits {
     max_data: 1_000_000,
 });
 
+// ピアの SETTINGS から得た送信側フロー制御リミットを初期化する
+// (セッション確立前に 1 回だけ呼ぶ。以後の WT_MAX_STREAMS / WT_MAX_DATA の
+//  単調性検証の基準にもなる)
+session.initialize_remote_limits(FlowControlLimits {
+    max_streams_uni: 10,
+    max_streams_bidi: 10,
+    max_data: 1_000_000,
+});
+
 // ストリームを追加
 let stream = Stream::new(4, 0, true); // stream_id, session_id, bidirectional
 session.add_stream(stream);
@@ -300,6 +309,10 @@ assert_eq!(session.state(), SessionState::Draining);
 - Huffman エンコーディング
 - 整数エンコーディング (プレフィックス付き)
 
+`Connection` が送信に使う QPACK エンコーダーは静的テーブルのみを使用し、動的テーブルへの
+挿入は行いません。動的テーブルは受信側 (`Decoder` / `DynamicDecoder`) および公開 API
+(`DynamicEncoder`) で利用できます。
+
 ### エンコーダーストリーム命令
 
 - Set Dynamic Table Capacity
@@ -362,6 +375,8 @@ SETTINGS コードポイントが同一のため、draft-15 と draft-16 は SET
 
 draft-02 / draft-07 ではセッションレベルフロー制御が存在しないため、同時セッションは原則 1 つに制限されます。draft-14 以降ではカプセルベースのフロー制御 (`WT_MAX_DATA`, `WT_MAX_STREAMS`, `WT_DATA_BLOCKED`, `WT_STREAMS_BLOCKED`) によって複数セッションを扱えます。
 
+sans-I/O 層では、ピアの SETTINGS 受信後・セッション確立前に `webtransport::Session::initialize_remote_limits` を 1 回呼ぶことで、ピアが宣言した初期上限 (`SETTINGS_WT_INITIAL_MAX_*`) を送信側フロー制御と `WT_MAX_STREAMS` / `WT_MAX_DATA` の単調性検証の基準に反映できます。
+
 ### draft-15 と draft-16 の差分
 
 SETTINGS コードポイントと `:protocol` は同一です。draft-16 で変わった検証とエラー処理は次のとおりです。
@@ -375,6 +390,8 @@ SETTINGS コードポイントと `:protocol` は同一です。draft-16 で変�
 | 非対応リソースへの応答 | 404 を推奨 | 405 を推奨 |
 | 0-RTT 再開時のフロー制御値減少 | サーバー側の制約 | クライアントも `H3_SETTINGS_ERROR` で接続を閉じる |
 | 楽観的カプセル送信 | 規定なし | クライアントは 2xx 受信前にカプセルを送ってよい。サーバーは 2xx 送信まで処理しない |
+
+本実装は draft-16 の検証ロジックを draft-15 以降に適用するため、draft-15 の仕様上のコードである `H3_DATAGRAM_ERROR` は使用せず、`WT_MAX_STREAMS > 2^60` も `WT_FLOW_CONTROL_ERROR` (セッションエラー) として扱います。
 
 ### CONNECT リクエスト/レスポンス
 

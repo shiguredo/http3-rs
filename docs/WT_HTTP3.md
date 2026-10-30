@@ -30,7 +30,11 @@
 | 優先度制御 | なし | なし | RFC 9218 推奨 | RFC 9218 推奨 | RFC 9218 推奨 |
 | `SETTINGS_WT_ENABLED` の値 | — | — | — | 値 > 0 | 値は 1 (`> 1` は `H3_SETTINGS_ERROR`) |
 | フロー制御カプセルの単調性 | — | — | 前回より小さい値はエラー | 前回より小さい値はエラー | 増加しない値 (同値含む) はエラー |
-| `WT_MAX_STREAMS` > 2^60 | — | — | セッションエラー | `H3_DATAGRAM_ERROR` | `WT_FLOW_CONTROL_ERROR` |
+| `WT_MAX_STREAMS` > 2^60 | — | — | セッションエラー | `H3_DATAGRAM_ERROR` (接続エラー) | `WT_FLOW_CONTROL_ERROR` (セッションエラー) |
+
+> 本実装は draft-16 の検証ロジックを draft-15 以降に適用する (`DraftVersion::Draft15`)。
+> そのため仕様上の差分である draft-15 の `H3_DATAGRAM_ERROR` は使用せず、
+> draft-15 / draft-16 のどちらでも `WT_FLOW_CONTROL_ERROR` を返す (Section 11 参照)。
 
 ---
 
@@ -140,7 +144,7 @@
 - HTTP/3 エラーコード範囲: `0x52e4a40fa8db` - `0x52e5ac983162`
 - マッピング時 `0x1f * N + 0x21` 形式の GREASE コードポイントをスキップ
 
-**draft-15 のみ**:
+**draft-14 以降**:
 - `RESET_STREAM_AT` フレームの使用が必須
 - ストリームヘッダー (Session ID 等) の確実な配信のため、Reliable Size をストリームヘッダーサイズ以上に設定する
 - 範囲外のエラーコードを受信した場合、ストリームはリセットされるがアプリケーションエラーコードなしとして扱う
@@ -205,8 +209,8 @@ draft-14 で追加されたセッションレベルフロー制御のための�
 | `WT_STREAMS_BLOCKED` (bidi) | `0x190B4D43` | 双方向ストリームのブロック通知 |
 | `WT_STREAMS_BLOCKED` (uni) | `0x190B4D44` | 単方向ストリームのブロック通知 |
 
-- 前回の値より小さい値の `WT_MAX_STREAMS` / `WT_MAX_DATA` を受信した場合は `WT_FLOW_CONTROL_ERROR` (draft-16 では増加しない値、同値を含む)
-- `WT_MAX_STREAMS` の Maximum Streams が 2^60 を超えた場合、draft-15 では `H3_DATAGRAM_ERROR`、draft-16 では `WT_FLOW_CONTROL_ERROR`
+- 前回の値より小さい値の `WT_MAX_STREAMS` / `WT_MAX_DATA` を受信した場合は `WT_FLOW_CONTROL_ERROR` (draft-16 では増加しない値、同値を含む)。本実装は draft を問わず draft-16 の「増加しない値」判定を適用する
+- `WT_MAX_STREAMS` の Maximum Streams が 2^60 を超えた場合、draft-15 では `H3_DATAGRAM_ERROR`、draft-16 では `WT_FLOW_CONTROL_ERROR`。本実装は draft-15 以降で draft-16 の検証ロジックを適用するため、どちらでも `WT_FLOW_CONTROL_ERROR` (セッションエラー) とする
 - 全フロー制御カプセルは hop-by-hop (中継者が消費して自身の信号を生成)
 
 ### 4.4 禁止カプセル (draft-14 以降)
@@ -269,7 +273,7 @@ HTTP/3 版では QUIC ネイティブのストリームレベルフロー制御�
 | `H3_MESSAGE_ERROR` | セッション終了カプセル後の追加データ受信 | 全 draft |
 | `H3_SETTINGS_ERROR` | SETTINGS 値の不正 / 0-RTT でのフロー制御値減少 | 全 draft |
 | `H3_REQUEST_REJECTED` / `HTTP_REQUEST_REJECTED` | セッション数超過時のリクエスト拒否 | 全 draft |
-| `H3_DATAGRAM_ERROR` | `WT_MAX_STREAMS` の値超過 | draft-15 のみ (draft-16 では `WT_FLOW_CONTROL_ERROR`) |
+| `H3_DATAGRAM_ERROR` | `WT_MAX_STREAMS` の値超過 | draft-15 の仕様上のコード。本実装は draft-15 以降に draft-16 の検証ロジックを適用するため `WT_FLOW_CONTROL_ERROR` を返す |
 | `H3_EXCESSIVE_LOAD` | 不審な使用パターン | draft-14 以降 |
 
 ---
@@ -280,7 +284,10 @@ draft-14 以降ではセッションレベルのフロー制御が追加され�
 
 ### 7.1 有効化条件
 
-- 両エンドポイントが `SETTINGS_WT_INITIAL_MAX_STREAMS_UNI`, `SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI`, `SETTINGS_WT_INITIAL_MAX_DATA` のうち少なくとも1つを非ゼロ値で送信した場合に有効
+**draft-14 以降**:
+
+- 両エンドポイントが `SETTINGS_WT_INITIAL_MAX_STREAMS_UNI`, `SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI`, `SETTINGS_WT_INITIAL_MAX_DATA` のうち少なくとも1つを非ゼロ値で送信した場合に有効 (draft-15 / draft-16 §5.1)
+- draft-15 / draft-16 の端点は `SETTINGS_WT_ENABLED` を送信するため、互換のために `SETTINGS_WT_MAX_SESSIONS` (`0x14e9cd29`) を併送してもフロー制御の宣言とはみなさない。`SETTINGS_WT_ENABLED` を送らない draft-14 以前の端点では、draft-14 §5.1 の `SETTINGS_WT_MAX_SESSIONS > 1` も宣言条件に含む
 - フロー制御が無効の場合、同時セッションは 1 つに制限される
 
 ### 7.2 制御の種類
@@ -290,6 +297,19 @@ draft-14 以降ではセッションレベルのフロー制御が追加され�
 | 単方向ストリーム数 | `SETTINGS_WT_INITIAL_MAX_STREAMS_UNI` | `WT_MAX_STREAMS` (uni) | `WT_STREAMS_BLOCKED` (uni) |
 | 双方向ストリーム数 | `SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI` | `WT_MAX_STREAMS` (bidi) | `WT_STREAMS_BLOCKED` (bidi) |
 | データ量 | `SETTINGS_WT_INITIAL_MAX_DATA` | `WT_MAX_DATA` | `WT_DATA_BLOCKED` |
+
+**実装での扱い**:
+
+- sans-I/O 層では、ピアの `SETTINGS` 受信後・セッション確立前に
+  `webtransport::Session::initialize_remote_limits(FlowControlLimits)` を 1 回呼ぶ。
+  この値が送信側の上限 (`can_create_*` / `can_send_data` / `try_open_stream` /
+  `try_send_data`) と、`WT_MAX_STREAMS` / `WT_MAX_DATA` の単調性検証の基準になる
+  (draft-ietf-webtrans-http3-16 §5.5, §5.6.2, §5.6.4)
+- `Connection` はフロー制御カプセルを `WebTransportEvent::Capsule` として上位層へ
+  転送するだけで、値域・単調性の検証は行わない。上位層が
+  `webtransport::Session::process_capsule` に渡すこと
+- 単調性違反は `WT_FLOW_CONTROL_ERROR` によるセッションエラーであり、接続エラーでは
+  ないため、`Connection` は接続を閉じない
 
 ### 7.3 ストリームレベルフロー制御
 
@@ -307,6 +327,12 @@ draft-14 以降ではセッションレベルのフロー制御が追加され�
 `reset_stream_at` トランスポートパラメータが前提条件に追加された。ストリームリセット時にストリームヘッダー (Session ID) の確実な配信を保証するため、Reliable Size をヘッダーサイズ以上に設定する必要がある。
 
 参照: `draft-ietf-quic-reliable-stream-reset-07`
+
+**実装での扱い**:
+
+- `shiguredo_http3` は RESET_STREAM_AT の Reliable Size を決めるための WT ストリームのヘッダー長を上位層へ提供する (`Connection::wt_stream_header_len`)。RESET_STREAM_AT フレームの送出自体は QUIC 層 (統合層) の責務である。
+- QUIC 層が RESET_STREAM_AT を公開していない場合、統合層は通常の RESET_STREAM を使うしかなく、この MUST を満たせない。接続自体は維持し、既知の制限として扱う。
+- `examples/wt_server` が使う s2n-quic 1.86 は RESET_STREAM_AT の送出 API も、ピアの `reset_stream_at` トランスポートパラメータを取得する API も公開していない。そのため `examples/wt_server` は `reset_stream_at` 非対応 (`false` 固定) で動作する。`shiguredo_http3` は、ネゴシエートした draft が `reset_stream_at` を要求する場合に CONNECT を `H3_MESSAGE_ERROR` で拒否するため (`src/connection/wt_session.rs` の `validate_wt_connect_request_server`)、`examples/wt_server` に接続できるのは `reset_stream_at` を要求しない draft-02 / draft-07 クライアントに限られる。draft-14 / 15 / 16 クライアントとの接続は、s2n-quic が両 API を公開して `reset_stream_at` 対応へ切り替えるまで行えない。
 
 ### 8.2 TLS キーイングマテリアルエクスポーター
 
@@ -410,9 +436,9 @@ nghttp3 (ngtcp2) は RFC に準拠し、クライアント側では `enable_conn
 
 ## 11. draft-16 固有の変更
 
-SETTINGS コードポイントと `:protocol` は draft-15 と同一である。本実装は draft-16 の検証ロジックを draft-15 以降に適用する (`DraftVersion::Draft15`)。
+SETTINGS コードポイントと `:protocol` は draft-15 と draft-16 で同一である。本実装は draft-16 の検証ロジックを draft-15 以降に適用する (`DraftVersion::Draft15`)。そのため、下表の draft-15 列のうち実装が採用しないもの (draft-15 の `H3_DATAGRAM_ERROR` など) は、draft-16 列の挙動になる。
 
-| 項目 | draft-15 | draft-16 |
+| 項目 | draft-15 | draft-16 (本実装が draft-15 以降に適用) |
 |------|----------|----------|
 | `SETTINGS_WT_ENABLED` | 値 > 0 | 値は 1。クライアントは > 1 を `H3_SETTINGS_ERROR` として扱う |
 | `WT_MAX_DATA` / `WT_MAX_STREAMS` の単調性 | 前回より小さい値はエラー | 増加しない値 (同値を含む) は `WT_FLOW_CONTROL_ERROR` |
