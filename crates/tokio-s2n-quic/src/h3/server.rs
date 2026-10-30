@@ -43,13 +43,9 @@ impl H3Server {
             ));
         }
 
-        let server = s2n_quic::Server::builder()
-            .with_tls((config.cert_pem.as_str(), config.key_pem.as_str()))
-            .map_err(crate::Error::transport)?
-            .with_io(config.listen_addr)
-            .map_err(crate::Error::transport)?
-            .start()
-            .map_err(crate::Error::transport)?;
+        // TLS プロバイダ (ALPN / 証明書 / 秘密鍵) と limits (アイドルタイムアウト /
+        // ピアのリモートストリーム上限) は ServerConfig::build_server が配線する
+        let server = config.build_server()?;
 
         let local_addr = server
             .local_addr()
@@ -258,7 +254,7 @@ impl H3ServerConnection {
         // リクエストデータを受信して Sans I/O に feed する
         //
         // QPACK エンコーダーストリームの更新が uni タスク側で後追いに到着してブロック解除される
-        // 場合に備え、`recv_stream.receive()` / `self.qpack_unblock_notify.notified()` / 10ms タイマーを
+        // 場合に備え、`recv_stream.receive()` / `self.qpack_unblock_notify.notified()` を
         // `tokio::select!` で待つ。ループ先頭の `drain_events` で QPACK ブロック解除で
         // 生成されたイベント (ヘッダー・ボディ・StreamEnd 等) を毎回取り出す
         // (RFC 9204 Section 2.2.1: Required Insert Count が Insert Count 以下になった時点で解除)。
@@ -379,13 +375,11 @@ impl H3ServerConnection {
                 _ = self.qpack_unblock_notify.notified() => {
                     // uni タスクがエンコーダーストリーム更新を feed した。
                     // ループ先頭の drain_events で処理する。
+                    //
+                    // `Notify` は permit を最大 1 つ保持するため、待機登録前の
+                    // notify_one() も取りこぼさない。起床のたびに drain_events で
+                    // 全イベントを取り出すため、タイマーによるフォールバックは不要。
                 }
-                // 10ms のフォールバックポーリング。`Notify` は permit を最大 1 つしか保持しないため
-                // 複数回の notify_one() は 1 permit に潰れるが、本ループは起床のたびに
-                // `drain_events` で全イベントを取り出すため取りこぼしにはならない。このタイマーは
-                // uni タスクの停止・フィード遅延など Notify が発火しない想定外経路で drain_events が
-                // 回らない状況を検知するためのフォールバック。
-                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
             }
         }
 

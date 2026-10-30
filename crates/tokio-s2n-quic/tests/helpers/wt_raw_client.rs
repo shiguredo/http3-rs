@@ -49,7 +49,19 @@ pub struct RawWtClient {
 impl RawWtClient {
     /// 接続して WebTransport の CONNECT リクエストを送る
     pub async fn connect(server_addr: SocketAddr, ca_cert_pem: &str) -> Self {
-        Self::connect_inner(server_addr, ca_cert_pem, None).await
+        Self::connect_with_wt_settings(server_addr, ca_cert_pem, build_wt_settings()).await
+    }
+
+    /// 指定した WebTransport SETTINGS で接続して CONNECT リクエストを送る
+    ///
+    /// クライアントが広告する WT 初期上限を差し替えたいテスト
+    /// (サーバー側の送信側フロー制御の検証等) で使用する。
+    pub async fn connect_with_wt_settings(
+        server_addr: SocketAddr,
+        ca_cert_pem: &str,
+        wt_settings: webtransport::Settings,
+    ) -> Self {
+        Self::connect_inner(server_addr, ca_cert_pem, None, wt_settings).await
     }
 
     /// 接続して CONNECT リクエストを送り、2xx レスポンス受信前に
@@ -62,13 +74,20 @@ impl RawWtClient {
         ca_cert_pem: &str,
         optimistic_payload: &[u8],
     ) -> Self {
-        Self::connect_inner(server_addr, ca_cert_pem, Some(optimistic_payload)).await
+        Self::connect_inner(
+            server_addr,
+            ca_cert_pem,
+            Some(optimistic_payload),
+            build_wt_settings(),
+        )
+        .await
     }
 
     async fn connect_inner(
         server_addr: SocketAddr,
         ca_cert_pem: &str,
         optimistic_payload: Option<&[u8]>,
+        wt_settings: webtransport::Settings,
     ) -> Self {
         let client = s2n_quic::Client::builder()
             .with_tls(ca_cert_pem)
@@ -97,7 +116,7 @@ impl RawWtClient {
 
         let settings = Settings::from_limits(&Limits::default())
             .expect("Limits::default() は VarInt 範囲内")
-            .enable_webtransport_client(build_wt_settings());
+            .enable_webtransport_client(wt_settings);
         let h3 = Arc::new(Mutex::new(ClientConnection::new(settings)));
         let init = h3
             .lock()

@@ -39,30 +39,9 @@ pub struct H3Client {
 impl H3Client {
     /// サーバーに接続する
     pub async fn connect(config: ClientConfig) -> crate::Result<Self> {
-        let client = if config.disable_cert_validation {
-            let tls = s2n_quic::provider::tls::default::Client::builder()
-                .build()
-                .map_err(crate::Error::transport)?;
-            s2n_quic::Client::builder()
-                .with_tls(tls)
-                .map_err(crate::Error::transport)?
-                .with_io("0.0.0.0:0")
-                .map_err(crate::Error::transport)?
-                .start()
-                .map_err(crate::Error::transport)?
-        } else if let Some(ref ca_pem) = config.ca_cert_pem {
-            s2n_quic::Client::builder()
-                .with_tls(ca_pem.as_str())
-                .map_err(crate::Error::transport)?
-                .with_io("0.0.0.0:0")
-                .map_err(crate::Error::transport)?
-                .start()
-                .map_err(crate::Error::transport)?
-        } else {
-            return Err(crate::Error::InvalidState(
-                "ca_cert_pem or disable_cert_validation is required".to_string(),
-            ));
-        };
+        // TLS プロバイダ (証明書検証 / ALPN) と limits (アイドルタイムアウト) は
+        // ClientConfig::build_client が配線する
+        let client = config.build_client()?;
 
         let connect = Connect::new(config.remote_addr).with_server_name(&*config.server_name);
         let mut connection = client.connect(connect).await?;
@@ -242,7 +221,7 @@ impl H3Client {
         // レスポンス受信
         //
         // QPACK エンコーダーストリームの更新が uni タスク側で後追いに到着してブロック解除される
-        // 場合に備え、`recv_stream.receive()` / `self.qpack_unblock_notify.notified()` / 10ms タイマーを
+        // 場合に備え、`recv_stream.receive()` / `self.qpack_unblock_notify.notified()` を
         // `tokio::select!` で待つ。ループ先頭の `drain_events` で QPACK ブロック解除で
         // 生成されたイベント (ヘッダー・ボディ・StreamEnd 等) を毎回取り出す
         // (RFC 9204 Section 2.2.1: Required Insert Count が Insert Count 以下になった時点で解除)。
@@ -333,13 +312,11 @@ impl H3Client {
                 _ = self.qpack_unblock_notify.notified() => {
                     // uni タスクがエンコーダーストリーム更新を feed した。
                     // ループ先頭の drain_events で処理する。
+                    //
+                    // `Notify` は permit を最大 1 つ保持するため、待機登録前の
+                    // notify_one() も取りこぼさない。起床のたびに drain_events で
+                    // 全イベントを取り出すため、タイマーによるフォールバックは不要。
                 }
-                // 10ms のフォールバックポーリング。`Notify` は permit を最大 1 つしか保持しないため
-                // 複数回の notify_one() は 1 permit に潰れるが、本ループは起床のたびに
-                // `drain_events` で全イベントを取り出すため取りこぼしにはならない。このタイマーは
-                // uni タスクの停止・フィード遅延など Notify が発火しない想定外経路で drain_events が
-                // 回らない状況を検知するためのフォールバック。
-                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
             }
         }
 

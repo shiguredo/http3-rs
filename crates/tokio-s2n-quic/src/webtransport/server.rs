@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use bytes::Bytes;
 use s2n_quic::connection::BidirectionalStreamAcceptor;
+use shiguredo_http3::webtransport::Capsule;
 use shiguredo_http3::webtransport::error::ErrorCode as WtErrorCode;
 use shiguredo_http3::webtransport::{ConnectError, ConnectRequest, ConnectResponse};
 use shiguredo_http3::{Event, WebTransportEvent};
@@ -12,9 +13,12 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use super::flow_control::{WtSendFlowControl, peer_wt_send_limits};
 use super::session::{
-    ConnectCommand, WtRecvStream, WtSession, is_forwardable_wt_event, run_connect_send_task,
-    synthesized_session_closed,
+    ConnectCommand, SharedSendFlowControl, UniStreamHeader, WtRecvStream, WtSession,
+    apply_flow_control_capsule, classify_uni_stream_header, close_connection_with_id_error,
+    flow_control_error_session_closed, is_forwardable_wt_event, run_connect_send_task,
+    synthesized_session_closed, terminate_with_flow_control_error,
 };
 use crate::config::ServerConfig;
 use crate::internal::classify_uni_recv;
@@ -31,13 +35,9 @@ pub struct WtServer {
 impl WtServer {
     /// サーバーをバインドする
     pub fn bind(config: ServerConfig) -> crate::Result<Self> {
-        let server = s2n_quic::Server::builder()
-            .with_tls((config.cert_pem.as_str(), config.key_pem.as_str()))
-            .map_err(crate::Error::transport)?
-            .with_io(config.listen_addr)
-            .map_err(crate::Error::transport)?
-            .start()
-            .map_err(crate::Error::transport)?;
+        // TLS プロバイダ (ALPN / 証明書 / 秘密鍵) と limits (アイドルタイムアウト /
+        // ピアのリモートストリーム上限) は ServerConfig::build_server が配線する
+        let server = config.build_server()?;
 
         let local_addr = server
             .local_addr()
@@ -130,7 +130,16 @@ impl WtSessionRequest {
             let mut s = state.lock().expect("mutex should not be poisoned");
             let data =
                 s.init_h3_streams(control_stream_id, encoder_stream_id, decoder_stream_id)?;
-            // s2n-quic は DATAGRAM (RFC 9221) と RESET_STREAM_AT をサポートする
+            // s2n-quic 1.86 は HTTP/3 DATAGRAM (RFC 9221) をサポートするため
+            // 第 1 引数 (max_datagram_frame_size_nonzero) は true。
+            //
+            // 第 2 引数は RESET_STREAM_AT のサポート可否。s2n-quic 1.86 は
+            // RESET_STREAM_AT の API を公開しておらず (transport parameter も
+            // フレームも未実装)、実際には使用できない。ただし sans-I/O 層は
+            // draft-14/15 のピアに対して reset_stream_at のサポートを WebTransport
+            // セッション確立の必須条件とするため、ここでは true を渡している
+            // (draft-ietf-webtrans-http3-16 Section 3.1)。
+            // s2n-quic が RESET_STREAM_AT を実装するまでの既知の限界。
             s.h3_conn.set_webtransport_transport_verified(true, true)?;
             data
         };
@@ -165,31 +174,41 @@ impl WtSessionRequest {
 
         // QPACK エンコーダーストリームの更新でブロック解除を通知する
         let unblock_notify = Arc::new(Notify::new());
+        // 単方向ストリーム受信タスクの終了 (= 接続クローズ) を通知する
+        //
+        // peer SETTINGS 待ちが無限に待ち続けないよう、受信タスクの終了を待機側へ伝える。
+        let uni_closed_notify = Arc::new(Notify::new());
 
         // WT 単方向ストリームを WtSession に渡すためのチャネル
         let (uni_tx, uni_rx) = mpsc::channel::<WtRecvStream>(16);
 
         // 単方向ストリーム受信タスク
         //
-        // classify_uni_stream でストリームタイプを判別する:
+        // classify_uni_stream_header でストリームタイプを判別する:
         // - WebTransport: WT 単方向ストリーム → uni_tx に送信
         // - Http3: H3 制御ストリームなど → feed_stream_only でフィード
         let state_for_uni = Arc::clone(&state);
         let notify_for_uni = Arc::clone(&unblock_notify);
+        let closed_for_uni = Arc::clone(&uni_closed_notify);
+        let handle_for_uni = handle.clone();
         let uni_task = tokio::spawn(async move {
             while let Ok(Some(recv_stream)) = uni_acceptor.accept_receive_stream().await {
                 let state = Arc::clone(&state_for_uni);
                 let notify = Arc::clone(&notify_for_uni);
                 let uni_tx = uni_tx.clone();
                 let stream_id: u64 = recv_stream.id();
+                let handle = handle_for_uni.clone();
                 tokio::spawn(route_uni_stream(
                     stream_id,
                     recv_stream,
                     state,
                     notify,
                     uni_tx,
+                    handle,
                 ));
             }
+            // acceptor が終了した = 接続がクローズした。peer SETTINGS はもう届かない。
+            closed_for_uni.notify_one();
         });
 
         // 最初の双方向ストリーム (CONNECT リクエスト) を受け付ける
@@ -210,8 +229,14 @@ impl WtSessionRequest {
 
         // peer SETTINGS の受信を待つ (WebTransport CONNECT の検証に必要)
         // uni_task がクライアントの制御ストリームを処理して SETTINGS を注入するまで待機する
-        // (draft-ietf-webtrans-http3-15 Section 3.1)
+        // (draft-ietf-webtrans-http3-16 Section 3.1, 7.1)。
+        //
+        // 10ms ポーリングは行わず Notify のみで待つ。条件確認 → 待機登録 → 再確認の
+        // 順で取りこぼしを防ぐ (`Notified::enable` で待機登録を明示的に行う)。
         loop {
+            let notified = unblock_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             {
                 let s = state.lock().expect("mutex should not be poisoned");
                 if s.h3_conn.peer_settings().is_some() {
@@ -219,8 +244,16 @@ impl WtSessionRequest {
                 }
             }
             tokio::select! {
-                _ = unblock_notify.notified() => {}
-                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+                _ = &mut notified => {}
+                _ = uni_closed_notify.notified() => {
+                    // 単方向ストリーム受信タスクの終了は接続クローズを意味する。
+                    // SETTINGS が既に処理済みなら続行し、そうでなければ打ち切る。
+                    let s = state.lock().expect("mutex should not be poisoned");
+                    if s.h3_conn.peer_settings().is_some() {
+                        break;
+                    }
+                    return Err(crate::Error::ConnectionClosed);
+                }
             }
         }
 
@@ -294,8 +327,6 @@ impl WtSessionRequest {
                     // QPACK エンコーダーストリームが更新された可能性がある
                     // ループ先頭の drain_events で処理する
                 }
-                // notify_one() の取りこぼし対策: 短いタイムアウトで drain_events を再確認する
-                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
             }
         }
 
@@ -405,10 +436,12 @@ impl WtSessionRequest {
         }
 
         // send_response の内部で establish_wt_session_server が走り、
-        // 楽観的にバッファされていた WT_CLOSE_SESSION 等が sans-I/O イベントキューに
-        // push されている可能性がある。受信タスク起動前にドレインして
-        // `pending_wt_events` に追加する (draft-ietf-webtrans-http3-16 Section 3.2)。
+        // 楽観的にバッファされていた WT_CLOSE_SESSION やフロー制御カプセルが
+        // sans-I/O イベントキューに push されている可能性がある。受信タスク起動前に
+        // ドレインして `pending_wt_events` / `pending_flow_control_capsules` に追加する
+        // (draft-ietf-webtrans-http3-16 Section 3.2 / 5.6.2 / 5.6.4)。
         let mut pending_wt_events = self.pending_wt_events;
+        let mut pending_flow_control_capsules: Vec<Capsule> = Vec::new();
         {
             let events = self
                 .state
@@ -416,19 +449,40 @@ impl WtSessionRequest {
                 .expect("mutex should not be poisoned")
                 .drain_events()?;
             for event in events {
-                if let shiguredo_http3::Event::WebTransport(wt) = event
-                    && is_forwardable_wt_event(&wt)
-                {
-                    pending_wt_events.push(wt);
+                match event {
+                    Event::WebTransport(WebTransportEvent::Capsule {
+                        session_id,
+                        capsule,
+                    }) if session_id == self.stream_id => {
+                        pending_flow_control_capsules.push(capsule);
+                    }
+                    // 接続上の WT セッションは 1 つだけなので他セッション宛の
+                    // カプセルは発生しないが、念のため破棄する
+                    Event::WebTransport(WebTransportEvent::Capsule { .. }) => {}
+                    Event::WebTransport(wt) if is_forwardable_wt_event(&wt) => {
+                        pending_wt_events.push(wt);
+                    }
+                    _ => {}
                 }
             }
         }
+
+        // ピア SETTINGS の WT 初期値とフロー制御の有効判定から送信側フロー制御を構築する
+        // (draft-ietf-webtrans-http3-16 Section 5.1, 5.5)
+        let send_fc: SharedSendFlowControl = {
+            let s = self.state.lock().expect("mutex should not be poisoned");
+            let limits = peer_wt_send_limits(s.h3_conn.peer_settings());
+            let enabled = s.h3_conn.wt_session_flow_control_enabled(self.stream_id);
+            Arc::new(StdMutex::new(WtSendFlowControl::new(enabled, limits)))
+        };
 
         // CONNECT ストリームの受信タスクを起動する。
         //
         // 受信データを sans-I/O 層へ流し、WT_CLOSE_SESSION カプセルの検知 /
         // CONNECT ストリームの FIN / RESET_STREAM を `WebTransportEvent::SessionClosed`
         // として `event_rx` に届ける (draft-ietf-webtrans-http3-16 Section 6)。
+        // フロー制御カプセルは送信側フロー制御へ反映する
+        // (draft-ietf-webtrans-http3-16 Section 5.6.2, 5.6.4)。
         //
         // event_rx の容量 64: 現状 CONNECT ストリーム経由で発火し得るのは接続あたり
         // ごく少数の `SessionClosed` / `SessionDraining` / `BufferedStreamRejected` のみ。
@@ -443,9 +497,11 @@ impl WtSessionRequest {
         let recv_task = tokio::spawn(run_server_connect_recv_task(
             self.stream_id,
             self.recv_stream,
-            self.state,
+            Arc::clone(&self.state),
             event_tx,
             pending_wt_events,
+            pending_flow_control_capsules,
+            Arc::clone(&send_fc),
             connect_tx.clone(),
         ));
 
@@ -456,6 +512,7 @@ impl WtSessionRequest {
             connect_tx,
             self.uni_rx,
             event_rx,
+            send_fc,
             recv_task,
         ))
     }
@@ -548,12 +605,18 @@ async fn send_reject_response(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "ハンドシェイクで確定した共有状態をそのまま受信タスクへ引き継ぐため"
+)]
 async fn run_server_connect_recv_task(
     session_id: u64,
     recv_stream: s2n_quic::stream::ReceiveStream,
     state: Arc<StdMutex<ServerConnectionState>>,
     event_tx: mpsc::Sender<WebTransportEvent>,
     pending_wt_events: Vec<WebTransportEvent>,
+    pending_flow_control_capsules: Vec<Capsule>,
+    send_fc: SharedSendFlowControl,
     connect_tx: mpsc::UnboundedSender<ConnectCommand>,
 ) {
     run_server_connect_recv_task_inner(
@@ -562,6 +625,8 @@ async fn run_server_connect_recv_task(
         state,
         event_tx,
         pending_wt_events,
+        pending_flow_control_capsules,
+        &send_fc,
         &connect_tx,
     )
     .await;
@@ -570,14 +635,33 @@ async fn run_server_connect_recv_task(
     let _ = connect_tx.send(ConnectCommand::Finish);
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "ハンドシェイクで確定した共有状態をそのまま受信タスクへ引き継ぐため"
+)]
 async fn run_server_connect_recv_task_inner(
     session_id: u64,
     mut recv_stream: s2n_quic::stream::ReceiveStream,
     state: Arc<StdMutex<ServerConnectionState>>,
     event_tx: mpsc::Sender<WebTransportEvent>,
     pending_wt_events: Vec<WebTransportEvent>,
+    pending_flow_control_capsules: Vec<Capsule>,
+    send_fc: &SharedSendFlowControl,
     connect_tx: &mpsc::UnboundedSender<ConnectCommand>,
 ) {
+    // 接続確立前に到着していたフロー制御カプセルを反映する。
+    // 単調性違反は WT_FLOW_CONTROL_ERROR でセッションを終了する
+    // (draft-ietf-webtrans-http3-16 Section 5.6.2, 5.6.4)。
+    for capsule in pending_flow_control_capsules {
+        if apply_flow_control_capsule(send_fc, &capsule).is_err() {
+            terminate_with_flow_control_error(connect_tx);
+            let _ = event_tx
+                .send(flow_control_error_session_closed(session_id))
+                .await;
+            return;
+        }
+    }
+
     // ハンドシェイク中に到着していた WebTransport イベントを先に流す。
     // SessionClosed を転送してもタスクは終了せず、ピアの FIN / Err まで読み続ける。
     // 早期に終了すると WT_CLOSE_SESSION 後の追加 DATA を読めず、
@@ -673,18 +757,42 @@ async fn run_server_connect_recv_task_inner(
             }
         };
 
+        let mut flow_control_violated = false;
         for event in events {
-            if let Event::WebTransport(wt) = event
-                && is_forwardable_wt_event(&wt)
-            {
-                let is_terminal = matches!(wt, WebTransportEvent::SessionClosed { .. });
-                if event_tx.send(wt).await.is_err() {
-                    return;
+            match event {
+                Event::WebTransport(WebTransportEvent::Capsule {
+                    session_id: capsule_session_id,
+                    capsule,
+                }) => {
+                    // フロー制御カプセルを送信側フロー制御へ反映する
+                    // (draft-ietf-webtrans-http3-16 Section 5.6.2, 5.6.4)。
+                    // 他セッション宛のカプセルは本 WtSession には適用しない。
+                    flow_control_violated |= capsule_session_id == session_id
+                        && apply_flow_control_capsule(send_fc, &capsule).is_err();
                 }
-                if is_terminal {
-                    session_closed_delivered = true;
+                Event::WebTransport(wt) if is_forwardable_wt_event(&wt) => {
+                    let is_terminal = matches!(wt, WebTransportEvent::SessionClosed { .. });
+                    if event_tx.send(wt).await.is_err() {
+                        return;
+                    }
+                    if is_terminal {
+                        session_closed_delivered = true;
+                    }
                 }
+                _ => {}
             }
+        }
+
+        if flow_control_violated {
+            // 単調性違反: WT_FLOW_CONTROL_ERROR でセッションを終了する
+            // (draft-ietf-webtrans-http3-16 Section 5.6.2, 5.6.4)
+            terminate_with_flow_control_error(connect_tx);
+            if !session_closed_delivered {
+                let _ = event_tx
+                    .send(flow_control_error_session_closed(session_id))
+                    .await;
+            }
+            return;
         }
 
         // SessionClosed を転送しても、ピアの FIN を読み切るまでは return しない。
@@ -698,31 +806,31 @@ async fn run_server_connect_recv_task_inner(
 
 /// 単方向ストリームをタイプで判別してルーティングする
 ///
-/// classify_uni_stream で先頭バイトからストリームタイプを分類する:
+/// `classify_uni_stream_header` で先頭バイトからストリームタイプを分類する:
 /// - WebTransport: WT 単方向ストリーム → uni_tx に送信
 /// - Http3: H3 制御ストリームなど → feed_stream_only でフィード
+/// - 不正な session ID: H3_ID_ERROR で接続を閉じる
+///   (draft-ietf-webtrans-http3-16 Section 4)
 async fn route_uni_stream(
     stream_id: u64,
     mut recv_stream: s2n_quic::stream::ReceiveStream,
     state: Arc<StdMutex<ServerConnectionState>>,
     notify: Arc<Notify>,
     uni_tx: mpsc::Sender<WtRecvStream>,
+    handle: s2n_quic::connection::Handle,
 ) {
-    use shiguredo_http3::webtransport::{
-        ClassifiedUniStream, StreamHeaderDecodeError, classify_uni_stream_checked,
-    };
-
     let mut type_buf: Vec<u8> = Vec::new();
 
-    // ストリームタイプが確定するまでデータを読む
-    let classified = loop {
+    // ストリームタイプと (WT ストリームの場合は) session ID が確定するまでデータを読む
+    let header = loop {
         match recv_stream.receive().await {
             Ok(Some(data)) => {
                 type_buf.extend_from_slice(&data);
-                match classify_uni_stream_checked(&type_buf) {
-                    Ok(result) => break result,
-                    Err(StreamHeaderDecodeError::BufferTooShort) => continue,
-                    Err(_) => return, // 不正な session_id 等
+                // CONNECT ストリームの受理前は本セッションの session ID が未確定の
+                // ため、形式検証のみ行う (None を渡す)。CONNECT 受理後に到着した
+                // ストリームの一致検証は bidi 側 (`accept_bi_stream`) で行う。
+                if let Some(header) = classify_uni_stream_header(&type_buf, None) {
+                    break header;
                 }
             }
             Ok(None) => {
@@ -738,14 +846,14 @@ async fn route_uni_stream(
         }
     };
 
-    match classified {
-        ClassifiedUniStream::WebTransport { data_offset, .. } => {
+    match header {
+        UniStreamHeader::WebTransport { data_offset } => {
             // WT 単方向ストリームとして WtSession に渡す
             let pending = type_buf[data_offset..].to_vec();
             let wt_recv = WtRecvStream::new(stream_id, recv_stream, pending);
             let _ = uni_tx.send(wt_recv).await;
         }
-        ClassifiedUniStream::Http3 { .. } => {
+        UniStreamHeader::Http3 => {
             // H3 制御ストリームとしてフィード
             let _ = state
                 .lock()
@@ -770,6 +878,23 @@ async fn route_uni_stream(
                     break;
                 }
             }
+        }
+        UniStreamHeader::MalformedSessionId => {
+            // 形式不正な session ID。sans-I/O 層にも接続エラーを記録させたうえで、
+            // 接続を H3_ID_ERROR で閉じる (draft-ietf-webtrans-http3-16 Section 4 の MUST)。
+            let _ = state
+                .lock()
+                .expect("mutex should not be poisoned")
+                .feed_stream_only(stream_id, &type_buf, false);
+            notify.notify_one();
+            close_connection_with_id_error(&handle);
+        }
+        UniStreamHeader::ForeignSession => {
+            // 形式は正しいが本セッション以外の session ID。本クレートは接続上の
+            // 単方向ストリームアクセプターを単一の WtSession が保持するため
+            // 他セッションへ配送できず、接続状態を維持したまま処理を続けられない
+            // (draft-ietf-webtrans-http3-16 Section 4)
+            close_connection_with_id_error(&handle);
         }
     }
 }

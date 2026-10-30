@@ -10,7 +10,7 @@ mod internal;
 pub mod webtransport;
 
 pub use config::{ClientConfig, ServerConfig};
-pub use error::{Error, Result};
+pub use error::{Error, FlowControlResource, Result};
 pub use h3::{
     H3Client, H3ClientRequest, H3ClientResponse, H3Request, H3Response, H3Server,
     H3ServerConnection,
