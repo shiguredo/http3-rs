@@ -100,6 +100,12 @@ pub enum Role {
 }
 
 /// HTTP/3 接続
+///
+/// # ログ出力時の注意
+///
+/// `Debug` 実装は内部状態をそのまま出力する。`Header` の `Debug` は機密ヘッダー
+/// (authorization / cookie 等) の値を伏せるが、イベントキュー内の `Event::Header`
+/// などには未加工のヘッダー値が入り得るため、`{:?}` の結果をログに残す場合は注意すること。
 #[derive(Debug)]
 pub struct Connection {
     /// ロール
@@ -1936,9 +1942,44 @@ impl Connection {
     /// `fin=true` の場合は送信方向クローズ (FIN) を設定する。FIN はデータが全て
     /// 消費された後に `get_stream_data` / `take_stream_data` の追加呼び出しで交付される
     /// (RFC 9114 Section 4.1)。
+    ///
+    /// 本メソッドが返すエラーはローカルな誤用 (ロール違反・制御ストリーム未設定・
+    /// QPACK バッファの見積り不足など) であり、受信したプロトコル違反ではないため
+    /// 接続を恒久エラー状態にはしない (`remember_connection_error` を通さない)。
+    /// 呼び出し側はエラー後も接続を継続できる。
     pub(crate) fn send_request(&mut self, headers: &[Header], fin: bool) -> Result<u64, Error> {
-        let result = self.send_request_inner(headers, fin);
-        self.remember_connection_error(result)
+        self.send_request_inner(headers, fin)
+    }
+
+    /// ヘッダーリストを QPACK エンコードする
+    ///
+    /// `estimate_encoded_size` は静的テーブルのみを使う場合の正確な上限を返すが、
+    /// 動的テーブルを参照する場合はインデックスの表現長が変わり得る。そのため
+    /// バッファ不足時は倍々に拡張して再試行する (最大 4 回)。
+    /// 再試行しても失敗するのは実装バグまたは極端に大きなヘッダーであり、
+    /// `InternalError` を返す。
+    ///
+    /// このエラーはローカルなエンコード失敗であり、接続全体を恒久エラーにする
+    /// プロトコル違反ではない。呼び出し元は `remember_connection_error` を通さずに
+    /// 呼び出し側へ返すこと。
+    fn encode_qpack_headers(
+        &mut self,
+        headers: &[Header],
+        blocked_count: usize,
+    ) -> Result<Vec<u8>, Error> {
+        let mut buf_size = estimate_encoded_size(headers) + 64;
+        for _ in 0..4 {
+            let mut buf = vec![0u8; buf_size];
+            if let Some(len) = self.qpack_encoder.encode(&mut buf, headers, blocked_count) {
+                buf.truncate(len);
+                return Ok(buf);
+            }
+            // 見積り不足: バッファを倍にして再試行する
+            buf_size = buf_size
+                .checked_mul(2)
+                .ok_or(Error::ConnectionError(ErrorCode::InternalError))?;
+        }
+        Err(Error::ConnectionError(ErrorCode::InternalError))
     }
 
     fn send_request_inner(&mut self, headers: &[Header], fin: bool) -> Result<u64, Error> {
@@ -1979,19 +2020,15 @@ impl Connection {
             return Err(Error::StreamError(ErrorCode::RequestRejected));
         }
 
-        let stream_id = self.next_stream_id;
-        self.next_stream_id += 4;
-
         // QPACK エンコード
         // ブロック可能ストリーム数を渡して上限制御 (RFC 9204 Section 2.1.2)
         let blocked_count = self.qpack_encoder.blocked_streams_count();
-        let buf_size = estimate_encoded_size(headers) + 64;
-        let mut qpack_buf = vec![0u8; buf_size];
-        let qpack_len = self
-            .qpack_encoder
-            .encode(&mut qpack_buf, headers, blocked_count)
-            .ok_or(Error::ConnectionError(ErrorCode::InternalError))?;
-        qpack_buf.truncate(qpack_len);
+        let qpack_buf = self.encode_qpack_headers(headers, blocked_count)?;
+
+        // エンコード成功後にストリーム ID を消費する。エンコード失敗時に
+        // ID だけが消費されるのを避けるため。
+        let stream_id = self.next_stream_id;
+        self.next_stream_id += 4;
 
         let mut stream = RequestStream::new(stream_id, self.role);
         // WebTransport CONNECT の場合は WT CONNECT フラグを設定する
@@ -2054,14 +2091,17 @@ impl Connection {
     }
 
     /// レスポンスを送信 (サーバー専用)
+    ///
+    /// 本メソッドが返すエラーはローカルな誤用 (ロール違反・QPACK バッファの
+    /// 見積り不足など) であり、接続を恒久エラー状態にはしない
+    /// (`remember_connection_error` を通さない)。
     pub(crate) fn send_response(
         &mut self,
         stream_id: u64,
         headers: &[Header],
         fin: bool,
     ) -> Result<(), Error> {
-        let result = self.send_response_inner(stream_id, headers, fin);
-        self.remember_connection_error(result)
+        self.send_response_inner(stream_id, headers, fin)
     }
 
     fn send_response_inner(
@@ -2093,13 +2133,7 @@ impl Connection {
         // QPACK エンコード
         // ブロック可能ストリーム数を渡して上限制御 (RFC 9204 Section 2.1.2)
         let blocked_count = self.qpack_encoder.blocked_streams_count();
-        let buf_size = estimate_encoded_size(headers) + 64;
-        let mut qpack_buf = vec![0u8; buf_size];
-        let qpack_len = self
-            .qpack_encoder
-            .encode(&mut qpack_buf, headers, blocked_count)
-            .ok_or(Error::ConnectionError(ErrorCode::InternalError))?;
-        qpack_buf.truncate(qpack_len);
+        let qpack_buf = self.encode_qpack_headers(headers, blocked_count)?;
 
         let stream = self
             .streams

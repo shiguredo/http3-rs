@@ -485,3 +485,64 @@ fn send_response_fin_is_delivered_via_take_stream_data() {
         "FIN 送達後は writable_streams にストリームが残らないこと: {writable:?}"
     );
 }
+
+#[test]
+fn send_request_with_many_large_headers_succeeds() {
+    // QPACK のバッファ見積りが不足すると encode が失敗し、以前は
+    // ConnectionError(InternalError) が接続にラッチされて以降の送信がすべて失敗していた。
+    // 104 ヘッダー (cookie × 100、各値 16,384 バイト) を送信しても成功し、
+    // 直後の小さいリクエストも成功することを検証する。
+    //
+    // 0x80 (obs-text) はハフマン符号化が生データより長くなるため非ハフマンで
+    // エンコードされ、値長プレフィックスが 3 バイトになる境界を確実に通る。
+    let mut client = ClientConnection::new(Settings::default());
+    client.set_control_stream_id(2).expect("test must succeed");
+
+    let mut headers = request_headers();
+    for _ in 0..100 {
+        let value = vec![0x80u8; 16_384];
+        headers.push(Header::new(b"cookie", value).expect("test must succeed"));
+    }
+
+    let stream_id = client
+        .send_request(&headers, true)
+        .expect("大きいヘッダーでも送信できること");
+    assert_eq!(stream_id, 0);
+
+    // 接続が恒久エラー状態になっていないこと
+    let small_stream_id = client
+        .send_request(&request_headers(), true)
+        .expect("直後の小さいリクエストも送信できること");
+    assert_eq!(small_stream_id, 4);
+
+    // 大きいヘッダーのストリームから HEADERS データを取得できること
+    assert!(
+        client.take_stream_data(stream_id).is_some(),
+        "大きいヘッダーの HEADERS データが取得できること"
+    );
+}
+
+#[test]
+fn local_send_error_does_not_latch_connection() {
+    // ローカルな誤用 (制御ストリーム未設定) による送信エラーは、受信した
+    // プロトコル違反ではないため接続を恒久エラー状態にしないことを検証する。
+    // 以前は send_request が ConnectionError を remember_connection_error で
+    // ラッチしていたため、以降の送信がすべて同じエラーで失敗していた。
+    let mut client = ClientConnection::new(Settings::default());
+
+    // control stream 未設定: ローカルな誤用で InternalError
+    let err = client
+        .send_request(&request_headers(), true)
+        .expect_err("制御ストリーム未設定では送信できないこと");
+    assert!(
+        matches!(err, Error::ConnectionError(ErrorCode::InternalError)),
+        "制御ストリーム未設定時は InternalError であること: {err:?}"
+    );
+
+    // 制御ストリームを設定すれば送信できる (エラーがラッチされていないこと)
+    client.set_control_stream_id(2).expect("test must succeed");
+    let stream_id = client
+        .send_request(&request_headers(), true)
+        .expect("エラー後に制御ストリームを設定すれば送信できること");
+    assert_eq!(stream_id, 0, "失敗した送信はストリーム ID を消費しないこと");
+}

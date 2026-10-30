@@ -8,7 +8,9 @@
 //!
 //! `qpack::header` の `check_header` と意味的に等価な検査ロジックを意図的に重複させている。
 //! decoder 経由の `from_validated_parts_internal` は構築時検査をスキップするため、
-//! wire 上の不正バイト列をここで独立に検査する必要がある。
+//! wire 上の不正バイト列をここで独立に検査する必要がある。疑似ヘッダーの値も
+//! フィールド値であるため、CR / LF / NUL など field-value として不正な文字は
+//! ここで拒否する (RFC 9110 Section 5.5, RFC 9114 Section 10.3)。
 //! 両者の挙動乖離は PBT (`pbt/tests/prop_validation.rs`) で検出する。
 
 use crate::connection::Role;
@@ -97,6 +99,12 @@ fn is_valid_protocol(value: &[u8]) -> bool {
 ///
 /// path-absolute (RFC 3986 Section 3.3) = "/" *( "/" segment ) で始まるか、
 /// OPTIONS リクエストの場合は "*" (RFC 9110 Section 7.1) も許可する。
+///
+/// 本関数は path-absolute の先頭文字のみを検査する。URI としての完全な構文
+/// (空白の扱い、pct-encoding の妥当性、fragment の禁止など) は検査しない。
+/// フィールド値としての MUST (制御文字の拒否) は `validate_request_headers` が
+/// 別途 `is_valid_field_value` で保証する。URI 構文の厳密な検証をどこまで行うかは
+/// 今後の方針決定事項である。
 fn is_valid_http_path(path: &[u8], method: &[u8]) -> bool {
     if path.is_empty() {
         return false;
@@ -353,6 +361,14 @@ pub fn validate_request_headers(headers: &[Header]) -> Result<(), Error> {
         if header.name().starts_with(b":") {
             // 擬似ヘッダーが通常ヘッダーの後に出現 (RFC 9114 Section 4.3)
             if pseudo_done {
+                return Err(Error::StreamError(ErrorCode::MessageError));
+            }
+
+            // 疑似ヘッダーの値も field-value として検査する (RFC 9110 Section 5.5,
+            // RFC 9114 Section 10.3)。decoder 経由の Header は構築時検査をスキップする
+            // ため、wire 上の CR / LF / NUL などの制御文字をここで拒否する。
+            // 個々の疑似ヘッダー固有の構文検査はこの後の各分岐で行う。
+            if !is_valid_field_value(header.value()) {
                 return Err(Error::StreamError(ErrorCode::MessageError));
             }
 

@@ -23,23 +23,67 @@ use super::table::find_static_entry;
 /// `encode` メソッドは Required Insert Count = 0, Delta Base = 0 でエンコードする。
 pub type Encoder = DynamicEncoder;
 
-/// ヘッダーリストをエンコードするのに必要なバッファサイズを推定
+/// プレフィックス整数 (RFC 7541 Section 5.1) がワイヤ上で占めるバイト数を返す
+///
+/// `integer::encode_integer` と同じ規則で計算する。エンコードは失敗しないため
+/// バッファサイズの見積りに使える。
+fn encoded_integer_len(value: u64, prefix_bits: u8) -> usize {
+    debug_assert!(
+        (1..=8).contains(&prefix_bits),
+        "prefix_bits must be in 1..=8 (RFC 7541 Section 5.1)"
+    );
+    let max_prefix = (1u64 << prefix_bits) - 1;
+    if value < max_prefix {
+        return 1;
+    }
+    // プレフィックスを超えた分は 7 ビットずつ継続ビット付きで格納される
+    let mut len = 1;
+    let mut remaining = value - max_prefix;
+    while remaining >= 128 {
+        remaining >>= 7;
+        len += 1;
+    }
+    len + 1
+}
+
+/// 文字列リテラル (RFC 9204 Section 4.1.1) がワイヤ上で占める最大バイト数を返す
+///
+/// ハフマン符号化は生データより短くなる場合にのみ使われるため
+/// (`wire::encode_string_with_prefix`)、非ハフマン時の長さが上限になる。
+fn encoded_string_len(data_len: usize, prefix_bits: u8) -> usize {
+    encoded_integer_len(data_len as u64, prefix_bits) + data_len
+}
+
+/// ヘッダーリストを静的テーブルのみでエンコードした場合のワイヤサイズを返す
+///
+/// Required Insert Count (1 バイト) と Delta Base (1 バイト) に加え、各フィールドの
+/// プレフィックス長・文字列長プレフィックス・生データ長を厳密に積み上げる。
+/// ハフマン符号化は生データより短くなる場合にのみ使われるため、この値は実際の
+/// エンコード結果の上限になる。
+///
+/// 動的テーブルを参照する場合はインデックスの表現長が変わり得るため、呼び出し側は
+/// バッファ不足時にバッファを拡張して再試行すること
+/// (`Connection::encode_qpack_headers` を参照)。
 pub fn estimate_encoded_size(headers: &[Header]) -> usize {
-    // 2 bytes for Required Insert Count and Delta Base
+    // Required Insert Count (1 バイト) + Delta Base (1 バイト)
     let mut size = 2;
 
     for header in headers {
         let (exact_match, name_match) = find_static_entry(header.name(), header.value());
 
-        if exact_match.is_some() {
-            // Indexed Field Line: 1-2 bytes
-            size += 2;
-        } else if name_match.is_some() {
-            // Literal with Name Reference
-            size += 2 + 1 + header.value().len();
+        if let Some(index) = exact_match {
+            // Indexed Field Line (静的テーブル): 1T + 6 ビットプレフィックスのインデックス
+            size += encoded_integer_len(index as u64, 6);
+        } else if let Some(index) = name_match {
+            // Literal with Name Reference: 01NT + 4 ビットプレフィックスのインデックスと、
+            // 7 ビットプレフィックスの値文字列
+            size += encoded_integer_len(index as u64, 4);
+            size += encoded_string_len(header.value().len(), 7);
         } else {
-            // Literal with Literal Name
-            size += 2 + header.name().len() + 1 + header.value().len();
+            // Literal with Literal Name: 001N + 3 ビットプレフィックスの名前文字列と、
+            // 7 ビットプレフィックスの値文字列
+            size += encoded_string_len(header.name().len(), 3);
+            size += encoded_string_len(header.value().len(), 7);
         }
     }
 
@@ -270,14 +314,14 @@ impl DynamicEncoder {
     fn encode_static_only(&self, buf: &mut [u8], headers: &[Header]) -> Option<usize> {
         let mut offset = 0;
 
-        // Required Insert Count = 0
+        // Required Insert Count = 0 (動的テーブルを参照しない)
         if buf.is_empty() {
             return None;
         }
         buf[offset] = 0x00;
         offset += 1;
 
-        // Delta Base = 0, Sign = 0
+        // Delta Base = 0 (Sign = 0)
         if offset >= buf.len() {
             return None;
         }
@@ -321,7 +365,7 @@ impl DynamicEncoder {
         offset += integer::encode_integer(&mut buf[offset..], enc_insert_count, 8, 0x00)?;
 
         // Base = Required Insert Count (シンプルな実装)
-        // Sign = 0, Delta Base = 0
+        // Sign = 0, Delta Base = 0 (Base = Required Insert Count)
         if offset >= buf.len() {
             return None;
         }
@@ -378,7 +422,7 @@ impl DynamicEncoder {
                 header.never_indexed(),
             )
         } else {
-            // Literal with Literal Name
+            // リテラル名による Literal with Literal Name
             self.encode_literal_with_literal_name(
                 buf,
                 header.name(),
@@ -426,7 +470,7 @@ impl DynamicEncoder {
                 header.never_indexed(),
             )
         } else {
-            // Literal with Literal Name
+            // リテラル名によるリテラル表現 (Literal with Literal Name)
             self.encode_literal_with_literal_name(
                 buf,
                 header.name(),
@@ -438,7 +482,7 @@ impl DynamicEncoder {
 
     /// Indexed Field Line (静的テーブル) をエンコード
     ///
-    /// Format: 1TNNNNNN (T=1 for static)
+    /// フォーマット: 1TNNNNNN (T=1 は静的テーブル)
     fn encode_indexed_field_static(&self, buf: &mut [u8], index: usize) -> Option<usize> {
         // 0xc0 = 11000000 (T=1)
         integer::encode_integer(buf, index as u64, 6, 0xc0)
@@ -446,7 +490,7 @@ impl DynamicEncoder {
 
     /// Indexed Field Line (動的テーブル) をエンコード (RFC 9204 Section 4.5.2)
     ///
-    /// Format: 1TNNNNNN (T=0 for dynamic)
+    /// フォーマット: 1TNNNNNN (T=0 は動的テーブル)
     /// relative_index = base - absolute_index - 1
     ///
     /// 現在の `encode_with_dynamic` は base = required_insert_count とするため、
@@ -470,7 +514,7 @@ impl DynamicEncoder {
 
     /// Literal with Name Reference (静的テーブル) をエンコード
     ///
-    /// Format: 01NTNNNN (N=never index, T=1 for static)
+    /// フォーマット: 01NTNNNN (N=never index, T=1 は静的テーブル)
     fn encode_literal_with_name_ref_static(
         &self,
         buf: &mut [u8],
@@ -482,7 +526,7 @@ impl DynamicEncoder {
         let prefix = if never_indexed { 0x70 } else { 0x50 };
         let mut offset = integer::encode_integer(buf, index as u64, 4, prefix)?;
 
-        // Value
+        // 値のエンコード
         let value_len = self.encode_string(&mut buf[offset..], value)?;
         offset += value_len;
 
@@ -491,7 +535,7 @@ impl DynamicEncoder {
 
     /// Literal with Name Reference (動的テーブル) をエンコード (RFC 9204 Section 4.5.4)
     ///
-    /// Format: 01NTNNNN (N=never index, T=0 for dynamic)
+    /// フォーマット: 01NTNNNN (N=never index, T=0 は動的テーブル)
     /// relative_index = base - absolute_index - 1
     ///
     /// 現在の `encode_with_dynamic` は base = required_insert_count とするため、
@@ -515,7 +559,7 @@ impl DynamicEncoder {
         let prefix = if never_indexed { 0x60 } else { 0x40 };
         let mut offset = integer::encode_integer(buf, relative_index, 4, prefix)?;
 
-        // Value
+        // 値のエンコード
         let value_len = self.encode_string(&mut buf[offset..], value)?;
         offset += value_len;
 
@@ -524,7 +568,7 @@ impl DynamicEncoder {
 
     /// Literal with Literal Name をエンコード
     ///
-    /// Format (RFC 9204 Section 4.5.6):
+    /// フォーマット (RFC 9204 Section 4.5.6):
     /// ```text
     ///      0   1   2   3   4   5   6   7
     ///    +---+---+---+---+---+---+---+---+
@@ -553,7 +597,7 @@ impl DynamicEncoder {
         let name_len = self.encode_string_with_prefix(buf, name, 3, prefix)?;
         offset += name_len;
 
-        // Value (string literal, 7-bit prefix)
+        // 値のエンコード (7 ビットプレフィックスの文字列リテラル)
         let value_len = self.encode_string(&mut buf[offset..], value)?;
         offset += value_len;
 
@@ -616,7 +660,7 @@ mod tests {
         assert!(len >= 3);
         assert_eq!(buf[0], 0x00); // Required Insert Count
         assert_eq!(buf[1], 0x00); // Delta Base
-        // Name reference to static table (24 is first :status)
+        // 静的テーブルの名前参照 (24 が最初の :status エントリ)
     }
 
     #[test]
@@ -658,10 +702,10 @@ mod tests {
 
     #[test]
     fn test_static_table_boundary() {
-        // Test encoding index >= 64 (needs multi-byte encoding)
+        // index >= 64 のエンコード (複数バイトのエンコードが必要)
         let mut encoder = Encoder::new();
 
-        // Index 98 (x-frame-options: sameorigin)
+        // index 98 (x-frame-options: sameorigin)
         let headers =
             vec![Header::new(b"x-frame-options", b"sameorigin").expect("test must succeed")];
         let mut buf = vec![0u8; 64];
@@ -679,6 +723,126 @@ mod tests {
         ];
         let estimate = estimate_encoded_size(&headers);
         assert!(estimate > 0);
+    }
+
+    #[test]
+    fn encoded_integer_len_はプレフィックス境界で正しい長さを返す() {
+        // 6 ビットプレフィックス: 62 未満は 1 バイト、62 以上は継続バイトを持つ
+        assert_eq!(encoded_integer_len(0, 6), 1);
+        assert_eq!(encoded_integer_len(62, 6), 1);
+        assert_eq!(encoded_integer_len(63, 6), 2);
+        assert_eq!(encoded_integer_len(63 + 127, 6), 2);
+        assert_eq!(encoded_integer_len(63 + 128, 6), 3);
+        // 7 ビットプレフィックス: 126 まで 1 バイト、127 以上は継続バイトを持つ
+        assert_eq!(encoded_integer_len(126, 7), 1);
+        assert_eq!(encoded_integer_len(127, 7), 2);
+        assert_eq!(encoded_integer_len(127 + 127, 7), 2);
+        assert_eq!(encoded_integer_len(127 + 128, 7), 3);
+    }
+
+    #[test]
+    fn 見積りは静的テーブル完全一致の実エンコード長と一致する() {
+        let headers = vec![Header::new(b":method", b"GET").expect("test must succeed")];
+        let estimate = estimate_encoded_size(&headers);
+
+        let mut encoder = Encoder::new().use_huffman(false);
+        let mut buf = vec![0u8; estimate];
+        let len = encoder
+            .encode(&mut buf, &headers, 0)
+            .expect("test must succeed");
+        assert_eq!(len, estimate, "静的テーブル完全一致の見積りが実長と不一致");
+    }
+
+    #[test]
+    fn 見積りは値長プレフィックスの境界を考慮する() {
+        // cookie は静的テーブルに名前があるため Literal with Name Reference になり、
+        // 16,384 バイトの値は 7 ビットプレフィックスの長さ表現が 3 バイトになる。
+        // 旧実装の「2 + 1 + 値長」では 2 バイト不足していた。
+        // 0x80 はハフマン符号化が生データより長くなるため、非ハフマンでエンコードされる。
+        let value = vec![0x80u8; 16_384];
+        let headers = vec![Header::new(b"cookie", value).expect("test must succeed")];
+        let estimate = estimate_encoded_size(&headers);
+
+        let mut encoder = Encoder::new();
+        let mut buf = vec![0u8; estimate];
+        let len = encoder
+            .encode(&mut buf, &headers, 0)
+            .expect("test must succeed");
+        assert_eq!(
+            len, estimate,
+            "ハフマンが使われない値では見積りが実長と一致すること"
+        );
+
+        // 1 バイトでも不足するとエンコードに失敗する (見積りが厳密であること)
+        let mut short = vec![0u8; estimate - 1];
+        assert!(
+            encoder.encode(&mut short, &headers, 0).is_none(),
+            "見積り - 1 バイトではエンコードに失敗すること"
+        );
+    }
+
+    #[test]
+    fn 見積りはハフマン符号化されたエンコード結果の上限になる() {
+        // 静的名前一致・完全一致・リテラル名の 3 経路と、長さプレフィックスの境界を含む。
+        // ハフマン符号化は生データより短くなる場合にのみ使われるため、見積りは常に上限になる。
+        let headers = vec![
+            Header::new(b":method", b"GET").expect("test must succeed"),
+            Header::new(b"cookie", vec![b'a'; 16_384]).expect("test must succeed"),
+            Header::new(b"x-custom", vec![b'b'; 128]).expect("test must succeed"),
+            Header::new(b"x-empty", b"").expect("test must succeed"),
+        ];
+        let estimate = estimate_encoded_size(&headers);
+
+        let mut encoder = Encoder::new(); // ハフマン有効
+        let mut buf = vec![0u8; estimate];
+        let len = encoder
+            .encode(&mut buf, &headers, 0)
+            .expect("見積りサイズのバッファでエンコードできること");
+        assert!(
+            len <= estimate,
+            "見積り {} が実エンコード長 {} より小さい",
+            estimate,
+            len
+        );
+    }
+
+    #[test]
+    fn never_indexed_ヘッダーは_n_ビットを立ててエンコードされる() {
+        // N=1 (never-indexed) のリテラル表現がエンコードされることを確認する
+        // (RFC 9204 Section 4.5.4 / RFC 7541 Section 6.2.2)。
+        let mut encoder = Encoder::new().use_huffman(false);
+
+        // 静的テーブルに名前がある場合: Literal with Name Reference (01NT, N=1, T=1)
+        // `:authority` は静的テーブル index 0 の名前を持つ
+        let headers = vec![
+            Header::new(b":authority", b"example.com")
+                .expect("test must succeed")
+                .with_never_indexed(true),
+        ];
+        let mut buf = vec![0u8; 64];
+        encoder
+            .encode(&mut buf, &headers, 0)
+            .expect("test must succeed");
+        assert_eq!(
+            buf[2], 0x70,
+            "N=1 の Literal with Name Reference (0111 xxxx) であること"
+        );
+
+        // 静的テーブルに名前がない場合: Literal with Literal Name (001N)
+        // "x-custom" は 8 バイトなので 3 ビットプレフィックスを超える
+        let headers = vec![
+            Header::new(b"x-custom", b"value")
+                .expect("test must succeed")
+                .with_never_indexed(true),
+        ];
+        let mut buf = vec![0u8; 64];
+        encoder
+            .encode(&mut buf, &headers, 0)
+            .expect("test must succeed");
+        assert_eq!(
+            buf[2], 0x37,
+            "N=1 の Literal with Literal Name (0011 0111) であること"
+        );
     }
 
     #[test]

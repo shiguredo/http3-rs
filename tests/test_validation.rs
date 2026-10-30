@@ -185,6 +185,66 @@ fn test_empty_path_is_malformed() {
 }
 
 #[test]
+fn test_path_with_cr_is_malformed() {
+    // 疑似ヘッダーの値も field-value であり、CR は許可されない
+    // (RFC 9110 Section 5.5, RFC 9114 Section 10.3)。
+    // 送信側の Header::new は拒否するため、wire 経由でのみ到達する。
+    let headers = vec![
+        wire_header(b":method", b"GET"),
+        wire_header(b":scheme", b"https"),
+        wire_header(b":path", b"/a\rb"),
+        wire_header(b":authority", b"example.com"),
+    ];
+    assert!(validate_request_headers(&headers).is_err());
+}
+
+#[test]
+fn test_path_with_lf_is_malformed() {
+    let headers = vec![
+        wire_header(b":method", b"GET"),
+        wire_header(b":scheme", b"https"),
+        wire_header(b":path", b"/a\nb"),
+        wire_header(b":authority", b"example.com"),
+    ];
+    assert!(validate_request_headers(&headers).is_err());
+}
+
+#[test]
+fn test_path_with_nul_is_malformed() {
+    let headers = vec![
+        wire_header(b":method", b"GET"),
+        wire_header(b":scheme", b"https"),
+        wire_header(b":path", b"/a\0b"),
+        wire_header(b":authority", b"example.com"),
+    ];
+    assert!(validate_request_headers(&headers).is_err());
+}
+
+#[test]
+fn test_pseudo_header_value_with_trailing_space_is_malformed() {
+    // field-value の先頭末尾は field-vchar でなければならない
+    // (RFC 9110 Section 5.5, RFC 9114 Section 10.3)。
+    let headers = vec![
+        wire_header(b":method", b"GET"),
+        wire_header(b":scheme", b"https"),
+        wire_header(b":path", b"/a "),
+        wire_header(b":authority", b"example.com"),
+    ];
+    assert!(validate_request_headers(&headers).is_err());
+}
+
+#[test]
+fn test_authority_with_trailing_space_is_malformed() {
+    let headers = vec![
+        wire_header(b":method", b"GET"),
+        wire_header(b":scheme", b"https"),
+        wire_header(b":path", b"/"),
+        wire_header(b":authority", b"example.com "),
+    ];
+    assert!(validate_request_headers(&headers).is_err());
+}
+
+#[test]
 fn test_pseudo_after_regular_is_malformed() {
     let headers = vec![
         wire_header(b":method", b"GET"),
