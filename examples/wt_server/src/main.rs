@@ -1,8 +1,17 @@
 /// WebTransport サーバーサンプル
 ///
-/// draft-ietf-webtrans-http3 の draft-02 / 07 / 14 / 15 に対応する。
+/// shiguredo_http3 (Sans I/O) は draft-ietf-webtrans-http3 の draft-02 / 07 / 14 / 15 / 16
+/// に対応する (draft-16 は draft-15 以降の検証ロジックとして扱う)。本 example は
 /// クライアントの SETTINGS から draft バージョンを自動判定し、適切な応答を返す
 /// (`shiguredo_http3::Settings::webtransport_draft_pattern()`)。
+///
+/// ただし本 example の QUIC 層である s2n-quic 1.86 は、RESET_STREAM_AT
+/// (draft-ietf-quic-reliable-stream-reset) の送出 API も、ピアの reset_stream_at
+/// transport parameter を取得する API も公開していない。そのため
+/// `set_webtransport_transport_verified` には reset_stream_at 非対応 (false) を渡しており、
+/// draft-14 / 15 / 16 クライアントの CONNECT は sans-I/O 層が H3_MESSAGE_ERROR で拒否する。
+/// 実際に接続できるのは draft-02 / 07 クライアントに限られる。これは s2n-quic が両 API を
+/// 公開するまでの既知の制限である。
 ///
 /// `--reject-connect` で全セッションを 405 拒否し、`WtSessionRequest::reject()` の動作を確認できる。
 ///

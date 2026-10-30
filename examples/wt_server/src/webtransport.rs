@@ -1,10 +1,20 @@
 //! WebTransport サーバー側実装
 //!
 //! s2n-quic + shiguredo_http3 (Sans I/O) を使い WebTransport セッションを受け付ける。
-//! draft-ietf-webtrans-http3 の draft-02 / 07 / 14 / 15 に対応する。
+//! shiguredo_http3 は draft-ietf-webtrans-http3 の draft-02 / 07 / 14 / 15 / 16 に対応する
+//! (draft-16 は draft-15 以降の検証ロジックとして扱う)。
+//!
+//! ただし本 example の QUIC 層である s2n-quic 1.86 は、RESET_STREAM_AT
+//! (draft-ietf-quic-reliable-stream-reset) の送出 API も、ピアの reset_stream_at
+//! transport parameter を取得する API も公開していない。そのため
+//! `set_webtransport_transport_verified` には reset_stream_at 非対応 (false) を渡しており、
+//! draft-14 / 15 / 16 クライアントの CONNECT は sans-I/O 層が H3_MESSAGE_ERROR で拒否する。
+//! 実際に接続できるのは draft-02 / 07 クライアントに限られる。これは s2n-quic が両 API を
+//! 公開するまでの既知の制限である。
+//!
 //! ドラフト判定は `Settings::webtransport_draft_pattern()`、CONNECT 拒否は `WtSessionRequest::reject()` を利用する。
 
-#![allow(dead_code)]
+#![expect(dead_code)]
 
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -254,6 +264,14 @@ impl WtSessionRequest {
         let server_wt = build_server_wt_settings(draft);
         let server_settings = H3Settings::default().enable_webtransport_server(server_wt);
         tracing::info!("WebTransport: server SETTINGS: {server_settings:?}");
+        // 状態機械は CONNECT 待ちループと単方向ストリーム受信タスクから参照される。
+        // 単一タスクに所有させてチャネル経由で操作する構成は、H3 イベントの取り出しを
+        // イベントループ側へ集約する大規模な変更になるため、ここでは Mutex で保護する。
+        //
+        // ロック保持中の panic で Mutex が poison された状態は、実装バグによって
+        // 状態機械が壊れている可能性がある。poison を回復して処理を続けると壊れた状態で
+        // プロトコル処理を継続してしまうため、復旧せず panic させる
+        // (全ロック箇所で expect("mutex should not be poisoned") に統一する)。
         let state = Arc::new(StdMutex::new(ServerConnectionState::new(server_settings)));
 
         // ── Phase 3: サーバー H3 ストリームを初期化して SETTINGS を送信する ──
@@ -291,13 +309,28 @@ impl WtSessionRequest {
         tracing::info!("WebTransport: H3 streams initialized (control, encoder, decoder)");
 
         // QUIC transport parameter レベルの前提条件を注入する
-        // s2n-quic は DATAGRAM (RFC 9221) をサポートするため max_datagram_frame_size > 0
-        // reset_stream_at はピアがサポートしている場合のみ true (draft-02 では不要)
+        //
+        // 第 1 引数 (max_datagram_frame_size > 0) は s2n-quic が DATAGRAM
+        // (RFC 9221) をサポートするため true にする。
+        //
+        // 第 2 引数 (reset_stream_at) は false 固定とする。s2n-quic 1.86 は
+        // RESET_STREAM_AT (draft-ietf-quic-reliable-stream-reset) の送信 API も、
+        // ピアの reset_stream_at transport parameter を取得する API も公開して
+        // いない。そのため draft-ietf-webtrans-http3-16 Section 4.4 の MUST
+        // (WT データストリームのリセットには WT ヘッダー長以上の Reliable Size を
+        // 指定した RESET_STREAM_AT を使う) を満たせない。本 example は WT データ
+        // ストリームをリセットしないため、現状は通常の RESET_STREAM も送出しない。
+        //
+        // さらに shiguredo_http3 のサーバー側検証は、ネゴシエートした draft が
+        // reset_stream_at を要求する場合に CONNECT を H3_MESSAGE_ERROR で拒否する
+        // (src/connection/wt_session.rs)。そのため本 example が draft-14 / 15 / 16
+        // クライアントと接続できるのは、クライアントが reset_stream_at を要求しない
+        // draft-02 / 07 の場合に限られる。s2n-quic が RESET_STREAM_AT と transport
+        // parameter の取得 API を公開したら、ピアの transport parameter を見て
+        // 切り替える。
         {
             let mut s = state.lock().expect("mutex should not be poisoned");
-            // TODO: ピアの transport parameters から reset_stream_at サポートを確認する
             let reset_stream_at_supported = false;
-            // s2n-quic は DATAGRAM (RFC 9221) をサポートするため max_datagram_frame_size > 0
             s.h3_conn
                 .set_webtransport_transport_verified(true, reset_stream_at_supported)
                 .map_err(|e| Error::transport(format!("transport verify failed: {e:?}")))?;
@@ -577,7 +610,7 @@ impl WtSessionRequest {
         let response_headers = ConnectResponse::new(200).to_headers()?;
 
         let data = {
-            let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut s = self.state.lock().expect("mutex should not be poisoned");
             s.h3_conn
                 .send_response(self.stream_id, &response_headers, false)?;
             let mut all_data = Vec::new();
@@ -616,7 +649,7 @@ impl WtSessionRequest {
         }
         let response_headers = ConnectResponse::new(status).to_headers()?;
         let data = {
-            let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut s = self.state.lock().expect("mutex should not be poisoned");
             s.h3_conn
                 .send_response(self.stream_id, &response_headers, true)?;
             let mut all_data = Vec::new();

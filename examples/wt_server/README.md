@@ -2,7 +2,9 @@
 
 WebTransport エコーサーバーのサンプル実装。
 
-draft-ietf-webtrans-http3 の draft-02 / 07 / 14 / 15 に対応しており、クライアントの SETTINGS から draft バージョンを自動判定して応答する。
+draft-ietf-webtrans-http3 の draft-02 / 07 クライアントに対応しており、クライアントの SETTINGS から draft バージョンを自動判定して応答する。
+
+本 example が使う s2n-quic 1.86 は RESET_STREAM_AT の送出 API も、ピアの `reset_stream_at` transport parameter を取得する API も公開していない。そのため draft-14 / 15 / 16 では必須となる `reset_stream_at` に対応できず、当該 draft のクライアントからは CONNECT が `H3_MESSAGE_ERROR` で拒否される。実際に接続できるのは draft-02 / 07 クライアントに限られる (s2n-quic が両 API を公開するまでの既知の制限)。
 
 接続後はエコーサーバーとして動作する。
 
