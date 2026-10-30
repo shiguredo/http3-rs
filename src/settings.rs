@@ -34,11 +34,13 @@ const ID_WEBTRANSPORT_MAX_SESSIONS_DRAFT07: u64 = 0xc671706a;
 /// there is no corresponding HTTP/3 setting have also been reserved
 /// (Section 11.2.2). These reserved settings MUST NOT be sent, and their receipt
 /// MUST be treated as a connection error of type H3_SETTINGS_ERROR」。
-/// §11.2.2 Table 3 で 0x02 / 0x03 / 0x04 / 0x05 が Reserved として列挙される。
+/// §11.2.2 Table 3 で HTTP/2 由来の予約設定として 0x02 / 0x03 / 0x04 / 0x05 が
+/// 列挙される。
 ///
-/// 0x00 も Table 3 で Reserved として列挙されるが §7.2.4.1 の MUST 文には
-/// 含まれない (HTTP/2 由来ではない)。本実装は [`SettingError::ReservedId`] で
-/// 別途検出する。
+/// 0x00 も Table 3 で Reserved として列挙されるが、HTTP/2 で定義された設定 ID
+/// ではないため上記 MUST 文の対象外である。本実装は 0x00 を
+/// [`Setting::Unknown`] として受理し、§7.2.4 末尾の「理解できないパラメータは
+/// MUST ignore」に従って無視する。
 pub const fn is_http2_only_id(id: u64) -> bool {
     matches!(id, 0x02..=0x05)
 }
@@ -49,7 +51,7 @@ pub const fn is_http2_only_id(id: u64) -> bool {
 /// [`Setting::from_wire`] / [`Setting::as_wire`] で行う。
 ///
 /// `Unknown` variant は [`Setting::from_wire`] 経由でのみ生成され、内部の
-/// [`UnknownSetting`] は private フィールドで HTTP/2 専用 / 予約 ID が
+/// [`UnknownSetting`] は private フィールドで HTTP/2 専用 ID が
 /// 混入できない不変条件を保証する。RFC 9114 §7.2.4 末尾「An implementation
 /// MUST ignore any parameter with an identifier it does not understand」に対応。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,14 +99,14 @@ pub enum Setting {
     /// 未知の SETTINGS パラメータ
     ///
     /// 内部の [`UnknownSetting`] は private フィールドで構築経路を
-    /// [`Setting::from_wire`] 経由に限定し、HTTP/2 専用 / 予約 ID が
+    /// [`Setting::from_wire`] 経由に限定し、HTTP/2 専用 ID が
     /// 混入できない不変条件を維持する。
     Unknown(UnknownSetting),
 }
 
 /// 未知 SETTINGS パラメータの ID と値
 ///
-/// フィールドは private で、構築は [`Setting::from_wire`] (HTTP/2 専用 / 予約 ID
+/// フィールドは private で、構築は [`Setting::from_wire`] (HTTP/2 専用 ID
 /// チェック後) を経由する以外の手段は存在しない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnknownSetting {
@@ -115,7 +117,7 @@ pub struct UnknownSetting {
 impl UnknownSetting {
     /// crate 内部で `Setting::from_wire` から呼び出すコンストラクタ
     ///
-    /// 呼び出し時点で `id` が HTTP/2 専用 / 予約済みでないことを保証する責務は
+    /// 呼び出し時点で `id` が HTTP/2 専用でないことを保証する責務は
     /// 呼び出し側 ([`Setting::from_wire`] の検査済みパス) が持つ。
     pub(crate) const fn new(id: VarInt, value: VarInt) -> Self {
         Self { id, value }
@@ -142,18 +144,6 @@ pub enum SettingError {
     ///
     /// RFC 9114 §7.2.4.1 + §11.2.2 Table 3: H3_SETTINGS_ERROR。
     Http2OnlyId {
-        /// 受信した ID
-        id: VarInt,
-    },
-
-    /// 予約済み SETTINGS ID を受信した (0x00)
-    ///
-    /// RFC 9114 §11.2.2 Table 3 で 0x00 は Reserved として登録されている。
-    /// §7.2.4.1 の MUST H3_SETTINGS_ERROR 規定は HTTP/2 由来の予約 ID
-    /// (0x02-0x05) を直接の対象とするが、Reserved に分類された 0x00 を受信した
-    /// 場合も接続クローズで処理するのが実装として妥当な選択。
-    /// 注: 0x02-0x05 は [`SettingError::Http2OnlyId`] で別途検出する。
-    ReservedId {
         /// 受信した ID
         id: VarInt,
     },
@@ -188,9 +178,6 @@ impl fmt::Display for SettingError {
             Self::Http2OnlyId { id } => {
                 write!(f, "http/2 only settings id received: {:#x}", id.get())
             }
-            Self::ReservedId { id } => {
-                write!(f, "reserved settings id received: {:#x}", id.get())
-            }
             Self::InvalidBooleanValue { id, value } => write!(
                 f,
                 "boolean settings {:#x} has invalid value {}",
@@ -210,19 +197,19 @@ impl Setting {
     /// wire 上の `(id, value)` ペアから [`Setting`] を構築する
     ///
     /// 既知パラメータは対応する variant に変換され、値の範囲外なら
-    /// [`SettingError`] を返す。HTTP/2 専用 ID (0x02-0x05) と予約済み ID (0x00) は
-    /// 拒否する。未知の ID は [`Setting::Unknown`] として受理する
-    /// (RFC 9114 §7.2.4.1: 未知パラメータは MUST ignore)。
+    /// [`SettingError`] を返す。HTTP/2 専用 ID (0x02-0x05) は接続エラーにする。
+    /// それ以外の未知 ID は [`Setting::Unknown`] として受理する
+    /// (RFC 9114 §7.2.4 末尾: 未知パラメータは MUST ignore)。
     pub fn from_wire(id: VarInt, value: VarInt) -> Result<Self, SettingError> {
         let raw = id.get();
         if is_http2_only_id(raw) {
             return Err(SettingError::Http2OnlyId { id });
         }
-        // 予約済み ID 0x00 を弾く (RFC 9114 §11.2.2 Table 3)。
-        // 0x02-0x05 は Http2OnlyId で先に分岐済み。
-        if raw == 0x00 {
-            return Err(SettingError::ReservedId { id });
-        }
+        // 0x00 は RFC 9114 §11.2.2 Table 3 で Reserved と登録されているが、
+        // HTTP/2 で定義された設定 ID ではないため §7.2.4.1 の「HTTP/2 由来の
+        // 予約設定の受信は H3_SETTINGS_ERROR」MUST の対象外である。したがって
+        // §7.2.4 末尾の「理解できないパラメータは MUST ignore」に従い、接続
+        // エラーにせず未知パラメータとして受理して無視する。
         let setting = match raw {
             ID_QPACK_MAX_TABLE_CAPACITY => Self::QpackMaxTableCapacity(value),
             ID_MAX_FIELD_SECTION_SIZE => Self::MaxFieldSectionSize(value),
@@ -447,11 +434,11 @@ impl Settings {
     /// SettingsPayload から Settings を作成
     ///
     /// `SettingsPayload` 内の各 [`Setting`] は構築時に値検査済み (ID 重複なし、
-    /// HTTP/2 専用 / 予約 ID / bool 値域外を弾き済み) のため、本関数は以下のみを
+    /// HTTP/2 専用 ID / bool 値域外を弾き済み) のため、本関数は以下のみを
     /// 担当する:
     ///
     /// - 既知パラメータ (H3) を [`Settings`] のフィールドにマッピングする
-    /// - WebTransport 関連の variant は [`webtransport::Settings::from_payload`] に委譲する
+    /// - WebTransport 関連の variant は `webtransport::Settings::from_payload` に委譲する
     /// - [`Setting::Unknown`] は MUST ignore (RFC 9114 §7.2.4 末尾) として無視する
     ///
     /// SETTINGS フレームレベルの重複 ID 検出は [`crate::frame::SettingsPayload::add`]
@@ -588,9 +575,20 @@ mod tests {
     }
 
     #[test]
-    fn test_setting_from_wire_reserved_id_rejected() {
-        let err = Setting::from_wire(v(0x00), v(0)).unwrap_err();
-        assert_eq!(err, SettingError::ReservedId { id: v(0x00) });
+    fn test_setting_from_wire_reserved_id_ignored() {
+        // 0x00 は RFC 9114 §11.2.2 Table 3 で Reserved と登録されているが、
+        // HTTP/2 で定義された設定 ID ではないため §7.2.4.1 の
+        // H3_SETTINGS_ERROR MUST の対象外である。§7.2.4 末尾の MUST ignore に
+        // 従い、接続エラーにせず Unknown として受理する。
+        let s = Setting::from_wire(v(0x00), v(0)).expect("test must succeed");
+        let Setting::Unknown(u) = s else {
+            panic!("0x00 は Unknown として受理されるべき");
+        };
+        assert_eq!(u.id(), v(0x00));
+        assert_eq!(u.value(), v(0));
+        // 受理後も wire 表現へ往復できること
+        assert_eq!(s.as_wire(), (v(0x00), v(0)));
+        assert_eq!(s.id(), v(0x00));
     }
 
     #[test]
@@ -694,10 +692,6 @@ mod tests {
         let err = SettingError::Http2OnlyId { id: v(0x02) };
         let s = format!("{err}");
         assert!(s.contains("0x2"));
-
-        let err = SettingError::ReservedId { id: v(0x00) };
-        let s = format!("{err}");
-        assert!(s.contains("0x0"));
 
         let err = SettingError::InvalidBooleanValue {
             id: v(0x08),

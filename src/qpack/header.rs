@@ -406,7 +406,14 @@ const fn check_upgrade_token(value: &[u8]) -> CheckResult {
 /// 全フィールドが private なので構造体リテラルや直接代入では構築できない。
 /// 構築は `Header::new` (ランタイム値) または `Header::from_static` (静的バイト列)
 /// を経由する必要がある。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// # `Debug` 出力
+///
+/// 機密ヘッダー (`authorization` / `proxy-authorization` / `cookie` /
+/// `set-cookie`) の値は `"<redacted>"` に置き換えて出力する。`{:?}` をログや
+/// エラーメッセージに埋め込んでも認証情報やセッション情報が残らないようにする
+/// ためである。それ以外のヘッダーの値はデバッグ用途のためにそのまま出力する。
+#[derive(Clone, PartialEq, Eq)]
 pub struct Header {
     name: Cow<'static, [u8]>,
     value: Cow<'static, [u8]>,
@@ -590,10 +597,50 @@ impl Header {
     }
 
     /// N ビット (never-indexed) を設定した新しい Header を返す
+    ///
+    /// RFC 9204 Section 4.5.4 の N ビット (never-indexed) に対応する。
+    /// true に設定したヘッダーは QPACK エンコーダーで動的テーブルへの挿入を
+    /// 禁止するリテラル表現 (N=1) で符号化され、中間プロキシはこのヘッダーを
+    /// 圧縮してはならない (RFC 7541 Section 6.2.2)。認証情報などの秘匿性が
+    /// 求められるヘッダーに使用する。
     #[inline]
     pub fn with_never_indexed(mut self, never_indexed: bool) -> Self {
         self.never_indexed = never_indexed;
         self
+    }
+}
+
+/// 値の表示を秘匿すべき機密ヘッダー名
+///
+/// 認証情報 (`authorization` / `proxy-authorization`) とセッション情報
+/// (`cookie` / `set-cookie`) を対象とする。field-name は RFC 9114 Section 4.2
+/// により小文字の token に限定されるため、小文字名との完全一致で判定する。
+const SENSITIVE_HEADER_NAMES: &[&[u8]] = &[
+    b"authorization",
+    b"proxy-authorization",
+    b"cookie",
+    b"set-cookie",
+];
+
+/// 機密ヘッダー名かどうかを判定する
+fn is_sensitive_header_name(name: &[u8]) -> bool {
+    SENSITIVE_HEADER_NAMES.contains(&name)
+}
+
+impl core::fmt::Debug for Header {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // 機密ヘッダーの値はログやエラーメッセージに残さないよう伏せる。
+        // ヘッダー名はどのフィールドか識別できるよう表示する。
+        let value = if is_sensitive_header_name(self.name()) {
+            Cow::Borrowed("<redacted>")
+        } else {
+            String::from_utf8_lossy(self.value())
+        };
+        f.debug_struct("Header")
+            .field("name", &String::from_utf8_lossy(self.name()))
+            .field("value", &value)
+            .field("never_indexed", &self.never_indexed)
+            .finish()
     }
 }
 
@@ -740,6 +787,116 @@ mod tests {
             Header::new(h.name(), h.value()),
             Err(HeaderError::UppercaseFieldName { .. })
         ));
+    }
+
+    // -------------------------------------------------------------------------
+    // Debug 出力の機密ヘッダー秘匿
+    // (認証情報 / セッション情報をログやエラーメッセージに残さない)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_debug_redacts_sensitive_header_values() {
+        // 機密ヘッダーの値は Debug 出力で伏せられること。
+        // 値に含めたマーカー文字列が出力に現れないことも確認する。
+        let cases: &[&[u8]] = &[
+            b"authorization",
+            b"proxy-authorization",
+            b"cookie",
+            b"set-cookie",
+        ];
+        for name in cases {
+            let h = Header::new(*name, b"super-secret-value").expect("test must succeed");
+            let out = format!("{h:?}");
+            assert!(
+                out.contains("<redacted>"),
+                "機密ヘッダーの値は redacted 表示されるべき: name={}, out={out}",
+                String::from_utf8_lossy(name)
+            );
+            assert!(
+                !out.contains("super-secret-value"),
+                "機密ヘッダーの生値が Debug に現れてはならない: name={}, out={out}",
+                String::from_utf8_lossy(name)
+            );
+            // ヘッダー名はどのフィールドか識別できるよう表示される
+            assert!(
+                out.contains(&format!("\"{}\"", String::from_utf8_lossy(name))),
+                "機密ヘッダー名は Debug に表示されるべき: name={}, out={out}",
+                String::from_utf8_lossy(name)
+            );
+        }
+    }
+
+    #[test]
+    fn test_debug_shows_non_sensitive_header_value() {
+        // 機密ヘッダー以外の値はデバッグ用途のためそのまま表示されること。
+        let h = Header::new(b"x-custom", b"visible-value").expect("test must succeed");
+        let out = format!("{h:?}");
+        assert!(
+            out.contains("visible-value"),
+            "非機密ヘッダーの値は Debug に表示されるべき: {out}"
+        );
+        assert!(
+            !out.contains("<redacted>"),
+            "非機密ヘッダーの値は redacted にすべきではない: {out}"
+        );
+    }
+
+    #[test]
+    fn test_debug_shows_never_indexed_flag() {
+        // never_indexed (N ビット) の状態が Debug 出力から読み取れること。
+        let h = Header::new(b"x-custom", b"v").expect("test must succeed");
+        let out = format!("{h:?}");
+        assert!(
+            out.contains("never_indexed: false"),
+            "初期状態の never_indexed は false と表示されるべき: {out}"
+        );
+
+        let h = h.with_never_indexed(true);
+        let out = format!("{h:?}");
+        assert!(
+            out.contains("never_indexed: true"),
+            "never_indexed=true が Debug に表示されるべき: {out}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // with_never_indexed (N ビット) の setter / getter
+    // (N=1 のエンコード経路は qpack::encoder 側のテストで担保する)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_with_never_indexed_sets_flag() {
+        // 構築直後は N=0 (never-indexed なし)
+        let h = Header::new(b"cookie", b"session=abc").expect("test must succeed");
+        assert!(!h.never_indexed(), "構築直後の never_indexed は false");
+
+        // setter で N=1 にできる
+        let h = h.with_never_indexed(true);
+        assert!(h.never_indexed(), "with_never_indexed(true) で true になる");
+        // 名前・値は変更されない
+        assert_eq!(h.name(), b"cookie");
+        assert_eq!(h.value(), b"session=abc");
+
+        // false を渡すと N=0 に戻せる (冪等に設定できる)
+        let h = h.with_never_indexed(false);
+        assert!(
+            !h.never_indexed(),
+            "with_never_indexed(false) で false になる"
+        );
+    }
+
+    #[test]
+    fn test_never_indexed_does_not_affect_equality() {
+        // never_indexed は field-name / field-value と同様に等価判定の対象であること。
+        // (フラグが異なる Header を同一視するとエンコード結果の差異を見落とすため)
+        let plain = Header::new(b"x-custom", b"v").expect("test must succeed");
+        let never = Header::new(b"x-custom", b"v")
+            .expect("test must succeed")
+            .with_never_indexed(true);
+        assert_ne!(
+            plain, never,
+            "never_indexed の違いは Header の等価判定に反映される"
+        );
     }
 
     // -------------------------------------------------------------------------

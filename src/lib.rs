@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! shiguredo_http3 - Sans I/O HTTP/3 ライブラリ
 //!
 //! QUIC 非依存の HTTP/3 実装。任意の QUIC 実装と組み合わせて使用可能。

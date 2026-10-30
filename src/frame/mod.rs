@@ -189,21 +189,6 @@ impl UnknownFrame {
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
-
-    /// ペイロードバイト列を所有権付きで取り出す
-    pub fn into_payload(self) -> Vec<u8> {
-        self.payload
-    }
-
-    /// ペイロードバイト数を返す
-    pub fn len(&self) -> usize {
-        self.payload.len()
-    }
-
-    /// ペイロードが空か
-    pub fn is_empty(&self) -> bool {
-        self.payload.is_empty()
-    }
 }
 
 /// DATA フレームペイロード (RFC 9114 Section 7.2.1)
@@ -359,7 +344,7 @@ impl SettingsPayload {
             crate::varint::VarInt::from_static(0x21),
             crate::varint::VarInt::ZERO,
         )
-        .expect("GREASE ID 0x21 は HTTP/2 専用 ID でも予約 ID でもないため from_wire は常に成功する（失敗時は実装バグ）");
+        .expect("GREASE ID 0x21 は HTTP/2 専用 ID ではないため from_wire は常に成功する（失敗時は実装バグ）");
         payload.add(grease).expect(
             "GREASE 設定 0x21 は既知 ID 群と競合しないため add は常に成功する（失敗時は実装バグ）",
         );

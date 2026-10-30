@@ -70,11 +70,6 @@ impl Connection {
         Ok(())
     }
 
-    /// WebTransport transport parameter が検証済みかを取得する
-    pub fn is_webtransport_transport_verified(&self) -> bool {
-        self.wt_transport_verified
-    }
-
     /// バッファリングされたストリーム/データグラムを配送する バッファリングの共通化
     ///
     /// `emit_header_events` と `send_response` の重複コードを共通化する。

@@ -30,8 +30,12 @@ fn arbitrary_varint_full(ctx: &mut noprop::TestCaseContext) -> VarInt {
 
 /// `Setting::from_wire` で受理される ID のみを生成する
 ///
-/// HTTP/2 専用 ID (0x02..=0x05) と予約 ID (0x00) を生成段階で除外する。
+/// HTTP/2 専用 ID (0x02..=0x05) を生成段階で除外する。
 /// 受理率はほぼ 1 のため rejection の試行回数は少なくて済む。
+///
+/// 0x00 は `Setting::from_wire` で Unknown として受理されるが、予約 ID の
+/// 受理挙動は `src/settings.rs` の単体テストで検証するため、ここでは生成対象
+/// から除外したままにする (生成 ID を未知 ID のラウンドトリップ用途に限定する)。
 fn settable_id(ctx: &mut noprop::TestCaseContext) -> VarInt {
     noprop::sample_with_rejection(ctx, 64, |ctx| {
         let v = arbitrary_varint_full(ctx);
@@ -222,7 +226,7 @@ fn prop_webtransport_draft_pattern_consistent() -> noprop::TestResult {
 /// Property: `Setting::from_wire` → `as_wire` → `from_wire` のラウンドトリップ
 ///
 /// VarInt 全域 (`encoded_settings_payload_len` の合算境界含む) を叩く。
-/// HTTP/2 専用 / 予約 ID は生成段階で除外する。
+/// HTTP/2 専用 ID (0x02..=0x05) は生成段階で除外する。
 #[test]
 fn prop_setting_wire_roundtrip() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("PROP_SETTINGS_SEED")?;
@@ -250,7 +254,9 @@ fn prop_setting_wire_roundtrip() -> noprop::TestResult {
 
 /// 任意の `Setting` variant を 1 つ生成する
 ///
-/// HTTP/2 専用 / 予約 ID は `Setting::from_wire` で構築不可のため除外。
+/// HTTP/2 専用 ID は `Setting::from_wire` で構築不可のため本関数の生成対象に
+/// 含めない (0x00 は Unknown として構築できるが、重複検出の対象は既知 variant
+/// に限定する)。
 /// 重複検出 PBT で variant 全体に検査が及ぶことを保証するために定義する。
 fn arbitrary_setting(ctx: &mut noprop::TestCaseContext) -> Setting {
     match noprop::sample_weighted_index(ctx, &[1u32; 12]) {

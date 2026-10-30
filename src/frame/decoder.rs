@@ -165,7 +165,9 @@ fn decode_settings_frame(payload: &[u8]) -> Result<Frame, FrameDecodeError> {
             varint::decode(&payload[offset..]).map_err(|_| FrameDecodeError::InvalidLength)?;
         offset += value_len;
 
-        // 値域 / HTTP2 専用 / 予約 / bool / 重複は全て SettingsPayload::add 経路で検査
+        // 値域 / HTTP/2 専用 ID / bool / 重複は全て Setting::from_wire と
+        // SettingsPayload::add の経路で検査する。未知 ID (0x00 を含む) は
+        // RFC 9114 Section 7.2.4 の MUST ignore に従い Unknown として受理する。
         let setting = Setting::from_wire(id, value)?;
         settings.add(setting)?;
     }
@@ -307,19 +309,30 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_settings_frame_reserved_id() {
-        use crate::settings::SettingError;
+    fn test_decode_settings_frame_reserved_id_is_ignored() {
+        use crate::settings::Setting;
+        use crate::settings::Settings;
         use crate::varint::VarInt;
 
-        // SETTINGS フレームに予約 ID 0x00 が含まれる場合 (RFC 9114 §11.2.2 Table 3)
+        // 0x00 は RFC 9114 §11.2.2 Table 3 で Reserved だが HTTP/2 で定義された
+        // 設定 ID ではないため §7.2.4.1 の H3_SETTINGS_ERROR MUST の対象外である。
+        // §7.2.4 末尾の MUST ignore に従い、SETTINGS フレームとして正常に復号し
+        // Unknown として保持したうえで、Settings へは反映しない。
         let buf = [0x04, 0x02, 0x00, 0x00];
-        let result = decode_frame(&buf);
-        assert_eq!(
-            result,
-            Err(FrameDecodeError::InvalidSetting(SettingError::ReservedId {
-                id: VarInt::ZERO
-            }))
-        );
+        let (frame, consumed) = decode_frame(&buf).expect("test must succeed");
+        assert_eq!(consumed, 4, "SETTINGS フレーム全体を消費する");
+        let Frame::Settings(payload) = frame else {
+            panic!("SETTINGS フレームとして復号されるべき");
+        };
+        assert_eq!(payload.len(), 1, "0x00 は Unknown として 1 件保持される");
+        let Setting::Unknown(unknown) = payload.settings()[0] else {
+            panic!("0x00 は Unknown として受理されるべき");
+        };
+        assert_eq!(unknown.id(), VarInt::ZERO);
+        assert_eq!(unknown.value(), VarInt::ZERO);
+        // Unknown は Settings に反映されない (MUST ignore)
+        let settings = Settings::from_payload(&payload);
+        assert!(settings.is_empty(), "Unknown は Settings に反映されない");
     }
 
     #[test]
