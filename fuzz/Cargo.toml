@@ -85,7 +85,7 @@ path = "fuzz_targets/fuzz_datagram.rs"
 test = false
 
 [dependencies]
-arbitrary = { version = "1.4", features = ["derive"] }
+arbitrary = { version = "1.5", features = ["derive"] }
 libfuzzer-sys = "0.4"
 
 [dependencies.shiguredo_http3]
