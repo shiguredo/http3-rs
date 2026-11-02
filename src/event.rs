@@ -211,7 +211,7 @@ impl WebTransportEvent {
 }
 
 /// HTTP/3 イベント
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Event {
     /// SETTINGS フレーム受信
     SettingsReceived {
@@ -277,6 +277,77 @@ pub enum Event {
     WebTransport(WebTransportEvent),
 }
 
+impl core::fmt::Debug for Event {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::SettingsReceived {
+                settings,
+                wt_settings,
+            } => f
+                .debug_struct("SettingsReceived")
+                .field("settings", settings)
+                .field("wt_settings", wt_settings)
+                .finish(),
+            Self::HeadersBegin { stream_id } => f
+                .debug_struct("HeadersBegin")
+                .field("stream_id", stream_id)
+                .finish(),
+            Self::Header {
+                stream_id,
+                name,
+                value,
+            } => {
+                // 機密ヘッダーの値はログやエラーメッセージに残さないよう伏せる。
+                // `Header` の `Debug` と同じ判定を使う。
+                let value: std::borrow::Cow<'_, str> =
+                    if crate::qpack::is_sensitive_header_name(name) {
+                        std::borrow::Cow::Borrowed("<redacted>")
+                    } else {
+                        String::from_utf8_lossy(value)
+                    };
+                f.debug_struct("Header")
+                    .field("stream_id", stream_id)
+                    .field("name", &String::from_utf8_lossy(name))
+                    .field("value", &value)
+                    .finish()
+            }
+            Self::HeadersEnd { stream_id } => f
+                .debug_struct("HeadersEnd")
+                .field("stream_id", stream_id)
+                .finish(),
+            Self::Data { stream_id, data } => f
+                .debug_struct("Data")
+                .field("stream_id", stream_id)
+                .field("data", data)
+                .finish(),
+            Self::StreamEnd { stream_id } => f
+                .debug_struct("StreamEnd")
+                .field("stream_id", stream_id)
+                .finish(),
+            Self::StreamReset {
+                stream_id,
+                error_code,
+            } => f
+                .debug_struct("StreamReset")
+                .field("stream_id", stream_id)
+                .field("error_code", error_code)
+                .finish(),
+            Self::StopSending {
+                stream_id,
+                error_code,
+            } => f
+                .debug_struct("StopSending")
+                .field("stream_id", stream_id)
+                .field("error_code", error_code)
+                .finish(),
+            Self::GoawayReceived { id } => {
+                f.debug_struct("GoawayReceived").field("id", id).finish()
+            }
+            Self::WebTransport(event) => f.debug_tuple("WebTransport").field(event).finish(),
+        }
+    }
+}
+
 impl Event {
     /// ストリーム ID を取得 (存在する場合)
     pub fn stream_id(&self) -> Option<u64> {
@@ -329,5 +400,50 @@ mod tests {
         // Event::WebTransport 経由で取得
         let event = Event::WebTransport(WebTransportEvent::UniStreamEnd { stream_id: 30 });
         assert_eq!(event.stream_id(), Some(30));
+    }
+
+    #[test]
+    fn test_event_header_debug_redacts_sensitive_value() {
+        // 機密ヘッダーの値は Debug 出力に含めない
+        let event = Event::Header {
+            stream_id: 0,
+            name: b"cookie".to_vec(),
+            value: b"session=secret".to_vec(),
+        };
+        let debug = format!("{event:?}");
+        assert!(
+            !debug.contains("session=secret"),
+            "Cookie の値が Debug 出力に含まれないこと: {debug}"
+        );
+        assert!(
+            debug.contains("<redacted>"),
+            "Cookie の値が伏せられていること: {debug}"
+        );
+
+        let event = Event::Header {
+            stream_id: 0,
+            name: b"authorization".to_vec(),
+            value: b"Bearer secret-token".to_vec(),
+        };
+        let debug = format!("{event:?}");
+        assert!(
+            !debug.contains("secret-token"),
+            "Authorization の値が Debug 出力に含まれないこと: {debug}"
+        );
+    }
+
+    #[test]
+    fn test_event_header_debug_keeps_non_sensitive_value() {
+        // 機密でないヘッダーの値はデバッグ用にそのまま出力する
+        let event = Event::Header {
+            stream_id: 0,
+            name: b"x-test".to_vec(),
+            value: b"hello".to_vec(),
+        };
+        let debug = format!("{event:?}");
+        assert!(
+            debug.contains("hello"),
+            "機密でないヘッダーの値は表示されること: {debug}"
+        );
     }
 }

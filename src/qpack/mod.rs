@@ -45,5 +45,6 @@ pub use decoder_stream::{DecoderInstruction, DecoderStream, DecoderStreamReceive
 pub use dynamic_table::{DynamicEntry, DynamicTable};
 pub use encoder::{DynamicEncoder, Encoder, estimate_encoded_size};
 pub use encoder_stream::{EncoderInstruction, EncoderStream, EncoderStreamReceiver};
+pub(crate) use header::is_sensitive_header_name;
 pub use header::{Header, HeaderError};
 pub use table::{STATIC_TABLE, STATIC_TABLE_LEN, find_static_entry, get_static_entry};

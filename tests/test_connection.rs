@@ -588,3 +588,35 @@ fn received_body_over_limit_is_excessive_load() {
         "H3_EXCESSIVE_LOAD になること: {err:?}"
     );
 }
+
+#[test]
+fn connection_debug_redacts_sensitive_headers() {
+    // Connection の Debug 出力にイベントキュー経由で Cookie の値が漏れないこと
+    let (mut client, mut server) = setup_pair();
+    let headers = vec![
+        Header::new(b":method", b"GET").expect("test must succeed"),
+        Header::new(b":path", b"/").expect("test must succeed"),
+        Header::new(b":scheme", b"https").expect("test must succeed"),
+        Header::new(b":authority", b"example.com").expect("test must succeed"),
+        Header::new(b"cookie", b"session=secret").expect("test must succeed"),
+    ];
+    let stream_id = client
+        .send_request(&headers, true)
+        .expect("test must succeed");
+    let (header_data, _) = client
+        .take_stream_data(stream_id)
+        .expect("test must succeed");
+    server
+        .feed_stream(stream_id, &header_data, true)
+        .expect("test must succeed");
+
+    let debug = format!("{server:?}");
+    assert!(
+        !debug.contains("session=secret"),
+        "Cookie の値が Connection の Debug 出力に含まれないこと"
+    );
+    assert!(
+        debug.contains("<redacted>"),
+        "Cookie の値が Connection の Debug 出力で伏せられていること"
+    );
+}

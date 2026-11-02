@@ -622,8 +622,10 @@ const SENSITIVE_HEADER_NAMES: &[&[u8]] = &[
     b"set-cookie",
 ];
 
-/// 機密ヘッダー名かどうかを判定する
-fn is_sensitive_header_name(name: &[u8]) -> bool {
+/// ヘッダー名が機密ヘッダーかどうかを判定する
+///
+/// `Event::Header` の `Debug` 実装からも参照するため crate 内に公開する。
+pub(crate) fn is_sensitive_header_name(name: &[u8]) -> bool {
     SENSITIVE_HEADER_NAMES.contains(&name)
 }
 
