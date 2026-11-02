@@ -221,6 +221,72 @@ fn test_path_with_nul_is_malformed() {
 }
 
 #[test]
+fn test_path_with_space_is_malformed() {
+    // 空白は pchar ではないため path-absolute として不正
+    // (RFC 3986 Section 3.3, RFC 9114 Section 4.3.1)
+    let headers = vec![
+        wire_header(b":method", b"GET"),
+        wire_header(b":scheme", b"https"),
+        wire_header(b":path", b"/a b"),
+        wire_header(b":authority", b"example.com"),
+    ];
+    assert!(validate_request_headers(&headers).is_err());
+}
+
+#[test]
+fn test_path_with_fragment_is_malformed() {
+    // fragment は request target に含めない (RFC 3986 Section 3.5)
+    let headers = vec![
+        wire_header(b":method", b"GET"),
+        wire_header(b":scheme", b"https"),
+        wire_header(b":path", b"/a#b"),
+        wire_header(b":authority", b"example.com"),
+    ];
+    assert!(validate_request_headers(&headers).is_err());
+}
+
+#[test]
+fn test_path_with_invalid_pct_encoding_is_malformed() {
+    // pct-encoded は "%" の後に 2 桁の HEXDIG が必要 (RFC 3986 Section 2.1)
+    for path in [b"/a%2".as_slice(), b"/a%zz", b"/a%"] {
+        let headers = vec![
+            wire_header(b":method", b"GET"),
+            wire_header(b":scheme", b"https"),
+            wire_header(b":path", path),
+            wire_header(b":authority", b"example.com"),
+        ];
+        assert!(
+            validate_request_headers(&headers).is_err(),
+            "不正な pct-encoding が拒否されること: {path:?}"
+        );
+    }
+}
+
+#[test]
+fn test_path_with_valid_pct_encoding_is_accepted() {
+    let headers = vec![
+        wire_header(b":method", b"GET"),
+        wire_header(b":scheme", b"https"),
+        wire_header(b":path", b"/a%20b"),
+        wire_header(b":authority", b"example.com"),
+    ];
+    assert!(validate_request_headers(&headers).is_ok());
+}
+
+#[test]
+fn test_extended_connect_path_with_space_is_malformed() {
+    // Extended CONNECT の :path も path-absolute の文字集合に適合すること
+    let headers = vec![
+        wire_header(b":method", b"CONNECT"),
+        wire_header(b":protocol", b"webtransport-h3"),
+        wire_header(b":scheme", b"https"),
+        wire_header(b":path", b"/a b"),
+        wire_header(b":authority", b"example.com"),
+    ];
+    assert!(validate_request_headers(&headers).is_err());
+}
+
+#[test]
 fn test_pseudo_header_value_with_trailing_space_is_malformed() {
     // field-value の先頭末尾は field-vchar でなければならない
     // (RFC 9110 Section 5.5, RFC 9114 Section 10.3)。

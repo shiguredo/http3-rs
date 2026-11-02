@@ -100,11 +100,15 @@ fn is_valid_protocol(value: &[u8]) -> bool {
 /// path-absolute (RFC 3986 Section 3.3) = "/" *( "/" segment ) で始まるか、
 /// OPTIONS リクエストの場合は "*" (RFC 9110 Section 7.1) も許可する。
 ///
-/// 本関数は path-absolute の先頭文字のみを検査する。URI としての完全な構文
-/// (空白の扱い、pct-encoding の妥当性、fragment の禁止など) は検査しない。
+/// 先頭文字だけでなく、path と query の文字集合も検証する。
+/// - pchar (RFC 3986 Section 3.3) と "/"、query では加えて "?" を許可する
+/// - pct-encoded は "%" の後に 2 桁の HEXDIG が続くことを検証する
+/// - fragment ("#") は request target に含めないため拒否する (RFC 3986 Section 3.5)
+/// - 空白などの pchar 以外の文字は拒否する
+///
+/// セグメント構造 (空セグメントの扱いやドットセグメントの正規化) は検証しない。
 /// フィールド値としての MUST (制御文字の拒否) は `validate_request_headers` が
-/// 別途 `is_valid_field_value` で保証する。URI 構文の厳密な検証をどこまで行うかは
-/// 今後の方針決定事項である。
+/// 別途 `is_valid_field_value` で保証する。
 fn is_valid_http_path(path: &[u8], method: &[u8]) -> bool {
     if path.is_empty() {
         return false;
@@ -114,7 +118,102 @@ fn is_valid_http_path(path: &[u8], method: &[u8]) -> bool {
         return true;
     }
     // path-absolute: "/" で始まる
-    path[0] == b'/'
+    if path[0] != b'/' {
+        return false;
+    }
+    // fragment は request target に含めない (RFC 3986 Section 3.5)
+    if path.contains(&b'#') {
+        return false;
+    }
+
+    // path と query を分ける (RFC 3986 Section 3.3, 3.4)
+    let (path_part, query_part) = match path.iter().position(|&b| b == b'?') {
+        Some(pos) => (&path[..pos], Some(&path[pos + 1..])),
+        None => (path, None),
+    };
+
+    if !is_valid_path_chars(path_part) {
+        return false;
+    }
+    if let Some(query) = query_part
+        && !is_valid_query_chars(query)
+    {
+        return false;
+    }
+    true
+}
+
+/// path 部分が path-absolute の文字集合に適合するか検証する
+///
+/// path-absolute = "/" *( "/" segment ) の各文字が pchar または "/" であること。
+fn is_valid_path_chars(path: &[u8]) -> bool {
+    let mut i = 0;
+    while i < path.len() {
+        let b = path[i];
+        if b == b'/' {
+            i += 1;
+            continue;
+        }
+        if b == b'%' {
+            if !is_valid_pct_encoded(path, i) {
+                return false;
+            }
+            i += 3;
+            continue;
+        }
+        if !is_pchar(b) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// query 部分が query の文字集合に適合するか検証する
+///
+/// query = *( pchar / "/" / "?" ) (RFC 3986 Section 3.4)。
+fn is_valid_query_chars(query: &[u8]) -> bool {
+    let mut i = 0;
+    while i < query.len() {
+        let b = query[i];
+        if b == b'/' || b == b'?' {
+            i += 1;
+            continue;
+        }
+        if b == b'%' {
+            if !is_valid_pct_encoded(query, i) {
+                return false;
+            }
+            i += 3;
+            continue;
+        }
+        if !is_pchar(b) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `pos` から始まる pct-encoded ("%" HEXDIG HEXDIG) が完全かを検証する
+fn is_valid_pct_encoded(bytes: &[u8], pos: usize) -> bool {
+    bytes.len() >= pos + 3
+        && bytes[pos + 1].is_ascii_hexdigit()
+        && bytes[pos + 2].is_ascii_hexdigit()
+}
+
+/// pchar の 1 バイトかを検証する (RFC 3986 Section 3.3)
+///
+/// pchar = unreserved / pct-encoded / sub-delims / ":" / "@"
+/// unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"
+/// sub-delims = "!" / "$" / "&" / "'" / "(" / ")" / "*" / "+" / "," / ";" / "="
+fn is_pchar(b: u8) -> bool {
+    matches!(b,
+        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' |
+        b'-' | b'.' | b'_' | b'~' |
+        b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'=' |
+        b':' | b'@'
+    )
 }
 
 /// フィールド名の 1 バイトが token 文字 (tchar) であるかを検証する (RFC 9110 Section 5.6.2)
@@ -475,9 +574,10 @@ pub fn validate_request_headers(headers: &[Header]) -> Result<(), Error> {
         {
             return Err(Error::StreamError(ErrorCode::MessageError));
         }
-        // :path は空であってはならない (RFC 9114 Section 4.3.1)
+        // :path は空であってはならず、path-absolute の文字集合に適合すること
+        // (RFC 9114 Section 4.3.1, RFC 3986 Section 3.3)
         if let Some(p) = path
-            && p.is_empty()
+            && !is_valid_http_path(p, method)
         {
             return Err(Error::StreamError(ErrorCode::MessageError));
         }
