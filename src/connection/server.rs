@@ -52,6 +52,14 @@ impl ServerConnection {
         self.inner.feed_stream(stream_id, data, fin)
     }
 
+    /// 受信ボディの累積上限を設定する
+    ///
+    /// 既に作成済みのリクエストストリームにも即座に反映する。
+    /// 上限を超えた DATA を受信した接続は `H3_EXCESSIVE_LOAD` で閉じる。
+    pub fn set_max_received_body_size(&mut self, size: u64) {
+        self.inner.set_max_received_body_size(size);
+    }
+
     /// イベントを取得
     pub fn poll_event(&mut self) -> Result<Option<Event>, Error> {
         self.inner.poll_event()

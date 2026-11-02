@@ -550,6 +550,18 @@ impl Connection {
         Ok(())
     }
 
+    /// 受信ボディの累積上限を設定する
+    ///
+    /// 既に作成済みのリクエストストリームにも即座に反映する。
+    /// 既定値は [`crate::limits::DEFAULT_MAX_RECEIVED_BODY_SIZE`]。
+    /// 上限を超えた DATA を受信した接続は `H3_EXCESSIVE_LOAD` で閉じる。
+    pub fn set_max_received_body_size(&mut self, size: u64) {
+        self.limits.max_received_body_size = size;
+        for stream in self.streams.values_mut() {
+            stream.set_max_received_body_size(size);
+        }
+    }
+
     /// 制御ストリーム・QPACK encoder/decoder ストリームを一括で初期化する
     ///
     /// 3 つのストリーム ID を設定し、各ストリームの初期データを取得する。
@@ -1500,9 +1512,13 @@ impl Connection {
         }
 
         // ストリームを取得または作成
-        self.streams
-            .entry(stream_id)
-            .or_insert_with(|| RequestStream::new(stream_id, self.role));
+        let role = self.role;
+        let max_received_body_size = self.limits.max_received_body_size;
+        self.streams.entry(stream_id).or_insert_with(|| {
+            let mut stream = RequestStream::new(stream_id, role);
+            stream.set_max_received_body_size(max_received_body_size);
+            stream
+        });
 
         // まずデータを受信 (ストリームの内部バッファに追加)
         if let Some(stream) = self.streams.get_mut(&stream_id) {
@@ -2031,6 +2047,7 @@ impl Connection {
         self.next_stream_id += 4;
 
         let mut stream = RequestStream::new(stream_id, self.role);
+        stream.set_max_received_body_size(self.limits.max_received_body_size);
         // WebTransport CONNECT の場合は WT CONNECT フラグを設定する
         // (DATA を recv_body に累積しない。Capsule データは handle_wt_data_frame が処理する)
         let is_wt_connect = is_webtransport_connect(headers);

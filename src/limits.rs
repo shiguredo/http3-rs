@@ -11,6 +11,14 @@ pub const DEFAULT_QPACK_MAX_TABLE_CAPACITY: u64 = 4096;
 /// デフォルトの QPACK ブロックストリーム数 (RFC 9204 Section 4.3.1)
 pub const DEFAULT_QPACK_BLOCKED_STREAMS: u64 = 100;
 
+/// デフォルトの受信ボディ累積上限 (バイト)
+///
+/// `RequestStream` が `recv_body` に保持する受信ボディの上限。
+/// 上限を超えた場合は `H3_EXCESSIVE_LOAD` で接続を閉じる。
+/// ピアが DATA フレームを送り続けてメモリを枯渇させるのを防ぐための値であり、
+/// `SETTINGS_MAX_FIELD_SECTION_SIZE` とは独立している。
+pub const DEFAULT_MAX_RECEIVED_BODY_SIZE: u64 = 16 * 1024 * 1024;
+
 /// HTTP/3 制限設定
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
@@ -20,6 +28,12 @@ pub struct Limits {
     pub qpack_max_table_capacity: u64,
     /// QPACK ブロックストリーム数 (SETTINGS_QPACK_BLOCKED_STREAMS)
     pub qpack_blocked_streams: u64,
+    /// 受信ボディの累積上限 (バイト)
+    ///
+    /// リクエストとレスポンスの `RequestStream` が `recv_body` に保持する
+    /// ボディの上限。WebTransport CONNECT ストリームの DATA は Capsule データ
+    /// であり、この上限の対象外である。
+    pub max_received_body_size: u64,
 }
 
 impl Default for Limits {
@@ -28,6 +42,7 @@ impl Default for Limits {
             max_field_section_size: DEFAULT_MAX_FIELD_SECTION_SIZE,
             qpack_max_table_capacity: DEFAULT_QPACK_MAX_TABLE_CAPACITY,
             qpack_blocked_streams: DEFAULT_QPACK_BLOCKED_STREAMS,
+            max_received_body_size: DEFAULT_MAX_RECEIVED_BODY_SIZE,
         }
     }
 }
@@ -55,6 +70,12 @@ impl Limits {
         self.qpack_blocked_streams = streams;
         self
     }
+
+    /// 受信ボディの累積上限を設定
+    pub fn max_received_body_size(mut self, size: u64) -> Self {
+        self.max_received_body_size = size;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -73,6 +94,10 @@ mod tests {
             DEFAULT_QPACK_MAX_TABLE_CAPACITY
         );
         assert_eq!(limits.qpack_blocked_streams, DEFAULT_QPACK_BLOCKED_STREAMS);
+        assert_eq!(
+            limits.max_received_body_size,
+            DEFAULT_MAX_RECEIVED_BODY_SIZE
+        );
     }
 
     #[test]
@@ -80,10 +105,12 @@ mod tests {
         let limits = Limits::new()
             .max_field_section_size(32 * 1024)
             .qpack_max_table_capacity(4096)
-            .qpack_blocked_streams(100);
+            .qpack_blocked_streams(100)
+            .max_received_body_size(1024);
 
         assert_eq!(limits.max_field_section_size, 32 * 1024);
         assert_eq!(limits.qpack_max_table_capacity, 4096);
         assert_eq!(limits.qpack_blocked_streams, 100);
+        assert_eq!(limits.max_received_body_size, 1024);
     }
 }

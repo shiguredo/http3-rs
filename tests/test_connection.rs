@@ -546,3 +546,45 @@ fn local_send_error_does_not_latch_connection() {
         .expect("エラー後に制御ストリームを設定すれば送信できること");
     assert_eq!(stream_id, 0, "失敗した送信はストリーム ID を消費しないこと");
 }
+
+#[test]
+fn received_body_over_limit_is_excessive_load() {
+    // 受信ボディの累積上限を超えた DATA は H3_EXCESSIVE_LOAD で接続を閉じる
+    let (mut client, mut server) = setup_pair();
+    server.set_max_received_body_size(4);
+
+    let headers = vec![
+        Header::new(b":method", b"POST").expect("test must succeed"),
+        Header::new(b":path", b"/upload").expect("test must succeed"),
+        Header::new(b":scheme", b"https").expect("test must succeed"),
+        Header::new(b":authority", b"example.com").expect("test must succeed"),
+    ];
+    let stream_id = client
+        .send_request(&headers, false)
+        .expect("test must succeed");
+
+    // ヘッダーをサーバーに届けてイベントを消費する
+    let (header_data, _) = client
+        .take_stream_data(stream_id)
+        .expect("test must succeed");
+    server
+        .feed_stream(stream_id, &header_data, false)
+        .expect("test must succeed");
+    while server.poll_event().expect("test must succeed").is_some() {}
+
+    // 上限 (4 バイト) を超える 5 バイトのボディを送る
+    client
+        .send_body(stream_id, b"hello", true)
+        .expect("test must succeed");
+    let (body_data, _) = client
+        .take_stream_data(stream_id)
+        .expect("test must succeed");
+
+    let err = server
+        .feed_stream(stream_id, &body_data, true)
+        .expect_err("上限を超えるボディは拒否されること");
+    assert!(
+        matches!(err, Error::ConnectionError(ErrorCode::ExcessiveLoad)),
+        "H3_EXCESSIVE_LOAD になること: {err:?}"
+    );
+}

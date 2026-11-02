@@ -5,6 +5,7 @@
 use crate::connection::Role;
 use crate::error::{Error, ErrorCode};
 use crate::frame::{self, DataPayload, Frame, HeadersPayload};
+use crate::limits::DEFAULT_MAX_RECEIVED_BODY_SIZE;
 use crate::qpack::Header;
 use crate::webtransport::stream::BIDIRECTIONAL_SIGNAL_VALUE;
 
@@ -59,6 +60,11 @@ pub struct RequestStream {
     recv_headers: Vec<Header>,
     /// 受信済みボディ
     recv_body: Vec<u8>,
+    /// 受信ボディの累積上限 (バイト)
+    ///
+    /// ピアが DATA フレームを送り続けてメモリを枯渇させるのを防ぐための上限。
+    /// 上限を超えた DATA を受信した場合は `H3_EXCESSIVE_LOAD` で接続を閉じる。
+    max_received_body_size: u64,
     /// HEAD リクエストかどうか (クライアントが HEAD を送信した場合 true)
     ///
     /// Content-Length 検証でレスポンスの body チェックをスキップするために使用する。
@@ -118,6 +124,7 @@ impl RequestStream {
             state: StreamState::Open,
             recv_headers: Vec::new(),
             recv_body: Vec::new(),
+            max_received_body_size: DEFAULT_MAX_RECEIVED_BODY_SIZE,
             is_head_request: false,
             is_connect_request: false,
             is_connect: false,
@@ -133,6 +140,20 @@ impl RequestStream {
     /// ストリーム ID を取得
     pub fn stream_id(&self) -> u64 {
         self.stream_id
+    }
+
+    /// 受信ボディの累積上限を設定する
+    ///
+    /// 既定値は [`DEFAULT_MAX_RECEIVED_BODY_SIZE`]。`Connection` は自身の
+    /// `Limits` から値を反映する。上限を超えた DATA を受信すると
+    /// `H3_EXCESSIVE_LOAD` の接続エラーを返す。
+    pub fn set_max_received_body_size(&mut self, size: u64) {
+        self.max_received_body_size = size;
+    }
+
+    /// 受信ボディの累積上限を取得する
+    pub fn max_received_body_size(&self) -> u64 {
+        self.max_received_body_size
     }
 
     /// ストリーム状態を取得
@@ -391,6 +412,12 @@ impl RequestStream {
                     // WebTransport CONNECT ストリームの DATA は Capsule データであり、
                     // recv_body に累積しない (転送量に比例したメモリ消費を防ぐ)
                     if !self.is_wt_connect {
+                        // ピアが DATA を送り続けてメモリを枯渇させるのを防ぐ
+                        // (H3_EXCESSIVE_LOAD は RFC 9114 Section 8.1 の接続エラー)
+                        let new_len = self.recv_body.len().saturating_add(data.len());
+                        if new_len as u64 > self.max_received_body_size {
+                            return Err(Error::ConnectionError(ErrorCode::ExcessiveLoad));
+                        }
                         self.recv_body.extend_from_slice(&data);
                     }
                     return Ok(Some(RawReceivedData::Data(data)));
@@ -806,6 +833,72 @@ mod tests {
         } else {
             panic!("expected Headers");
         }
+    }
+
+    #[test]
+    fn test_request_stream_received_body_limit() {
+        // 受信ボディの累積上限を超えた DATA は H3_EXCESSIVE_LOAD で拒否する
+        let mut stream = RequestStream::new(0, Role::Server);
+        stream.set_max_received_body_size(4);
+        assert_eq!(stream.max_received_body_size(), 4);
+
+        // HEADERS フレーム (QPACK: RIC=0, DeltaBase=0, Indexed :method GET)
+        let headers_frame = [0x01, 0x03, 0x00, 0x00, 0xd1];
+        stream.receive(&headers_frame, false);
+        let _ = stream
+            .process_raw()
+            .expect("test must succeed")
+            .expect("test must succeed");
+
+        // 上限ちょうどの DATA は受理される
+        let data_frame = [0x00, 0x04, b'h', b'e', b'l', b'l'];
+        stream.receive(&data_frame, false);
+        let result = stream.process_raw().expect("test must succeed");
+        assert!(
+            matches!(result, Some(RawReceivedData::Data(_))),
+            "上限ちょうどの DATA は受理されること"
+        );
+        assert_eq!(stream.received_body(), b"hell");
+
+        // 上限を超える DATA は H3_EXCESSIVE_LOAD (RFC 9114 Section 8.1)
+        let data_frame = [0x00, 0x01, b'o'];
+        stream.receive(&data_frame, false);
+        let result = stream.process_raw();
+        assert!(
+            matches!(
+                result,
+                Err(Error::ConnectionError(ErrorCode::ExcessiveLoad))
+            ),
+            "上限を超える DATA は H3_EXCESSIVE_LOAD になること"
+        );
+    }
+
+    #[test]
+    fn test_request_stream_wt_connect_body_is_not_limited() {
+        // WebTransport CONNECT ストリームの DATA は Capsule データであり、
+        // recv_body に累積しないためボディ上限の対象外である
+        let mut stream = RequestStream::new(0, Role::Server);
+        stream.set_wt_connect();
+        stream.set_max_received_body_size(1);
+
+        let headers_frame = [0x01, 0x03, 0x00, 0x00, 0xd1];
+        stream.receive(&headers_frame, false);
+        let _ = stream
+            .process_raw()
+            .expect("test must succeed")
+            .expect("test must succeed");
+
+        let data_frame = [0x00, 0x05, b'h', b'e', b'l', b'l', b'o'];
+        stream.receive(&data_frame, false);
+        let result = stream.process_raw().expect("test must succeed");
+        assert!(
+            matches!(result, Some(RawReceivedData::Data(_))),
+            "WT CONNECT の DATA はボディ上限の対象外であること"
+        );
+        assert!(
+            stream.received_body().is_empty(),
+            "WT CONNECT の DATA は recv_body に累積しないこと"
+        );
     }
 
     #[test]

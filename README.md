@@ -462,8 +462,11 @@ SETTINGS コードポイントと `:protocol` は同一です。draft-16 で変�
 - 最大ヘッダーセクションサイズ: 16KB
 - QPACK 最大テーブル容量: 4096 バイト
 - QPACK ブロックストリーム数: 100
+- 受信ボディの累積上限: 16 MiB (超えた場合は `H3_EXCESSIVE_LOAD` で接続を閉じる)
 
-`Limits` で各制限値をカスタマイズ可能です。
+`Limits` で各制限値をカスタマイズ可能です。受信ボディの上限は
+`ClientConnection::set_max_received_body_size` /
+`ServerConnection::set_max_received_body_size` でも変更できます。
 
 ## クレート構成
 
