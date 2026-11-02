@@ -34,37 +34,43 @@ impl Connection {
             if session.capsule_buf.is_empty() {
                 break;
             }
-            let buf = session.capsule_buf.clone();
 
-            match crate::webtransport::Capsule::decode(&buf) {
-                Ok(Some((capsule, consumed))) => {
-                    let has_trailing = buf.len() > consumed;
-                    let is_close_session =
-                        matches!(capsule, crate::webtransport::Capsule::CloseSession { .. });
-                    // バッファから消費済み部分を除去
-                    if let Some(session) = self.wt_sessions.get_mut(&session_id) {
-                        session.capsule_buf.drain(..consumed);
+            // バッファ全体を clone すると、1 つの DATA フレームに小さなカプセルが
+            // 多数含まれる場合にコピー量がカプセル数の 2 乗で増える。
+            // デコード結果 (所有権を持つ Capsule と消費バイト数) を取り出してから
+            // 借用を終了し、drain とハンドラ呼び出しを行う。
+            let (capsule, consumed, has_trailing) =
+                match crate::webtransport::Capsule::decode(&session.capsule_buf) {
+                    Ok(Some((capsule, consumed))) => {
+                        let has_trailing = session.capsule_buf.len() > consumed;
+                        (capsule, consumed, has_trailing)
                     }
-
-                    // Capsule を処理してイベントに変換
-                    self.handle_wt_capsule(session_id, &capsule)?;
-
-                    // WT_CLOSE_SESSION に続く同一 DATA フレーム内の追加バイトは
-                    // H3_MESSAGE_ERROR で拒否する (draft-ietf-webtrans-http3-16 Section 6)。
-                    // セッション除去で while ループが終了するため、ここで検出する。
-                    if is_close_session && has_trailing {
+                    Ok(None) => {
+                        // バッファ不足: 次の DATA フレームを待つ
+                        break;
+                    }
+                    Err(_) => {
+                        // RFC 9297 Section 3.3: malformed Capsule は
+                        // HTTP message エラーとして扱う → H3_MESSAGE_ERROR
                         return Err(Error::StreamError(ErrorCode::MessageError));
                     }
-                }
-                Ok(None) => {
-                    // バッファ不足: 次の DATA フレームを待つ
-                    break;
-                }
-                Err(_) => {
-                    // RFC 9297 Section 3.3: malformed Capsule は
-                    // HTTP message エラーとして扱う → H3_MESSAGE_ERROR
-                    return Err(Error::StreamError(ErrorCode::MessageError));
-                }
+                };
+
+            let is_close_session =
+                matches!(capsule, crate::webtransport::Capsule::CloseSession { .. });
+            // バッファから消費済み部分を除去
+            if let Some(session) = self.wt_sessions.get_mut(&session_id) {
+                session.capsule_buf.drain(..consumed);
+            }
+
+            // Capsule を処理してイベントに変換
+            self.handle_wt_capsule(session_id, &capsule)?;
+
+            // WT_CLOSE_SESSION に続く同一 DATA フレーム内の追加バイトは
+            // H3_MESSAGE_ERROR で拒否する (draft-ietf-webtrans-http3-16 Section 6)。
+            // セッション除去で while ループが終了するため、ここで検出する。
+            if is_close_session && has_trailing {
+                return Err(Error::StreamError(ErrorCode::MessageError));
             }
         }
 
