@@ -58,5 +58,5 @@ draft-ietf-webtrans-http3-17 Section 4.3 に従い、不正な位置や方向で
 - `src/webtransport/stream.rs` に `is_wt_stream_frame_type` を追加し、リクエストストリームと制御ストリームで同じ判定を使うようにした
 - `src/stream/request.rs` のリクエストストリームで、フレームヘッダーをデコードする前に WT_STREAM 型を判定し、不正な位置なら `H3_FRAME_UNEXPECTED` を返すようにした。サーバーが受信側となるクライアント開始双方向ストリームの先頭だけを例外として無視し、`Frame::Unknown` アームの 0x41 判定は削除した
 - `src/stream/control.rs` の制御ストリームで、フレームタイプ確定時点で WT_STREAM 型を判定するようにした。SETTINGS 受信前は `H3_MISSING_SETTINGS`、受信後は `H3_FRAME_UNEXPECTED` を返す。到達不能になった `Frame::Unknown` アームの 0x41 判定は削除した
-- 一般のフレーム途中切れ (`H3_FRAME_ERROR`)、0x41 以外の未知フレームの無視、HTTP/2 専用フレームのエラー、登記済み WT 双方向ストリームの逆方向データは変更していない
+- 一般のフレーム途中切れ (`H3_FRAME_ERROR`)、0x41 以外の未知フレームの無視、HTTP/2 専用フレームのエラー、登録済み WT 双方向ストリームの逆方向データは変更していない
 - テストを追加・更新した: リクエスト先頭 / 途中、レスポンス先頭 / 途中、SETTINGS 前後の制御ストリーム、分割された可変長整数、length の無い入力、型確定後の不完全な length、フレームタイプ自体が未完の場合の `H3_FRAME_ERROR`、サーバー開始ストリームでの例外不適用、本文版と旧 draft の両方、正当な双方向ストリームのデータ配送、登録済みストリームの逆方向データに 0x41 が含まれる場合

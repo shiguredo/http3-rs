@@ -100,9 +100,9 @@ pub struct RequestStream {
     /// 接続ロール
     ///
     /// WT_STREAM (0x41) をストリーム先頭で受信したときの扱いをロールで分ける
-    /// (draft-ietf-webtrans-http3-17 Section 4.3)。サーバー側のみ "the very first
-    /// bytes sent by the initiator of a bidirectional stream" に該当する先頭位置を
-    /// 無視してよい。
+    /// (draft-ietf-webtrans-http3-17 Section 4.3)。サーバーが受信側となるクライアント
+    /// 開始の双方向ストリームの先頭だけが "the very first bytes sent by the initiator
+    /// of a bidirectional stream" に該当し、無視してよい。
     role: Role,
     /// 最初のフレームを処理済みかどうか
     ///
@@ -1172,6 +1172,23 @@ mod tests {
                 Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
             ),
             "サーバー開始ストリームでは先頭例外を適用しないこと: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_request_stream_client_uni_stream_wt_stream_is_frame_unexpected() {
+        // 単方向ストリーム (stream_id = 2 は ClientUni) は双方向ストリームではないため、
+        // 先頭の WT_STREAM (0x41) にも例外を適用しない
+        // (draft-ietf-webtrans-http3-17 Section 4.3)。
+        let mut stream = RequestStream::new(2, Role::Server);
+        stream.receive(&[0x40, 0x41], false);
+        let result = stream.process_raw();
+        assert!(
+            matches!(
+                result,
+                Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
+            ),
+            "単方向ストリームでは先頭例外を適用しないこと: {result:?}"
         );
     }
 
