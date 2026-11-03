@@ -46,10 +46,35 @@ impl Connection {
 
     /// 0-RTT 再開時の前回接続のピア WebTransport SETTINGS を注入する
     ///
-    /// クライアントが 0-RTT 再開時に、前回接続でキャッシュしたピアの
-    /// WebTransport SETTINGS を注入する。SETTINGS フレーム受信時に
-    /// フロー制御値の減少を検出して H3_SETTINGS_ERROR で接続を閉じる。
-    /// (draft-ietf-webtrans-http3-16 Section 3.2)
+    /// draft-14 / 15 / 16 の 0-RTT 再開用である。クライアントが 0-RTT 再開時に、
+    /// 前回接続でキャッシュしたピアの WebTransport SETTINGS を注入する。
+    ///
+    /// クライアント接続でのみ判定に使う (サーバー接続では保持するが比較しない)。
+    ///
+    /// SETTINGS フレーム受信時に、次のいずれかに該当し、かつ現在の初期上限
+    /// (単方向 / 双方向ストリーム上限、データ上限。draft-14 では最大セッション数も)
+    /// のいずれかが前回値より小さければ H3_SETTINGS_ERROR で接続を閉じる
+    /// (draft-ietf-webtrans-http3-14 Section 3.2,
+    ///  draft-ietf-webtrans-http3-15 Section 3.2,
+    ///  draft-ietf-webtrans-http3-16 Section 3.2)。
+    ///
+    /// - 接続で選択した版が draft-14 / 15 / 16 の場合
+    /// - 版を決定できないが、ローカルが draft-14 / 15 を広告し、draft-17 を
+    ///   広告せず、ピアも draft-17 を広告していない場合
+    ///
+    /// 現在の SETTINGS で項目を省略した場合は 0 として比較する
+    /// (draft-ietf-webtrans-http3-16 Section 5.5)。
+    ///
+    /// 0-RTT が受け入れられた接続でのみ注入する。0-RTT を拒否した接続では
+    /// キャッシュした値を送信に使わないため、この値を注入する必要はない。
+    ///
+    /// draft-17 を選択した接続と、版を決定できない場合のうち draft-17 に対応する
+    /// 端点 (SETTINGS_WT_ENABLED を送らない本文版だけのクライアントを含む) は、
+    /// 前回接続の WT SETTINGS を引き継がず、現在接続で受信した値と省略時の
+    /// デフォルト値だけを使うため、この値は使われない
+    /// (draft-ietf-webtrans-http3-17 Section 3.2)。版は SETTINGS のコードポイントの
+    /// 交差で決まるので、値を注入したことだけを理由に旧規則が適用されることはない。
+    /// draft-17 の 0-RTT 再開では注入しなくてよい。
     pub fn set_previous_wt_settings(&mut self, settings: crate::webtransport::Settings) {
         self.previous_wt_settings = Some(settings);
     }
@@ -240,38 +265,27 @@ impl Connection {
             .is_some_and(|settings| settings.advertises_wt_enabled())
     }
 
-    /// 接続単位で選択した WebTransport のドラフト版を返す
+    /// 指定したピア SETTINGS を使って接続で使う WebTransport のドラフト版を選ぶ
     ///
-    /// SETTINGS のコードポイントによる版選択の結果を返す。
-    /// ピアの SETTINGS を受信していない場合は `None`。
+    /// [`Connection::negotiated_wt_draft_version`] と、SETTINGS フレーム受信時の
+    /// 版判定の両方から使う。受信処理では `self.peer_settings` を更新する前に
+    /// 判定する必要があるため、ピアの HTTP/3 SETTINGS を引数で受け取る。
     ///
-    /// 選択規則は次のとおり (draft-ietf-webtrans-http3-17 Section 7.1):
-    ///
-    /// - クライアント: ローカルとピアが共に広告している版のうち最も優先度の高い版。
-    ///   交差がなければ `None`。ローカルが対応しない版をピアの広告だけから選ばない
-    /// - サーバー: クライアントが本文版のコードポイントを広告していれば本文版。
-    ///   そうでなければ対応する旧 ID のうち最も優先度の高い版。どちらもなければ
-    ///   本文版に対応していれば本文版、対応していなければ `None`
-    ///
-    /// 優先度は [`Settings::advertised_draft_versions`](crate::webtransport::Settings::advertised_draft_versions)
-    /// の順に従う。draft-07 と draft-14 の ID が併送された場合は、Safari
-    /// (Network.framework) が両方を送り、かつサーバーが draft-14 の要件で応答すると
-    /// 接続できないため、検出と同じく draft-07 を優先する (docs/SAFARI_WT.md)。
-    /// これは「最も新しい版を選ぶ」規則の Safari 互換の例外である。
-    ///
-    /// 本文版だけに対応するクライアントは SETTINGS_WT_ENABLED を送らないため
-    /// (draft-ietf-webtrans-http3-17 Section 7.1)、ローカルが SETTINGS_WT_ENABLED を
-    /// 広告していない場合は、ピアが本文版のコードポイントを広告していれば本文版を選ぶ。
-    ///
-    /// `None` の扱いはロールで異なる。クライアントは使用する版がないため
-    /// WebTransport を開始できない。サーバーは SETTINGS_WT_ENABLED を広告して
-    /// いる場合に CONNECT を受理してはならない。
+    /// `peer_settings` が `None` の場合はピアの SETTINGS を未受信として扱う。
+    /// サーバーはクライアントの SETTINGS を受信するまで版を決められない
+    /// (draft-ietf-webtrans-http3-17 Section 7.1)。
+    /// HTTP/3 SETTINGS 全体を受け取るのは、サーバーで「SETTINGS 未受信」と
+    /// 「受信済みだが WebTransport の広告がない」を区別するため。
+    /// 選択規則の詳細は [`Connection::negotiated_wt_draft_version`] を参照。
     /// 将来のドラフトで変更される可能性がある
-    pub fn negotiated_wt_draft_version(&self) -> Option<DraftVersion> {
+    pub(crate) fn select_wt_draft_version(
+        &self,
+        peer_settings: Option<&crate::settings::Settings>,
+    ) -> Option<DraftVersion> {
         let local = self.local_settings.wt_settings.as_ref()?;
         match self.role {
             Role::Client => {
-                let peer = self.peer_settings.as_ref()?.wt_settings.as_ref()?;
+                let peer = peer_settings?.wt_settings.as_ref()?;
                 if let Some(draft) = local.first_mutual_draft(peer) {
                     return Some(draft);
                 }
@@ -288,7 +302,7 @@ impl Connection {
                 // (draft-ietf-webtrans-http3-17 Section 7.1: サーバーは
                 //  クライアントの SETTINGS を受信するまで WebTransport リクエストを
                 //  処理してはならない)。
-                let peer_settings = self.peer_settings.as_ref()?;
+                let peer_settings = peer_settings?;
                 if let Some(peer) = peer_settings.wt_settings.as_ref()
                     && let Some(draft) = local.first_mutual_draft(peer)
                 {
@@ -302,6 +316,36 @@ impl Connection {
                     .then_some(DraftVersion::Draft17)
             }
         }
+    }
+
+    /// 接続単位で選択した WebTransport のドラフト版を返す
+    ///
+    /// SETTINGS のコードポイントによる版選択の結果を返す。
+    /// ピアの SETTINGS を受信していない場合は `None`。
+    ///
+    /// 選択規則は次のとおり (draft-ietf-webtrans-http3-17 Section 7.1):
+    ///
+    /// - クライアント: ローカルとピアが共に広告している版のうち最も優先度の高い版。
+    ///   ローカルが対応しない版をピアの広告だけから選ばない。交差がなくても、
+    ///   ローカルが版を 1 つも広告せずピアが本文版を広告していれば本文版
+    /// - サーバー: クライアントが本文版のコードポイントを広告していれば本文版。
+    ///   そうでなければ対応する旧 ID のうち最も優先度の高い版。どちらもなければ
+    ///   本文版に対応していれば本文版、対応していなければ `None`
+    ///
+    /// 優先度は [`Settings::advertised_draft_versions`](crate::webtransport::Settings::advertised_draft_versions)
+    /// の順に従う。draft-07 と draft-14 の ID が併送された場合は、Safari
+    /// (Network.framework) が両方を送り、かつサーバーが draft-14 の要件で応答すると
+    /// 接続できないため、検出と同じく draft-07 を優先する (docs/SAFARI_WT.md)。
+    /// これは「最も新しい版を選ぶ」規則の Safari 互換の例外である。
+    ///
+    /// `None` の扱いはロールで異なる。クライアントは使用する版がないため
+    /// WebTransport を開始できない。サーバーは SETTINGS_WT_ENABLED を広告して
+    /// いる場合に CONNECT を受理してはならない。
+    /// 将来のドラフトで変更される可能性がある
+    pub fn negotiated_wt_draft_version(&self) -> Option<DraftVersion> {
+        // SETTINGS 受信処理と同じ選択規則を使う。受信処理では peer_settings を
+        // 更新する前に判定するため、選択規則は `select_wt_draft_version` に集約する。
+        self.select_wt_draft_version(self.peer_settings.as_ref())
     }
 
     /// WebTransport の能力ネゴシエーションが完了しているかどうかを判定する

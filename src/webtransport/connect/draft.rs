@@ -16,7 +16,7 @@ use super::ProtocolToken;
 /// SETTINGS のコードポイントと `:protocol` トークンで版を識別するための値であり、
 /// 各ドラフト仕様全体への準拠を表すものではない。たとえば [`DraftVersion::Draft17`]
 /// は draft-17 の SETTINGS コードポイントに対応する版を表し、draft-17 の全規定
-/// (0-RTT 時の SETTINGS 破棄や WT_STREAM のエラーコードなど) への準拠を意味しない。
+/// (WT_STREAM のエラーコードなど) への準拠を意味しない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DraftVersion {
     /// draft-ietf-webtrans-http3-02

@@ -5,6 +5,10 @@
 
 use shiguredo_http3::webtransport::{
     Capsule, CapsuleProcessError, Error, ErrorCode, FlowControlLimits, Session,
+    Settings as WtSettings,
+};
+use shiguredo_http3::{
+    ClientConnection, Event, Frame, Settings, SettingsPayload, VarInt, frame::encode_frame,
 };
 
 /// ヘルパー: セッション間でカプセルを転送する
@@ -511,4 +515,72 @@ fn test_peer_settings_initial_limits_are_monotonic_baseline() {
         ))),
         "SETTINGS 初期値 (50) 以下の WT_MAX_STREAMS (双方向) はセッションエラーになること"
     );
+}
+
+/// 現在接続の SETTINGS 初期値だけが通知されること
+///
+/// 0-RTT 再開で前回接続の初期上限を注入しても、Connection の SETTINGS 受信
+/// イベントには現在接続の値だけが載ることを確認する。
+/// (draft-ietf-webtrans-http3-16 Section 5.5, 5.6.2, 5.6.4,
+///  draft-ietf-webtrans-http3-17 Section 3.2)
+#[test]
+fn test_settings_received_reports_current_values_after_resumption() {
+    let v = |value: u64| VarInt::new(value).expect("テスト用の VarInt 値が範囲に収まること");
+
+    // 前回接続では大きい初期上限を受けていた
+    let previous = WtSettings::new()
+        .wt_enabled(v(1))
+        .wt_initial_max_streams_uni(v(100))
+        .wt_initial_max_streams_bidi(v(50))
+        .wt_initial_max_data(v(8192));
+
+    // draft-17 を選択する接続では前回接続の WT SETTINGS を引き継がない
+    // (draft-ietf-webtrans-http3-17 Section 3.2)
+    let mut client = ClientConnection::new(
+        Settings::new().enable_webtransport_client(WtSettings::new().wt_enabled_draft17(v(1))),
+    );
+    client
+        .set_control_stream_id(2)
+        .expect("テスト用の制御ストリーム設定に成功すること");
+    client.set_previous_wt_settings(previous);
+
+    // 現在接続のサーバー SETTINGS は小さい初期上限だけを広告する (draft-17)
+    let current = WtSettings::new()
+        .wt_enabled_draft17(v(1))
+        .wt_initial_max_streams_uni(v(2))
+        .wt_initial_max_streams_bidi(v(1))
+        .wt_initial_max_data(v(50));
+    let server_settings = Settings::new().enable_webtransport_server(current);
+    let mut buf = vec![0u8; 256];
+    let len = encode_frame(
+        &mut buf,
+        &Frame::Settings(SettingsPayload::from_settings(&server_settings)),
+    )
+    .expect("テスト用の SETTINGS フレームエンコードに成功すること");
+    buf.truncate(len);
+    let mut control = vec![0x00];
+    control.extend_from_slice(&buf);
+    client
+        .feed_stream(3, &control, false)
+        .expect("テスト用のサーバー SETTINGS 受信に成功すること");
+
+    let events = client
+        .drain_events()
+        .expect("テスト用のクライアントイベント取得に成功すること");
+    let received = events
+        .iter()
+        .find_map(|event| match event {
+            Event::SettingsReceived { wt_settings, .. } => *wt_settings,
+            _ => None,
+        })
+        .expect("SETTINGS 受信イベントが発火すること");
+
+    // イベントに載るのは現在接続の値であり、前回値ではない
+    assert_eq!(
+        received.wt_initial_max_streams_uni,
+        v(2),
+        "現在の単方向ストリーム上限が通知されること"
+    );
+    assert_eq!(received.wt_initial_max_streams_bidi, v(1));
+    assert_eq!(received.wt_initial_max_data, v(50));
 }
