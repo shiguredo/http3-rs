@@ -59,6 +59,7 @@ fn sample_option<T>(
 /// 任意の webtransport::Settings を生成
 fn arbitrary_wt_settings(ctx: &mut noprop::TestCaseContext) -> webtransport::Settings {
     let wt_enabled = arbitrary_varint(ctx);
+    let wt_enabled_draft17 = arbitrary_varint(ctx);
     let wt_initial_max_streams_uni = arbitrary_varint(ctx);
     let wt_initial_max_streams_bidi = arbitrary_varint(ctx);
     let wt_initial_max_data = arbitrary_varint(ctx);
@@ -67,6 +68,7 @@ fn arbitrary_wt_settings(ctx: &mut noprop::TestCaseContext) -> webtransport::Set
 
     let mut wt = webtransport::Settings::new()
         .wt_enabled(wt_enabled)
+        .wt_enabled_draft17(wt_enabled_draft17)
         .wt_initial_max_streams_uni(wt_initial_max_streams_uni)
         .wt_initial_max_streams_bidi(wt_initial_max_streams_bidi)
         .wt_initial_max_data(wt_initial_max_data);
@@ -259,18 +261,19 @@ fn prop_setting_wire_roundtrip() -> noprop::TestResult {
 /// に限定する)。
 /// 重複検出 PBT で variant 全体に検査が及ぶことを保証するために定義する。
 fn arbitrary_setting(ctx: &mut noprop::TestCaseContext) -> Setting {
-    match noprop::sample_weighted_index(ctx, &[1u32; 12]) {
+    match noprop::sample_weighted_index(ctx, &[1u32; 13]) {
         0 => Setting::QpackMaxTableCapacity(arbitrary_varint(ctx)),
         1 => Setting::MaxFieldSectionSize(arbitrary_varint(ctx)),
         2 => Setting::QpackBlockedStreams(arbitrary_varint(ctx)),
         3 => Setting::EnableConnectProtocol(noprop::sample_bool(ctx)),
         4 => Setting::H3Datagram(noprop::sample_bool(ctx)),
         5 => Setting::WtEnabled(arbitrary_varint(ctx)),
-        6 => Setting::WtMaxSessionsDraft14(arbitrary_varint(ctx)),
-        7 => Setting::EnableWebTransportDraft02(noprop::sample_bool(ctx)),
-        8 => Setting::WebTransportMaxSessionsDraft07(arbitrary_varint(ctx)),
-        9 => Setting::WtInitialMaxData(arbitrary_varint(ctx)),
-        10 => Setting::WtInitialMaxStreamsUni(arbitrary_varint(ctx)),
+        6 => Setting::WtEnabledDraft17(arbitrary_varint(ctx)),
+        7 => Setting::WtMaxSessionsDraft14(arbitrary_varint(ctx)),
+        8 => Setting::EnableWebTransportDraft02(noprop::sample_bool(ctx)),
+        9 => Setting::WebTransportMaxSessionsDraft07(arbitrary_varint(ctx)),
+        10 => Setting::WtInitialMaxData(arbitrary_varint(ctx)),
+        11 => Setting::WtInitialMaxStreamsUni(arbitrary_varint(ctx)),
         _ => Setting::WtInitialMaxStreamsBidi(arbitrary_varint(ctx)),
     }
 }

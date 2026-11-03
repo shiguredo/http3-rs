@@ -1,4 +1,4 @@
-//! WebTransport over HTTP/3 (draft-ietf-webtrans-http3-15)
+//! WebTransport over HTTP/3 (draft-ietf-webtrans-http3-15 / 16 / 17)
 //!
 //! Sans I/O WebTransport プロトコル実装。
 //!
@@ -7,7 +7,8 @@
 //! WebTransport は HTTP/3 上で動作するプロトコルで、Web アプリケーションに
 //! 双方向・単方向ストリームとデータグラムを提供する。
 //!
-//! HTTP/3 上では 2 つのモードが利用可能 (draft-ietf-webtrans-http3-15 Section 2.1.2):
+//! HTTP/3 上では 2 つのモードが利用可能
+//! (draft-ietf-webtrans-http3-15 / 16 / 17 Section 2.1.2):
 //! - `webtransport-h3`: ネイティブ QUIC ストリーム + データグラム (本実装)
 //! - `webtransport`: カプセルベース (head-of-line blocking、unreliable delivery 不可)
 //!
@@ -23,6 +24,7 @@
 //! # 参照
 //!
 //! - [draft-ietf-webtrans-http3-15](https://datatracker.ietf.org/doc/draft-ietf-webtrans-http3/)
+//! - [draft-ietf-webtrans-http3-17](https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-17.txt)
 
 pub mod capsule;
 pub mod connect;

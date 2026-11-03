@@ -1,14 +1,15 @@
 //! WebTransport サーバー側実装
 //!
 //! s2n-quic + shiguredo_http3 (Sans I/O) を使い WebTransport セッションを受け付ける。
-//! shiguredo_http3 は draft-ietf-webtrans-http3 の draft-02 / 07 / 14 / 15 / 16 に対応する
-//! (draft-16 は draft-15 以降の検証ロジックとして扱う)。
+//! shiguredo_http3 は draft-ietf-webtrans-http3 の draft-02 / 07 / 14 / 15 / 16 / 17 に対応する
+//! (draft-15 と draft-16 は SETTINGS_WT_ENABLED のコードポイントを共有し、
+//!  draft-17 は別コードポイント 0x20b8933b を使う)。
 //!
 //! ただし本 example の QUIC 層である s2n-quic 1.86 は、RESET_STREAM_AT
 //! (draft-ietf-quic-reliable-stream-reset) の送出 API も、ピアの reset_stream_at
 //! transport parameter を取得する API も公開していない。そのため
 //! `set_webtransport_transport_verified` には reset_stream_at 非対応 (false) を渡しており、
-//! draft-14 / 15 / 16 クライアントの CONNECT は sans-I/O 層が H3_MESSAGE_ERROR で拒否する。
+//! draft-14 / 15 / 16 / 17 クライアントの CONNECT は sans-I/O 層が H3_MESSAGE_ERROR で拒否する。
 //! 実際に接続できるのは draft-02 / 07 クライアントに限られる。これは s2n-quic が両 API を
 //! 公開するまでの既知の制限である。
 //!
@@ -323,7 +324,7 @@ impl WtSessionRequest {
         //
         // さらに shiguredo_http3 のサーバー側検証は、ネゴシエートした draft が
         // reset_stream_at を要求する場合に CONNECT を H3_MESSAGE_ERROR で拒否する
-        // (src/connection/wt_session.rs)。そのため本 example が draft-14 / 15 / 16
+        // (src/connection/wt_session.rs)。そのため本 example が draft-14 / 15 / 16 / 17
         // クライアントと接続できるのは、クライアントが reset_stream_at を要求しない
         // draft-02 / 07 の場合に限られる。s2n-quic が RESET_STREAM_AT と transport
         // parameter の取得 API を公開したら、ピアの transport parameter を見て
@@ -1054,6 +1055,12 @@ fn build_server_wt_settings(draft: DraftVersion) -> shiguredo_http3::webtranspor
     tracing::info!("WebTransport: building server settings for {draft:?}");
     let v = |value: u64| VarInt::new(value).expect("WT settings value must fit VarInt");
     match draft {
+        // Draft-17: draft-15 / 16 と同じ初期ストリーム上限を返すが、
+        // SETTINGS_WT_ENABLED は新コードポイント (0x20b8933b) で送る。
+        DraftVersion::Draft17 => shiguredo_http3::webtransport::Settings::new()
+            .wt_enabled_draft17(VarInt::from_static(1))
+            .wt_initial_max_streams_uni(v(1000))
+            .wt_initial_max_streams_bidi(v(1000)),
         DraftVersion::Draft15 => shiguredo_http3::webtransport::Settings::new()
             .wt_enabled(VarInt::from_static(1))
             .wt_initial_max_streams_uni(v(1000))

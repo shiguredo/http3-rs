@@ -1,12 +1,18 @@
 //! WebTransport ドラフトバージョン管理 connect/mod.rs からの分離
 //!
 //! ドラフトバージョンごとの SETTINGS 構築とプロトコルネゴシエーションを担う。
-//! (draft-ietf-webtrans-http3-02/07/14/15 Section 3.1, 7.1)
+//! (draft-ietf-webtrans-http3-02/07/14/15/16/17 Section 3.1, 7.1)
 
 use crate::varint::VarInt;
 
 use super::{PROTOCOL_WEBTRANSPORT_DRAFT02, PROTOCOL_WEBTRANSPORT_H3};
 
+/// WebTransport over HTTP/3 のドラフト版の識別子
+///
+/// SETTINGS のコードポイントと `:protocol` トークンで版を識別するための値であり、
+/// 各ドラフト仕様全体への準拠を表すものではない。たとえば [`DraftVersion::Draft17`]
+/// は draft-17 の SETTINGS コードポイントに対応する版を表し、draft-17 の全規定
+/// (0-RTT 時の SETTINGS 破棄や WT_STREAM のエラーコードなど) への準拠を意味しない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DraftVersion {
     /// draft-ietf-webtrans-http3-02
@@ -21,9 +27,20 @@ pub enum DraftVersion {
     /// WT_INITIAL_MAX_STREAMS_UNI/BIDI (0x2b64/0x2b65) によるフロー制御を使用する。
     /// Safari 26.4 がこのパターンを使用する。
     Draft14,
-    /// draft-ietf-webtrans-http3-15 (latest)
+    /// draft-ietf-webtrans-http3-15 / 16
     /// `:protocol` = `"webtransport-h3"`, SETTINGS_WT_ENABLED (0x2c7cf000)
+    ///
+    /// draft-15 と draft-16 は同じコードポイントを共有するため、本 variant に
+    /// まとめる。
     Draft15,
+    /// draft-ietf-webtrans-http3-17 (latest)
+    /// `:protocol` = `"webtransport-h3"`, SETTINGS_WT_ENABLED (0x20b8933b)
+    ///
+    /// draft-15 / 16 とは `SETTINGS_WT_ENABLED` のコードポイントが異なり、
+    /// `:protocol` は共通である。両者を区別できるのは SETTINGS の
+    /// コードポイントだけなので、`SETTINGS` の受信内容で判別する
+    /// (draft-ietf-webtrans-http3-17 Section 3.1 / 7.1 / 9.2)。
+    Draft17,
 }
 
 impl DraftVersion {
@@ -31,7 +48,7 @@ impl DraftVersion {
     pub fn protocol_value(self) -> &'static str {
         match self {
             Self::Draft02 | Self::Draft07 | Self::Draft14 => PROTOCOL_WEBTRANSPORT_DRAFT02,
-            Self::Draft15 => PROTOCOL_WEBTRANSPORT_H3,
+            Self::Draft15 | Self::Draft17 => PROTOCOL_WEBTRANSPORT_H3,
         }
     }
 
@@ -39,7 +56,8 @@ impl DraftVersion {
     ///
     /// ドラフトバージョンに応じて適切な SETTINGS パラメータを設定する:
     ///
-    /// - **Draft15**: `SETTINGS_WT_ENABLED` + 初期ストリーム上限
+    /// - **Draft17**: `SETTINGS_WT_ENABLED` (0x20b8933b) + 初期ストリーム上限
+    /// - **Draft15** (draft-15 / 16): `SETTINGS_WT_ENABLED` (0x2c7cf000) + 初期ストリーム上限
     /// - **Draft14**: Safari (Network.framework) 互換のため draft-07 と draft-14 の
     ///   **両方** の SETTINGS ID を返す。Safari 26.4 はどちらの ID で判定するか不定のため、
     ///   両方返すことで WebTransport 対応と認識させる。カプセルベースフロー制御用に
@@ -47,13 +65,19 @@ impl DraftVersion {
     /// - **Draft07**: `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` (draft-07) のみ
     /// - **Draft02**: `SETTINGS_ENABLE_WEBTRANSPORT` のみ
     ///
-    /// draft-ietf-webtrans-http3-14, draft-ietf-webtrans-http3-15
+    /// draft-ietf-webtrans-http3-14, draft-ietf-webtrans-http3-15,
+    /// draft-ietf-webtrans-http3-16, draft-ietf-webtrans-http3-17
     /// 将来のドラフトで変更される可能性がある
     pub fn build_server_settings(
         self,
         params: &ServerSettingsParams,
     ) -> crate::webtransport::settings::Settings {
         match self {
+            Self::Draft17 => crate::webtransport::settings::Settings::new()
+                .wt_enabled_draft17(VarInt::from_static(1))
+                .wt_initial_max_streams_uni(params.initial_max_streams_uni)
+                .wt_initial_max_streams_bidi(params.initial_max_streams_bidi)
+                .wt_initial_max_data(params.initial_max_data),
             Self::Draft15 => crate::webtransport::settings::Settings::new()
                 .wt_enabled(VarInt::from_static(1))
                 .wt_initial_max_streams_uni(params.initial_max_streams_uni)
@@ -84,7 +108,7 @@ impl DraftVersion {
     /// Safari (Network.framework) のように draft-07 の ID も併送するクライアントは
     /// `Settings::detect_draft_pattern()` の時点で draft-14 として判定される。
     ///
-    /// - draft-15: SETTINGS_WT_INITIAL_MAX_STREAMS で初期上限を通知するため不要
+    /// - draft-15 / 16 / 17: SETTINGS_WT_INITIAL_MAX_STREAMS で初期上限を通知するため不要
     /// - draft-14: 必要
     /// - draft-07: フロー制御の仕組みがないため不要
     /// - draft-02: フロー制御の仕組みがないため不要
@@ -105,7 +129,7 @@ impl DraftVersion {
     /// - draft-02: 不要 (`SETTINGS_ENABLE_WEBTRANSPORT` が拡張 CONNECT を暗示)
     /// - draft-07: 必要 (Section 3.2)
     /// - draft-14: 必要 (Section 3.1)
-    /// - draft-15: 必要 (Section 3.1)
+    /// - draft-15 / 16 / 17: 必要 (Section 3.1)
     ///
     /// サーバー側はクライアントからの `ENABLE_CONNECT_PROTOCOL` を要求しない
     /// (draft-07 のみ仕様上両端が送ることになっているが、本実装では互換性を
@@ -114,10 +138,15 @@ impl DraftVersion {
     /// draft-ietf-webtrans-http3-02 Section 3.1,
     /// draft-ietf-webtrans-http3-07 Section 3.2,
     /// draft-ietf-webtrans-http3-14 Section 3.1,
-    /// draft-ietf-webtrans-http3-15 Section 3.1
+    /// draft-ietf-webtrans-http3-15 Section 3.1,
+    /// draft-ietf-webtrans-http3-16 Section 3.1,
+    /// draft-ietf-webtrans-http3-17 Section 3.1
     /// 将来のドラフトで変更される可能性がある
     pub fn requires_enable_connect_protocol(self) -> bool {
-        matches!(self, Self::Draft07 | Self::Draft14 | Self::Draft15)
+        matches!(
+            self,
+            Self::Draft07 | Self::Draft14 | Self::Draft15 | Self::Draft17
+        )
     }
 
     /// このドラフトバージョンで `reset_stream_at` transport parameter が必須か
@@ -125,13 +154,15 @@ impl DraftVersion {
     /// - draft-02: 不要
     /// - draft-07: 不要
     /// - draft-14: 必要 (Section 3.1)
-    /// - draft-15: 必要 (Section 3.1)
+    /// - draft-15 / 16 / 17: 必要 (Section 3.1)
     ///
     /// draft-ietf-webtrans-http3-14 Section 3.1,
-    /// draft-ietf-webtrans-http3-15 Section 3.1
+    /// draft-ietf-webtrans-http3-15 Section 3.1,
+    /// draft-ietf-webtrans-http3-16 Section 3.1,
+    /// draft-ietf-webtrans-http3-17 Section 3.1
     /// 将来のドラフトで変更される可能性がある
     pub fn requires_reset_stream_at(self) -> bool {
-        matches!(self, Self::Draft14 | Self::Draft15)
+        matches!(self, Self::Draft14 | Self::Draft15 | Self::Draft17)
     }
 
     /// 指定ドラフトバージョンのクライアントが送るべき WebTransport SETTINGS を構築する
@@ -141,7 +172,9 @@ impl DraftVersion {
     /// 責務なので含まれない。`SETTINGS_H3_DATAGRAM=1` は `crate::Settings` 側で
     /// 設定する。
     ///
-    /// - **Draft15** (Section 3.1 + 7.1): `SETTINGS_WT_ENABLED=1` + 初期ストリーム/データ上限
+    /// - **Draft17** (Section 3.1 + 7.1): `SETTINGS_WT_ENABLED` (0x20b8933b) + 初期ストリーム/データ上限
+    /// - **Draft15** (draft-15 / 16, Section 3.1 + 7.1):
+    ///   `SETTINGS_WT_ENABLED` (0x2c7cf000) + 初期ストリーム/データ上限
     /// - **Draft14** (Section 3.1): `SETTINGS_WT_MAX_SESSIONS > 0` + 初期ストリーム/データ上限
     /// - **Draft07** (Section 3.2): `SETTINGS_WEBTRANSPORT_MAX_SESSIONS > 0`
     /// - **Draft02** (Section 3.1): `SETTINGS_ENABLE_WEBTRANSPORT=1`
@@ -149,13 +182,20 @@ impl DraftVersion {
     /// draft-ietf-webtrans-http3-02 Section 3.1,
     /// draft-ietf-webtrans-http3-07 Section 3.2,
     /// draft-ietf-webtrans-http3-14 Section 3.1,
-    /// draft-ietf-webtrans-http3-15 Section 3.1
+    /// draft-ietf-webtrans-http3-15 Section 3.1,
+    /// draft-ietf-webtrans-http3-16 Section 3.1,
+    /// draft-ietf-webtrans-http3-17 Section 3.1
     /// 将来のドラフトで変更される可能性がある
     pub fn build_client_settings(
         self,
         params: &ServerSettingsParams,
     ) -> crate::webtransport::settings::Settings {
         match self {
+            Self::Draft17 => crate::webtransport::settings::Settings::new()
+                .wt_enabled_draft17(VarInt::from_static(1))
+                .wt_initial_max_streams_uni(params.initial_max_streams_uni)
+                .wt_initial_max_streams_bidi(params.initial_max_streams_bidi)
+                .wt_initial_max_data(params.initial_max_data),
             Self::Draft15 => crate::webtransport::settings::Settings::new()
                 .wt_enabled(VarInt::from_static(1))
                 .wt_initial_max_streams_uni(params.initial_max_streams_uni)
@@ -179,11 +219,11 @@ impl DraftVersion {
 pub struct ServerSettingsParams {
     /// 最大セッション数 (draft-07/14 で使用)
     pub max_sessions: VarInt,
-    /// 初期単方向ストリーム上限 (draft-14/15 で使用)
+    /// 初期単方向ストリーム上限 (draft-14/15/16/17 で使用)
     pub initial_max_streams_uni: VarInt,
-    /// 初期双方向ストリーム上限 (draft-14/15 で使用)
+    /// 初期双方向ストリーム上限 (draft-14/15/16/17 で使用)
     pub initial_max_streams_bidi: VarInt,
-    /// 初期データ上限 (draft-14/15 で使用)
+    /// 初期データ上限 (draft-14/15/16/17 で使用)
     pub initial_max_data: VarInt,
 }
 
