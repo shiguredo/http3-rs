@@ -152,7 +152,10 @@ fn build_draft15_client_ctrl_without_ecp() -> Vec<u8> {
     ctrl
 }
 
-/// 全 draft 対応のサーバーを構築する
+/// draft-02 / 07 / 14 / 15 / 16 に対応するサーバーを構築する
+///
+/// draft-17 のコードポイントは広告しないため、draft-17 の検証は
+/// `mod draft17_connect` の専用 SETTINGS で行う。
 fn setup_server(reset_stream_at: bool) -> ServerConnection {
     let wt = webtransport::Settings::new()
         .wt_enabled(vi(1))
@@ -491,6 +494,46 @@ mod draft15 {
 
 mod common {
     use super::*;
+
+    #[test]
+    fn connect_accepted_without_common_draft_for_old_draft_server() {
+        // draft-14 以前だけに対応するサーバーは、SETTINGS_WT_ENABLED による
+        // コードポイント交渉をしない。クライアントが本文版のコードポイントだけを
+        // 広告していても、従来どおり版依存の検証をスキップして CONNECT を処理する
+        // (draft-ietf-webtrans-http3-14 Section 5.1 以前の挙動を維持する)
+        let wt = webtransport::Settings::new().wt_max_sessions_draft14(vi(1));
+        let settings = Settings::new().enable_webtransport_server(wt);
+        let mut server = ServerConnection::new(settings);
+        server
+            .set_control_stream_id(3)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        server
+            .set_webtransport_transport_verified(true, true)
+            .expect("テスト用の transport parameter 検証に成功すること");
+        let _ = server
+            .take_stream_data(3)
+            .expect("テスト用のサーバー SETTINGS 取得に成功すること");
+
+        let client_wt = webtransport::Settings::new()
+            .wt_enabled_draft17(vi(1))
+            .wt_initial_max_data(vi(1024));
+        let mut client = shiguredo_http3::ClientConnection::new(
+            Settings::new().enable_webtransport_client(client_wt),
+        );
+        client
+            .set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        let (client_ctrl, _) = client
+            .take_stream_data(2)
+            .expect("テスト用のクライアント SETTINGS 取得に成功すること");
+        feed_client_settings(&mut server, &client_ctrl);
+
+        let headers = wt_connect_headers(DraftVersion::Draft02);
+        let frame = build_headers_frame(&headers);
+        server
+            .feed_stream(0, &frame, false)
+            .expect("旧 draft のサーバーは版依存の検証をスキップして CONNECT を処理すること");
+    }
 
     #[test]
     fn connect_rejected_when_no_common_draft() {
@@ -1427,15 +1470,18 @@ mod draft17_connect {
         }
     }
 
-    /// 新旧両コードポイントを広告するサーバーとクライアントの接続を作り、
+    /// 新旧両コードポイントと draft-02 を広告するサーバーとクライアントの接続を作り、
     /// SETTINGS を交換する
     ///
     /// 複数のドラフト版に対応する端点は、異なるコードポイントをそれぞれ 1 回ずつ
-    /// 広告する (draft-ietf-webtrans-http3-17 Section 7.1)。
+    /// 広告する (draft-ietf-webtrans-http3-17 Section 7.1)。draft-02 の ID を
+    /// 併送することで、交差集合に旧トークン `webtransport` を返す版が含まれる
+    /// 状態になる (選択版のトークンだけが通ることを検証するため)。
     fn both_codepoints_pair() -> (ServerConnection, shiguredo_http3::ClientConnection) {
         let server_wt = webtransport::Settings::new()
             .wt_enabled(vi(1))
             .wt_enabled_draft17(vi(1))
+            .enable_webtransport_draft02(true)
             .wt_initial_max_data(vi(1024));
         let mut server =
             ServerConnection::new(Settings::new().enable_webtransport_server(server_wt));
@@ -1452,6 +1498,7 @@ mod draft17_connect {
         let client_wt = webtransport::Settings::new()
             .wt_enabled(vi(1))
             .wt_enabled_draft17(vi(1))
+            .enable_webtransport_draft02(true)
             .wt_initial_max_data(vi(1024));
         let mut client = shiguredo_http3::ClientConnection::new(
             Settings::new().enable_webtransport_client(client_wt),

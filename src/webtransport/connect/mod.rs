@@ -24,7 +24,8 @@ pub use response::ConnectResponse;
 
 use core::fmt;
 
-/// `:protocol` 疑似ヘッダーの値 (draft-ietf-webtrans-http3-15 Section 3.2)
+/// `:protocol` 疑似ヘッダーの値
+/// (draft-ietf-webtrans-http3-15 / 16 / 17 Section 3.2, Section 9.1)
 ///
 /// draft-15 / 16 / 17 で共通の native QUIC モードのプロトコル識別子。
 pub const PROTOCOL_WEBTRANSPORT_H3: &str = "webtransport-h3";
@@ -578,8 +579,8 @@ mod tests {
 
     #[test]
     fn test_protocol_value() {
-        // draft-15 / 16 / 17 は `webtransport-h3`、draft-02 / 07 / 14 は
-        // `webtransport` を使う (draft-ietf-webtrans-http3-17 Section 9.1)
+        // draft-15 / 16 / 17 は `webtransport-h3` (draft-ietf-webtrans-http3-17 Section 9.1)、
+        // draft-02 / 07 / 14 は `webtransport` (draft-ietf-webtrans-http3-02 Section 3.3)
         for draft in [
             DraftVersion::Draft02,
             DraftVersion::Draft07,

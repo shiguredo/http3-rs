@@ -147,7 +147,7 @@ fn prop_settings_flow_control_draft17_ignores_max_sessions() -> noprop::TestResu
         assert_eq!(
             settings.declares_flow_control(),
             expected,
-            "新旧コードポイント({draft17_enabled}/{old_enabled}) と \
+            "新旧コードポイント ({draft17_enabled}/{old_enabled}) と \
              WT_MAX_SESSIONS {max_sessions} の組み合わせで宣言条件が一致すること"
         );
 

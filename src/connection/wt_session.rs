@@ -874,7 +874,8 @@ impl Connection {
             return Err(Error::StreamError(ErrorCode::MessageError));
         }
         // 接続単位の版選択: 双方の広告の交差から最上位を選ぶ。クライアントが
-        // SETTINGS_WT_ENABLED を送らない場合、本文版だけに対応するサーバーは
+        // SETTINGS_WT_ENABLED を送らない場合、またはサーバーが対応しない
+        // コードポイントだけを送る場合、本文版だけに対応するサーバーは
         // 本文で定義された版を選ぶ
         // (draft-ietf-webtrans-http3-17 Section 7.1 の 3 番目の箇条書き)。
         let negotiated = self.negotiated_wt_draft_version();
@@ -883,11 +884,21 @@ impl Connection {
             None if matches!(local_draft, Some(DraftVersion::Draft17)) => {
                 Some(DraftVersion::Draft17)
             }
-            // 交差する版がなく、本文版にも対応しないサーバーは接続で使う版を
-            // 決められないため、CONNECT を受理しない。
-            None if matches!(local_draft, Some(DraftVersion::Draft15)) => {
+            // draft-15 / 16 だけに対応するサーバーは、クライアントが本文版の
+            // コードポイントを広告しているのに共通する版がない場合、接続で
+            // 使う版を決められないため CONNECT を受理しない。draft-14 以前の
+            // コードポイントしか広告しないクライアントは、そもそも
+            // SETTINGS_WT_ENABLED による交渉に参加できないため従来どおり扱う。
+            None if matches!(local_draft, Some(DraftVersion::Draft15))
+                && peer
+                    .wt_settings
+                    .as_ref()
+                    .is_some_and(|wt| wt.wt_enabled_draft17.get() > 0) =>
+            {
                 return Err(Error::StreamError(ErrorCode::MessageError));
             }
+            // draft-14 以前だけに対応する端点は、コードポイントによる交渉を
+            // しないため版依存の検証をスキップする (従来の挙動を維持する)。
             None => None,
         };
         if draft.is_some_and(|d| d.requires_reset_stream_at()) && !self.wt_reset_stream_at_supported

@@ -2,6 +2,10 @@
 //!
 //! Sans I/O WebTransport プロトコル実装。
 //!
+//! draft-17 は SETTINGS のコードポイント (0x20b8933b) を区別して扱うところまで
+//! 対応しており、draft-17 の他の規定 (0-RTT 再開時の SETTINGS の破棄、
+//! WT_STREAM のエラーコードなど) は個別に対応する。
+//!
 //! # 概要
 //!
 //! WebTransport は HTTP/3 上で動作するプロトコルで、Web アプリケーションに
