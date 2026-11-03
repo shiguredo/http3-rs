@@ -3,7 +3,7 @@
 - Created: 2026-11-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-wt-draft-17-settings-codepoint
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-03
 - Category: add
 
 ## 目的
