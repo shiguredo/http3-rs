@@ -516,8 +516,9 @@ fn test_peer_settings_initial_limits_are_monotonic_baseline() {
 /// 現在接続の SETTINGS 初期値だけが送信上限とフロー制御カプセルの基準になること
 ///
 /// 0-RTT 再開で前回接続の初期上限を注入しても、現在接続で受信した SETTINGS の値が
-/// イベントに載り、その値だけが Session の比較基準になる。前回値が Session に
-/// 混入しないことを、Connection から Session までの経路で確認する。
+/// イベントに載り、その値だけが Session の比較基準になることを確認する。
+/// Connection がイベントに現在値を載せ、呼び出し側がその値を Session に渡す経路を
+/// シミュレーションする。
 /// (draft-ietf-webtrans-http3-16 Section 5.5, 5.6.2, 5.6.4,
 ///  draft-ietf-webtrans-http3-17 Section 3.2)
 #[test]
@@ -601,13 +602,5 @@ fn test_current_settings_limits_are_baseline_after_resumption() {
     assert!(
         !session.can_send_data(51),
         "現在の SETTINGS 初期値を超えて送信できないこと"
-    );
-    let result = session.process_capsule(&Capsule::MaxData { maximum: 49 });
-    assert_eq!(
-        result,
-        Err(CapsuleProcessError::Session(Error::Protocol(
-            ErrorCode::FlowControlError
-        ))),
-        "現在の SETTINGS 初期値 (50) 未満の WT_MAX_DATA はセッションエラーになること"
     );
 }

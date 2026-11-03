@@ -290,9 +290,8 @@ impl Session {
     /// 呼ばなくても [`FlowControlLimits::new`] と同じ状態になる。
     ///
     /// 0-RTT 再開時も、前回接続でキャッシュした値ではなく、現在接続で受信した
-    /// ピアの SETTINGS の値を渡す。draft-17 を選択した接続は前回接続の
-    /// WT SETTINGS を引き継がないため、特にこの点が必要になる
-    /// (draft-ietf-webtrans-http3-17 Section 3.2)。
+    /// ピアの SETTINGS の値を渡す。前回値は減少検出にだけ使い、送信上限には
+    /// 使わない (`Connection::set_previous_wt_settings` を参照)。
     ///
     /// draft-ietf-webtrans-http3-16 Section 5.5, 5.6.2, 5.6.4,
     /// draft-ietf-webtrans-http3-17 Section 3.2

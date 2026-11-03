@@ -14,12 +14,11 @@
 //! (draft-ietf-webtrans-http3-17 Section 9.2)。
 //! SETTINGS 単体のコードポイント対応は tests/test_webtransport_settings.rs で扱う。
 
-use shiguredo_http3::frame::encode_frame;
 use shiguredo_http3::qpack::Encoder;
 use shiguredo_http3::webtransport::DraftVersion;
 use shiguredo_http3::{
-    Error, ErrorCode, Event, Frame, Header, ServerConnection, Settings, SettingsPayload, VarInt,
-    WebTransportEvent, WtSetupError, webtransport,
+    Error, ErrorCode, Event, Header, ServerConnection, Settings, VarInt, WebTransportEvent,
+    WtSetupError, webtransport,
 };
 
 fn vi(value: u64) -> VarInt {
@@ -2454,16 +2453,9 @@ mod version_selection {
         client.set_previous_wt_settings(previous);
 
         // 現在のサーバー SETTINGS は WT の広告を含まない
-        let mut client_ctrl = Vec::new();
-        client_ctrl.extend_from_slice(&[0x00]);
-        let payload = SettingsPayload::from_settings(&Settings::new().h3_datagram(true));
-        let mut buf = vec![0u8; 256];
-        let len = encode_frame(&mut buf, &Frame::Settings(payload))
-            .expect("テスト用の SETTINGS フレームエンコードに成功すること");
-        buf.truncate(len);
-        client_ctrl.extend_from_slice(&buf);
+        let server_ctrl = control_stream_with(Settings::new().h3_datagram(true));
         client
-            .feed_stream(3, &client_ctrl, false)
+            .feed_stream(3, &server_ctrl, false)
             .expect("テスト用のサーバー SETTINGS 受信に成功すること");
         client
             .drain_events()

@@ -261,7 +261,15 @@ fn prop_previous_wt_settings_reduction_only_for_old_draft() -> noprop::TestResul
         let new_bidi = new_value(prev_bidi, 1000);
         let new_data = new_value(prev_data, 100_000);
 
+        // ローカルは選択版に加えて draft-17 のコードポイントも広告する。
+        // 版選択が退行して `None` になった場合に、旧規則の適用条件が
+        // 変わってテストが落ちるようにするため。
         let local_wt = wt_settings(draft, 0, 0, 0);
+        let local_wt = if draft == DraftVersion::Draft17 {
+            local_wt
+        } else {
+            local_wt.wt_enabled_draft17(VarInt::from_static(1))
+        };
         let mut client =
             ClientConnection::new(Settings::new().enable_webtransport_client(local_wt));
         client
