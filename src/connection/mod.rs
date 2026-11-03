@@ -239,9 +239,7 @@ pub struct Connection {
     wt_transport_verified: bool,
     /// 0-RTT 再開時の前回接続のピア WebTransport SETTINGS (draft-14 / 15 / 16 用)
     ///
-    /// 判定条件は
-    /// [`Connection::set_previous_wt_settings`](Connection::set_previous_wt_settings)
-    /// の rustdoc を参照。
+    /// 判定条件は [`Connection::set_previous_wt_settings`] の rustdoc を参照。
     previous_wt_settings: Option<crate::webtransport::Settings>,
     /// RESET_STREAM_AT 拡張がサポートされているか
     ///
@@ -1388,16 +1386,17 @@ impl Connection {
                     //    draft-ietf-webtrans-http3-16 Section 3.2,
                     //    RFC 9114 Section 7.2.4.2)
                     // - draft-02 / 07 を選択した接続では行わない。draft-02 は 0-RTT に
-                    //   対応せず、draft-07 の 0-RTT 規則 (最大セッション数の減少、
+                    //   対応せず (draft-ietf-webtrans-http3-02 Section 3.3)、draft-07 の
+                    //   0-RTT 規則 (最大セッション数の減少、
                     //   draft-ietf-webtrans-http3-07 Section 3.3) の検出は未実装。
                     //   初期フロー制御値の SETTINGS は draft-07 に存在しない
                     // - draft-17 を選択した接続では行わない。クライアントは 0-RTT で
                     //   WebTransport CONNECT を送れないため、前回接続の WT SETTINGS を
                     //   引き継がず、現在接続で受信した値と省略時のデフォルト値だけを
                     //   使う (draft-ietf-webtrans-http3-17 Section 3.2)
-                    // - 版を決定できない場合は、draft-17 に対応する端点 (新旧両方の
-                    //   コードポイントを広告する端点を含む) は前回値を破棄し、
-                    //   旧コードポイントだけに対応する端点は従来どおり減少検出を行う
+                    // - 版を決定できない場合は、ローカルが draft-14 / 15 を広告し
+                    //   draft-17 を広告せず、ピアも draft-17 を広告しないときだけ
+                    //   従来どおり減少検出を行う
                     // この時点では self.peer_settings はまだ更新されていないため、
                     // 受信した SETTINGS を選択ヘルパーに渡して版を判定する。
                     // QPACK など WebTransport 以外の SETTINGS の 0-RTT 規則と、QUIC の
@@ -6969,7 +6968,10 @@ mod tests {
         match draft {
             DraftVersion::Draft17 => settings.wt_enabled_draft17(vi(1)),
             DraftVersion::Draft14 => settings.wt_max_sessions_draft14(vi(1)),
-            _ => settings.wt_enabled(vi(1)),
+            DraftVersion::Draft15 => settings.wt_enabled(vi(1)),
+            DraftVersion::Draft02 | DraftVersion::Draft07 => {
+                panic!("テスト用のヘルパーは draft-02 / 07 に対応しない")
+            }
         }
     }
 
@@ -7316,16 +7318,20 @@ mod tests {
     #[test]
     fn test_previous_wt_settings_ignored_for_draft02_and_draft07() {
         // draft-02 / 07 を選択した接続では、初期フロー制御値の減少検出を行わない
-        // (draft-02 は 0-RTT 非対応、draft-07 の 0-RTT 規則は最大セッション数の減少で
-        //  あり、その検出は未実装)。両端が同じコードポイントを広告して版を確定させる。
-        for (local_wt, peer_wt) in [
+        // (draft-02 は 0-RTT 非対応 (draft-ietf-webtrans-http3-02 Section 3.3)、
+        //  draft-07 の 0-RTT 規則は最大セッション数の減少であり、その検出は未実装
+        //  (draft-ietf-webtrans-http3-07 Section 3.3))。
+        // 両端が同じコードポイントを広告して版を確定させる。
+        for (local_wt, peer_wt, expected) in [
             (
                 crate::webtransport::Settings::new().enable_webtransport_draft02(true),
                 crate::webtransport::Settings::new().enable_webtransport_draft02(true),
+                DraftVersion::Draft02,
             ),
             (
                 crate::webtransport::Settings::new().webtransport_max_sessions_draft07(vi(1)),
                 crate::webtransport::Settings::new().webtransport_max_sessions_draft07(vi(1)),
+                DraftVersion::Draft07,
             ),
         ] {
             let mut conn = Connection::client(Settings::new().enable_webtransport_client(local_wt));
@@ -7333,21 +7339,22 @@ mod tests {
                 .expect("テスト用の制御ストリーム設定に成功すること");
             conn.set_previous_wt_settings(previous_wt(100, 50, 1_048_576));
 
-            // 現在値は前回値より小さい (省略された項目は 0)
-            let current = peer_wt.wt_initial_max_streams_uni(vi(10));
-            process_exact_wt_settings(&mut conn, &current)
+            // 現在値は前回値より小さい (省略された項目は 0)。draft-02 / 07 に
+            // 初期フロー制御値の SETTINGS は存在しないため、省略だけを使う
+            process_exact_wt_settings(&mut conn, &peer_wt)
                 .expect("draft-02 / 07 では減少検出を行わないこと");
-            assert!(conn.negotiated_wt_draft_version().is_some_and(|draft| {
-                matches!(draft, DraftVersion::Draft02 | DraftVersion::Draft07)
-            }));
+            assert_eq!(
+                conn.negotiated_wt_draft_version(),
+                Some(expected),
+                "広告した版が選択されること"
+            );
         }
     }
 
     #[test]
-    fn test_previous_wt_settings_none_branch_conditions() {
-        // 版を決定できない場合の分岐: draft-14 のコードポイントだけを広告する端点は
-        // 検出し、新旧両方のコードポイントを広告する端点は前回値を破棄する。
-        // (1) draft-14 のみを広告する端点はピアが WT を広告しなければ検出する
+    fn test_previous_wt_settings_detected_for_old_only_endpoint_without_peer_wt() {
+        // 版を決定できない場合でも、draft-14 のコードポイントだけを広告する端点は
+        // ピアが WT を広告しなければ減少検出を行う
         let mut conn = Connection::client(wt_draft14_client_settings());
         conn.set_control_stream_id(2)
             .expect("テスト用の制御ストリーム設定に成功すること");
@@ -7358,8 +7365,67 @@ mod tests {
             matches!(err, Error::ConnectionError(ErrorCode::SettingsError)),
             "draft-14 のみの端点は版を選べなくても検出すること: {err:?}"
         );
+    }
 
-        // (2) 新旧両方のコードポイントを広告する端点は、交差がなければ検出しない
+    #[test]
+    fn test_previous_wt_settings_detects_max_sessions_decrease_without_selected_draft() {
+        // 版を決定できない場合でも、ローカルが draft-14 に対応していれば
+        // 最大セッション数の減少を検出する
+        // (draft-ietf-webtrans-http3-14 Section 3.2)。
+        let mut conn = Connection::client(wt_draft14_client_settings());
+        conn.set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        let previous = previous_wt_with_draft(DraftVersion::Draft14, 100, 50, 1_048_576)
+            .wt_max_sessions_draft14(vi(4));
+        conn.set_previous_wt_settings(previous);
+
+        // 初期上限は前回値と同値で、最大セッション数だけが 4 → 0 (省略) に減る
+        let peer = crate::webtransport::Settings::new()
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(50))
+            .wt_initial_max_data(vi(1_048_576));
+        let err = process_exact_wt_settings(&mut conn, &peer).unwrap_err();
+        assert!(
+            matches!(err, Error::ConnectionError(ErrorCode::SettingsError)),
+            "版を選べない場合も draft-14 の最大セッション数の減少を検出すること: {err:?}"
+        );
+
+        // 前回の最大セッション数が 0 なら減少していないため検出しない
+        let mut conn = Connection::client(wt_draft14_client_settings());
+        conn.set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        conn.set_previous_wt_settings(previous_wt(100, 50, 1_048_576));
+        process_exact_wt_settings(&mut conn, &peer)
+            .expect("前回の最大セッション数が 0 なら検出しないこと");
+    }
+
+    #[test]
+    fn test_previous_wt_settings_max_sessions_not_compared_for_draft15() {
+        // draft-15 以降は SETTINGS_WT_MAX_SESSIONS が廃止されたため、
+        // 最大セッション数を比較しない (draft-15 Section 5.2)。
+        let mut conn = Connection::client(wt_draft15_client_settings());
+        conn.set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        let previous = previous_wt(100, 50, 1_048_576).wt_max_sessions_draft14(vi(4));
+        conn.set_previous_wt_settings(previous);
+
+        let wt = crate::webtransport::Settings::new()
+            .wt_enabled(vi(1))
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(50))
+            .wt_initial_max_data(vi(1_048_576));
+        process_exact_wt_settings(&mut conn, &wt)
+            .expect("draft-15 では最大セッション数を比較しないこと");
+        assert_eq!(
+            conn.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft15),
+            "draft-15 が選択されていること"
+        );
+    }
+
+    #[test]
+    fn test_previous_wt_settings_ignored_when_local_advertises_draft17() {
+        // 新旧両方のコードポイントを広告する端点は、交差がなければ前回値を破棄する
         let mut conn = Connection::client(wt_both_drafts_client_settings());
         conn.set_control_stream_id(2)
             .expect("テスト用の制御ストリーム設定に成功すること");
@@ -7367,6 +7433,11 @@ mod tests {
         let peer = crate::webtransport::Settings::new().enable_webtransport_draft02(true);
         process_exact_wt_settings(&mut conn, &peer)
             .expect("draft-17 に対応する端点は前回値を破棄すること");
+        assert_eq!(
+            conn.negotiated_wt_draft_version(),
+            None,
+            "共通する版がないこと"
+        );
     }
 
     #[test]
@@ -7385,6 +7456,35 @@ mod tests {
             matches!(err, Error::ConnectionError(ErrorCode::SettingsError)),
             "旧 draft 端点では WT 広告の省略も H3_SETTINGS_ERROR になること: {err:?}"
         );
+    }
+
+    #[test]
+    fn test_previous_wt_settings_ignored_for_draft17_relation() {
+        // draft-17 を選択した接続では、現在値と前回値の大小関係によらず
+        // H3_SETTINGS_ERROR にしない (draft-ietf-webtrans-http3-17 Section 3.2)
+        let previous = previous_wt_with_draft(DraftVersion::Draft15, 100, 50, 1_048_576);
+        for (uni, bidi, data) in [
+            (50, 25, 512_000),     // 減少
+            (100, 50, 1_048_576),  // 同値
+            (200, 100, 2_097_152), // 増加
+            (0, 0, 0),             // 省略
+        ] {
+            let mut conn = Connection::client(wt_draft17_client_settings());
+            conn.set_control_stream_id(2)
+                .expect("テスト用の制御ストリーム設定に成功すること");
+            conn.set_previous_wt_settings(previous);
+            let wt = crate::webtransport::Settings::new()
+                .wt_enabled_draft17(vi(1))
+                .wt_initial_max_streams_uni(vi(uni))
+                .wt_initial_max_streams_bidi(vi(bidi))
+                .wt_initial_max_data(vi(data));
+            process_exact_wt_settings(&mut conn, &wt)
+                .expect("draft-17 では前回値との大小関係によらず比較しないこと");
+            assert_eq!(
+                conn.negotiated_wt_draft_version(),
+                Some(DraftVersion::Draft17)
+            );
+        }
     }
 
     #[test]

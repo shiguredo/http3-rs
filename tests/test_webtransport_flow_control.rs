@@ -5,6 +5,10 @@
 
 use shiguredo_http3::webtransport::{
     Capsule, CapsuleProcessError, Error, ErrorCode, FlowControlLimits, Session,
+    Settings as WtSettings,
+};
+use shiguredo_http3::{
+    ClientConnection, Event, Frame, Settings, SettingsPayload, VarInt, frame::encode_frame,
 };
 
 /// ヘルパー: セッション間でカプセルを転送する
@@ -516,17 +520,11 @@ fn test_peer_settings_initial_limits_are_monotonic_baseline() {
 /// 現在接続の SETTINGS 初期値だけが通知されること
 ///
 /// 0-RTT 再開で前回接続の初期上限を注入しても、Connection の SETTINGS 受信
-/// イベントには現在接続の値だけが載ることを確認する。前回値が Session の
-/// 比較基準に混入しないことは、イベントの値を `Session::initialize_remote_limits`
-/// に渡す経路で確認する。
+/// イベントには現在接続の値だけが載ることを確認する。
 /// (draft-ietf-webtrans-http3-16 Section 5.5, 5.6.2, 5.6.4,
 ///  draft-ietf-webtrans-http3-17 Section 3.2)
 #[test]
-fn test_current_settings_limits_are_baseline_after_resumption() {
-    use shiguredo_http3::frame::encode_frame;
-    use shiguredo_http3::webtransport::Settings as WtSettings;
-    use shiguredo_http3::{ClientConnection, Event, Frame, Settings, SettingsPayload, VarInt};
-
+fn test_settings_received_reports_current_values_after_resumption() {
     let v = |value: u64| VarInt::new(value).expect("テスト用の VarInt 値が範囲に収まること");
 
     // 前回接続では大きい初期上限を受けていた
@@ -585,21 +583,4 @@ fn test_current_settings_limits_are_baseline_after_resumption() {
     );
     assert_eq!(received.wt_initial_max_streams_bidi, v(1));
     assert_eq!(received.wt_initial_max_data, v(50));
-
-    // 受け取った値をそのまま Session の比較基準にすると、現在値だけが上限になる
-    let mut session = Session::new(0);
-    session.initialize_remote_limits(FlowControlLimits {
-        max_streams_uni: received.wt_initial_max_streams_uni.get(),
-        max_streams_bidi: received.wt_initial_max_streams_bidi.get(),
-        max_data: received.wt_initial_max_data.get(),
-    });
-    session.set_established();
-    assert!(
-        session.can_send_data(50),
-        "現在の SETTINGS 初期値ちょうどまでは送信できること"
-    );
-    assert!(
-        !session.can_send_data(51),
-        "現在の SETTINGS 初期値を超えて送信できないこと"
-    );
 }

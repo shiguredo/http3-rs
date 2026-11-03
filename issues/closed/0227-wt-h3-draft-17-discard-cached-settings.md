@@ -44,18 +44,27 @@ draft-ietf-webtrans-http3-17 Section 3.2 の変更に従い、再開接続で前
 - `src/connection/client.rs`: `ClientConnection::set_previous_wt_settings`
 - `src/webtransport/session/mod.rs`: `Session::initialize_remote_limits`
 - `tests/test_webtransport_flow_control.rs`
+- `tests/test_webtransport_draft_connect.rs`
+- `pbt/tests/prop_connection.rs`
+- `src/webtransport/mod.rs`
+- `src/webtransport/connect/draft.rs`
 
 ## 一次資料
 
 - `refs/webtrans/draft-ietf-webtrans-http3-17.txt` Section 3.2 / 9.2
 - `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 3.2: 廃止された比較規則
-- `refs/quic/draft-ietf-quic-reliable-stream-reset-11.txt` Section 3: QUIC transport parameter の記憶義務
+- `refs/quic/draft-ietf-quic-reliable-stream-reset-11.txt` Section 3
+- `refs/webtrans/draft-ietf-webtrans-http3-14.txt` Section 3.2
+- `refs/webtrans/draft-ietf-webtrans-http3-15.txt` Section 3.2, 5.2
+- `refs/webtrans/draft-ietf-webtrans-http3-07.txt` Section 3.3
+- `refs/webtrans/draft-ietf-webtrans-http3-02.txt` Section 3.3
+- `refs/h3/rfc9114.txt` Section 7.2.4.2: QUIC transport parameter の記憶義務
 - <https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-17.txt>
 
 ## 解決方法
 
 - `src/connection/wt_session.rs` に `Connection::select_wt_draft_version` を追加し、`negotiated_wt_draft_version` と SETTINGS 受信処理が同じ選択規則を使うようにした。受信処理では `peer_settings` を更新する前に受信済み SETTINGS を渡して版を判定する
-- `src/connection/mod.rs` の 0-RTT 再開時の減少検出を、選択した版が draft-14 / 15 / 16 の場合に行うようにした。draft-14 では最大 WebTransport セッション数の減少も検出する。draft-02 は 0-RTT に対応せず、draft-07 の 0-RTT 再開 (最大セッション数の減少検出) は未実装のため対象外、draft-17 は前回接続の WT SETTINGS を引き継がないため対象外とした。版を決定できない場合は、ローカルとピアのどちらも draft-17 に対応しない端点に限り従来どおり検出し、どちらかが draft-17 に対応する端点 (コードポイントを広告しない本文版だけの端点を含む) は前回値を破棄する
+- `src/connection/mod.rs` の 0-RTT 再開時の減少検出を、選択した版が draft-14 / 15 / 16 の場合に行うようにした。draft-14 では最大 WebTransport セッション数の減少も検出する。draft-02 は 0-RTT に対応せず、draft-07 の 0-RTT 再開 (最大セッション数の減少検出) は未実装のため対象外、draft-17 は前回接続の WT SETTINGS を引き継がないため対象外とした。版を決定できない場合は、ローカルが draft-14 / 15 を広告し draft-17 を広告せず、ピアも draft-17 を広告しないときだけ従来どおり検出し、それ以外 (コードポイントを広告しない本文版だけのクライアントを含む) は前回値を破棄する。draft-15 以降は SETTINGS_WT_MAX_SESSIONS が廃止されたため、最大セッション数を比較するのは draft-14 だけになる
 - `set_previous_wt_settings` の rustdoc を、draft-14 / 15 / 16 の 0-RTT 再開用であり draft-17 では使われないこと、初期フロー制御値のいずれかが前回値より小さければ接続を閉じることを明記した。`ClientConnection` 側は `Connection` の rustdoc を参照する形にした
 - `Session::initialize_remote_limits` の rustdoc に、0-RTT 再開時も前回接続のキャッシュ値ではなく現在接続で受信した SETTINGS の値を渡すこと、前回値は減少検出にだけ使うことを追記した
 - テストを追加した: 単体テストで draft-14 の初期上限と最大セッション数の減少検出、旧コードポイントのみの端点での省略検出、本文版だけのクライアントでの非検出、draft-02 / 07 を選択した場合の非検出、ピアが draft-17 だけを広告する場合の非検出、旧コードポイントの前回値を持つ draft-17 接続での非検出、版選択の各組合せ。統合テストで draft-17 の減少受理 (セッション確立まで) と、前回値が WT 有効化に流用されないこと (公開 API の CONNECT 開始で確認)。フロー制御テストで現在の SETTINGS が Session の比較基準になることを Connection から確認する。PBT で前回版と現在版を独立に生成し、旧コードポイントの版だけが減少検出の対象になることを検証する
