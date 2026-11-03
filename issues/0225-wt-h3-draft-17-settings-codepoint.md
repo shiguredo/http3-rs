@@ -1,7 +1,7 @@
 # draft-17 の SETTINGS_WT_ENABLED コードポイントを旧版と区別して扱う
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-03
 - Branch: feature/add-wt-draft-17-settings-codepoint
 - Polished: 2026-11-03
 - Category: add
@@ -52,3 +52,16 @@ draft-ietf-webtrans-http3-17 Section 9.2 の `SETTINGS_WT_ENABLED = 0x20b8933b` 
 - `refs/webtrans/draft-ietf-webtrans-http3-17.txt` Section 3.1 / 5.1 / 7.1 / 9.2
 - `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 9.2: 旧 ID
 - <https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-17.txt>
+
+## 解決方法
+
+- `src/settings.rs` に新コードポイント `0x20b8933b` の定数と `Setting::WtEnabledDraft17` を追加し、`Setting::from_wire` / `Setting::as_wire` / `Settings::from_payload` に配線した。旧コードポイント `0x2c7cf000` の `Setting::WtEnabled` はそのまま維持し、新旧を独立した variant として扱う
+- `src/webtransport/settings.rs` に `wt_enabled_draft17` フィールドとビルダーを追加し、`from_payload` / `iter` / `is_enabled` / `detect_draft_pattern` / `declares_flow_control` を対応させた。`detect_draft_pattern` は新コードポイントが非ゼロなら draft-17 を最優先し、`declares_flow_control` は新旧どちらの SETTINGS_WT_ENABLED を送る端点にも draft-14 の `WT_MAX_SESSIONS > 1` 条件を適用しない
+- `src/webtransport/connect/draft.rs` に `DraftVersion::Draft17` を追加した。`:protocol` は `webtransport-h3`、SETTINGS は新コードポイントと初期フロー制御値で構築し、`requires_enable_connect_protocol` / `requires_reset_stream_at` は true、初期カプセルは不要とした
+- `src/connection/mod.rs` で、クライアントがサーバーから受信する SETTINGS_WT_ENABLED の値が 2 以上の場合の検証を新コードポイントにも広げた。サーバー受信時にはこのクライアント向け検証を適用せず、値は保持して版選択に使う
+- `src/connection/wt_session.rs` で交差する版の選択に draft-17 を含め、クライアントが SETTINGS_WT_ENABLED を送らない場合に本文版の要件 (`webtransport-h3` と reset_stream_at) で CONNECT を検証するようにした。共通する版がない場合は受理しない
+- `tests/test_webtransport_settings.rs` を新設し、制御ストリームの生バイト列から新旧単独 / 併送 / 値 0・1・2 / 未知 ID 併送を公開 API 経由で検証する。CONNECT の受理と拒否は `tests/test_webtransport_draft_connect.rs` に追加し、draft-17 同士のセッション確立、SETTINGS_WT_ENABLED を送らないクライアントの受理、capsule 用トークンの拒否、reset_stream_at 非対応の拒否、共通版がない場合の拒否を確認する
+- PBT を追加し、`declares_flow_control` の宣言境界と `detect_draft_pattern` の優先順位を 0 / 1 / 2 の境界をまたぐ入力で検証する
+- `examples/wt_server` のサーバー SETTINGS 構築に draft-17 を追加した
+
+接続単位の版選択規則の全体と `ConnectRequest::from_headers` の版推定は 0226 で扱う。
