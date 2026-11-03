@@ -29,7 +29,7 @@ draft-ietf-webtrans-http3-17 Section 9.2 の `SETTINGS_WT_ENABLED = 0x20b8933b` 
 - サーバーから新 ID の値 `2` 以上を受信したクライアントは `H3_SETTINGS_ERROR` にする。クライアントから受信した値の扱いは Section 3.1 / 7.1 の役割差を守り、クライアント向け検証をサーバーにも一律適用しない
 - 同じ SETTINGS ID の重複は禁止したまま、新旧の異なる ID の併送を許可する
 
-接続上でどの版を選ぶか、クライアントから新 ID が送られない場合にどうするかは 0226 で扱う。本 issue はワイヤー表現と設定値の保持に絞る。
+接続上でどの版を選ぶかは 0226 で扱う。本 issue はワイヤー表現と設定値の保持に加え、接続で使う版を決めるのに必要な最小限の選択 (クライアントが新 ID を送らない場合に本文版の要件で CONNECT を検証する部分) までを扱う。
 
 ## 完了条件
 
@@ -45,7 +45,7 @@ draft-ietf-webtrans-http3-17 Section 9.2 の `SETTINGS_WT_ENABLED = 0x20b8933b` 
 - `src/webtransport/settings.rs`: `Settings`, `from_payload`, `iter`, `detect_draft_pattern`, `declares_flow_control`
 - `src/webtransport/connect/draft.rs`: `DraftVersion`, `build_client_settings`, `build_server_settings`
 - `src/connection/mod.rs`: `Connection::process_control_stream`
-- `pbt/tests/prop_settings.rs`, `pbt/tests/prop_webtransport/settings.rs`, `tests/test_webtransport_draft_connect.rs`
+- `pbt/tests/prop_settings.rs`, `pbt/tests/prop_webtransport/settings.rs`, `tests/test_webtransport_draft_connect.rs`, `tests/test_webtransport_settings.rs`
 
 ## 一次資料
 
@@ -59,8 +59,8 @@ draft-ietf-webtrans-http3-17 Section 9.2 の `SETTINGS_WT_ENABLED = 0x20b8933b` 
 - `src/webtransport/settings.rs` に `wt_enabled_draft17` フィールドとビルダーを追加し、`from_payload` / `iter` / `is_enabled` / `detect_draft_pattern` / `declares_flow_control` を対応させた。`detect_draft_pattern` は新コードポイントが非ゼロなら draft-17 を最優先し、`declares_flow_control` は新旧どちらの SETTINGS_WT_ENABLED を送る端点にも draft-14 の `WT_MAX_SESSIONS > 1` 条件を適用しない
 - `src/webtransport/connect/draft.rs` に `DraftVersion::Draft17` を追加した。`:protocol` は `webtransport-h3`、SETTINGS は新コードポイントと初期フロー制御値で構築し、`requires_enable_connect_protocol` / `requires_reset_stream_at` は true、初期カプセルは不要とした
 - `src/connection/mod.rs` で、クライアントがサーバーから受信する SETTINGS_WT_ENABLED の値が 2 以上の場合の検証を新コードポイントにも広げた。サーバー受信時にはこのクライアント向け検証を適用せず、値は保持して版選択に使う
-- `src/connection/wt_session.rs` で交差する版の選択に draft-17 を含め、クライアントが SETTINGS_WT_ENABLED を送らない場合に本文版の要件 (`webtransport-h3` と reset_stream_at) で CONNECT を検証するようにした。共通する版がない場合は受理しない
-- `tests/test_webtransport_settings.rs` を新設し、制御ストリームの生バイト列から新旧単独 / 併送 / 値 0・1・2 / 未知 ID 併送を公開 API 経由で検証する。CONNECT の受理と拒否は `tests/test_webtransport_draft_connect.rs` に追加し、draft-17 同士のセッション確立、SETTINGS_WT_ENABLED を送らないクライアントの受理、capsule 用トークンの拒否、reset_stream_at 非対応の拒否、共通版がない場合の拒否を確認する
+- `src/connection/wt_session.rs` で交差する版の選択に draft-17 を含め、クライアントが SETTINGS_WT_ENABLED を送らない場合に本文版の要件 (`webtransport-h3` と reset_stream_at) で CONNECT を検証するようにした。交差する版がなく本文版にも対応しないサーバーは受理しない。`:protocol` は選択した版のトークンと一致することを要求する
+- `tests/test_webtransport_settings.rs` を新設し、制御ストリームの生バイト列から新旧単独 / 併送 / 値 0・1・2 を公開 API 経由で検証する。未知 ID を無視する既存動作は `src/settings.rs` と `src/webtransport/settings.rs` の単体テストで維持する。CONNECT の受理と拒否は `tests/test_webtransport_draft_connect.rs` に追加し、draft-17 同士のセッション確立、SETTINGS_WT_ENABLED を送らないクライアントの受理、capsule 用トークンの拒否、reset_stream_at 非対応の拒否、共通版がない場合の拒否、新旧併送時に選択版以外のトークンを拒否することを確認する
 - PBT を追加し、`declares_flow_control` の宣言境界と `detect_draft_pattern` の優先順位を 0 / 1 / 2 の境界をまたぐ入力で検証する
 - `examples/wt_server` のサーバー SETTINGS 構築に draft-17 を追加した
 
