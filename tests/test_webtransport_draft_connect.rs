@@ -14,11 +14,12 @@
 //! (draft-ietf-webtrans-http3-17 Section 9.2)。
 //! SETTINGS 単体のコードポイント対応は tests/test_webtransport_settings.rs で扱う。
 
+use shiguredo_http3::frame::encode_frame;
 use shiguredo_http3::qpack::Encoder;
 use shiguredo_http3::webtransport::DraftVersion;
 use shiguredo_http3::{
-    Error, ErrorCode, Event, Header, ServerConnection, Settings, VarInt, WebTransportEvent,
-    WtSetupError, webtransport,
+    Error, ErrorCode, Event, Frame, Header, ServerConnection, Settings, SettingsPayload, VarInt,
+    WebTransportEvent, WtSetupError, webtransport,
 };
 
 fn vi(value: u64) -> VarInt {
@@ -1648,7 +1649,14 @@ mod version_selection {
 
     /// 指定したドラフト版を広告するサーバー接続を作成する
     fn make_server(versions: &[DraftVersion], transport_verified: bool) -> ServerConnection {
-        let wt = WtSettings::for_draft_versions(versions, params().max_sessions);
+        make_server_with_wt(
+            WtSettings::for_draft_versions(versions, params().max_sessions),
+            transport_verified,
+        )
+    }
+
+    /// 指定した WebTransport SETTINGS を広告するサーバー接続を作成する
+    fn make_server_with_wt(wt: WtSettings, transport_verified: bool) -> ServerConnection {
         let mut server = ServerConnection::new(Settings::new().enable_webtransport_server(wt));
         server
             .set_control_stream_id(3)
@@ -2416,5 +2424,104 @@ mod version_selection {
             matches!(err, Error::ConnectionError(ErrorCode::StreamCreationError)),
             "共通する版がないクライアントはサーバー開始 bidi を拒否すること: {err:?}"
         );
+    }
+
+    // =========================================================================
+    // 0-RTT 再開時の前回 WT SETTINGS の扱い
+    // (draft-ietf-webtrans-http3-16 Section 3.2,
+    //  draft-ietf-webtrans-http3-17 Section 3.2)
+    // =========================================================================
+
+    /// 比較用の初期上限を持つ前回接続の draft-17 の WT SETTINGS
+    fn previous_wt_draft17() -> WtSettings {
+        WtSettings::new()
+            .wt_enabled_draft17(vi(1))
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(50))
+            .wt_initial_max_data(vi(1_048_576))
+    }
+
+    #[test]
+    fn previous_wt_settings_do_not_enable_webtransport_for_connect() {
+        // 前回接続の SETTINGS に WT 有効化が含まれていても、現在接続のサーバー
+        // SETTINGS に WT 広告がなければ CONNECT を開始できない
+        let previous = WtSettings::new()
+            .wt_enabled(vi(1))
+            .wt_enabled_draft17(vi(1))
+            .wt_initial_max_data(vi(1_048_576));
+        // draft-17 に対応する端点は前回接続の WT SETTINGS を破棄する
+        let mut client = make_client(client_wt(&[DraftVersion::Draft17]), true);
+        client.set_previous_wt_settings(previous);
+
+        // 現在のサーバー SETTINGS は WT の広告を含まない
+        let mut client_ctrl = Vec::new();
+        client_ctrl.extend_from_slice(&[0x00]);
+        let payload = SettingsPayload::from_settings(&Settings::new().h3_datagram(true));
+        let mut buf = vec![0u8; 256];
+        let len = encode_frame(&mut buf, &Frame::Settings(payload))
+            .expect("テスト用の SETTINGS フレームエンコードに成功すること");
+        buf.truncate(len);
+        client_ctrl.extend_from_slice(&buf);
+        client
+            .feed_stream(3, &client_ctrl, false)
+            .expect("テスト用のサーバー SETTINGS 受信に成功すること");
+        client
+            .drain_events()
+            .expect("テスト用のクライアントイベント取得に成功すること");
+
+        let headers = ConnectRequest::new("https", "example.com", "/wt")
+            .draft_version(DraftVersion::Draft17)
+            .to_headers()
+            .expect("テスト用の CONNECT ヘッダー作成に成功すること");
+        let err = client.send_request(&headers, false).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::WtSetup(shiguredo_http3::WtSetupError::WebTransportNotEnabled)
+            ),
+            "前回値があっても WT が広告されていなければ CONNECT を開始しないこと: {err:?}"
+        );
+    }
+
+    /// draft-17 の再開接続で、現在の SETTINGS が前回値と無関係に受理されることを確認する
+    ///
+    /// SETTINGS の交換だけでなく、実際に WebTransport セッションを確立できることまで
+    /// 確認する。現在の SETTINGS の値だけで版選択とセッション確立が進む。
+    fn assert_draft17_resumption_ok(previous: WtSettings, current: WtSettings) {
+        let mut server = make_server_with_wt(current, true);
+        let mut client = make_client(client_wt(&[DraftVersion::Draft17]), true);
+        // 前回接続の SETTINGS を注入してから、現在接続の SETTINGS を受信させる
+        client.set_previous_wt_settings(previous);
+        exchange_settings(&mut server, &mut client);
+
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft17),
+            "サーバーも新コードポイントの交差で draft-17 を選ぶこと"
+        );
+        assert_eq!(
+            client.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft17),
+            "クライアントは前回値ではなく現在の SETTINGS で draft-17 を選ぶこと"
+        );
+        let (session_id, _events) =
+            establish_session(&mut server, &mut client, DraftVersion::Draft17);
+        assert_eq!(
+            session_id, 0,
+            "現在の SETTINGS で WebTransport セッションを確立できること"
+        );
+    }
+
+    #[test]
+    fn draft17_resumption_accepts_decreased_initial_limits() {
+        // draft-17 では前回接続の WT SETTINGS を引き継がず、現在の SETTINGS の
+        // 初期上限だけを使う。前回値より小さい値でも H3_SETTINGS_ERROR にしない
+        // (draft-ietf-webtrans-http3-17 Section 3.2)。
+        let current = WtSettings::new()
+            .wt_enabled_draft17(vi(1))
+            .wt_initial_max_streams_uni(vi(50))
+            .wt_initial_max_streams_bidi(vi(25))
+            .wt_initial_max_data(vi(512_000));
+        assert_draft17_resumption_ok(previous_wt_draft17(), current);
     }
 }

@@ -206,10 +206,9 @@ impl ClientConnection {
 
     /// 0-RTT 再開時の前回接続のピア WebTransport SETTINGS を注入する
     ///
-    /// クライアントが 0-RTT 再開時に、前回接続でキャッシュしたピアの
-    /// WebTransport SETTINGS を注入する。SETTINGS フレーム受信時に
-    /// フロー制御値の減少を検出して H3_SETTINGS_ERROR で接続を閉じる。
-    /// (draft-ietf-webtrans-http3-16 Section 3.2)
+    /// draft-14 / 15 / 16 の 0-RTT 再開用である。詳細な条件は
+    /// `Connection::set_previous_wt_settings` の rustdoc を参照。
+    /// draft-17 を選択した接続ではこの値を使わないため、注入しなくてよい。
     pub fn set_previous_wt_settings(&mut self, settings: crate::webtransport::Settings) {
         self.inner.set_previous_wt_settings(settings);
     }

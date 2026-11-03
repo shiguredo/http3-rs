@@ -1,9 +1,14 @@
 //! Property-Based Testing for HTTP/3 Connection (RFC 9114)
 //!
-//! get_stream_data のループ終了性とデータ完全性を検証する。
+//! get_stream_data のループ終了性とデータ完全性、および 0-RTT 再開時の
+//! WebTransport SETTINGS の減少検出が選択したドラフト版に依存することを検証する。
 
 use pbt::strategies::sample_len;
-use shiguredo_http3::{ClientConnection, Header};
+use shiguredo_http3::frame::encode_frame;
+use shiguredo_http3::webtransport::{DraftVersion, Settings as WtSettings};
+use shiguredo_http3::{
+    ClientConnection, Error, ErrorCode, Frame, Header, Settings, SettingsPayload, VarInt,
+};
 
 /// リクエスト送信後の take_stream_data ループ用ヘルパー
 ///
@@ -165,6 +170,137 @@ fn prop_get_stream_data_returns_none_after_consume() -> noprop::TestResult {
             "FIN 交付後に get_stream_data が None ではなく {:?} を返した",
             result.map(|(d, f)| (d.len(), f))
         );
+        Ok(())
+    })?;
+    Ok(())
+}
+
+// =============================================================================
+// WebTransport 0-RTT 再開時の WT SETTINGS 減少検出
+// (draft-ietf-webtrans-http3-16 Section 3.2,
+//  draft-ietf-webtrans-http3-17 Section 3.2)
+// =============================================================================
+
+/// 指定した版と初期上限を持つ WebTransport SETTINGS を構築する
+///
+/// テストで扱う版は、旧コードポイントの draft-14 / draft-15 / 16 と
+/// 新コードポイントの draft-17 である。
+fn wt_settings(draft: DraftVersion, uni: u64, bidi: u64, data: u64) -> WtSettings {
+    let v = |x: u64| VarInt::new(x).expect("生成値が VarInt の範囲内であること");
+    let settings = WtSettings::new()
+        .wt_initial_max_streams_uni(v(uni))
+        .wt_initial_max_streams_bidi(v(bidi))
+        .wt_initial_max_data(v(data));
+    match draft {
+        DraftVersion::Draft17 => settings.wt_enabled_draft17(VarInt::from_static(1)),
+        DraftVersion::Draft14 => settings.wt_max_sessions_draft14(VarInt::from_static(1)),
+        _ => settings.wt_enabled(VarInt::from_static(1)),
+    }
+}
+
+/// SETTINGS フレームを制御ストリームのバイト列にする
+fn settings_control_stream(settings: &Settings) -> Vec<u8> {
+    let payload = SettingsPayload::from_settings(settings);
+    let mut buf = vec![0u8; 4096];
+    let len = encode_frame(&mut buf, &Frame::Settings(payload))
+        .expect("テスト用の SETTINGS フレームエンコードに成功すること");
+    buf.truncate(len);
+
+    // 単方向ストリームの先頭に制御ストリームタイプ (0x00) を置く
+    let mut stream = vec![0x00];
+    stream.extend_from_slice(&buf);
+    stream
+}
+
+/// Property: 0-RTT 再開時の WT SETTINGS の減少検出は選択版が旧コードポイントの
+/// ときだけ働き、draft-17 では前回値と現在値の大小関係によらず検出しない
+///
+/// 前回値と現在値の大小関係、および選択される版の組み合わせをランダムに生成し、
+/// 次の対応を検証する:
+/// - draft-14 / 15 / 16: 現在値のいずれかが前回値より小さければ H3_SETTINGS_ERROR
+/// - draft-17: 大小関係によらず受理し、現在の SETTINGS の値だけを使う
+#[test]
+fn prop_previous_wt_settings_reduction_only_for_old_draft() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_CONNECTION_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        // 両端が同じコードポイントを広告するため、この版が接続の選択結果になる
+        let draft = noprop::sample_choice(
+            ctx,
+            &[
+                DraftVersion::Draft14,
+                DraftVersion::Draft15,
+                DraftVersion::Draft17,
+            ],
+        );
+        // 前回接続の版は現在の版と独立に選ぶ。前回値のコードポイントが
+        // 現在の選択版の判定に影響しないことを確かめる。
+        let previous_draft =
+            noprop::sample_choice(ctx, &[DraftVersion::Draft15, DraftVersion::Draft17]);
+        let prev_uni = noprop::sample_u64_in(ctx, 0..=1000);
+        let prev_bidi = noprop::sample_u64_in(ctx, 0..=1000);
+        let prev_data = noprop::sample_u64_in(ctx, 0..=100_000);
+
+        // 現在値は、前回値との大小関係 (省略 / 同値 / 減少 / 増加) を必ず含む
+        // 候補から選ぶ。省略はデフォルト値 0 として扱われる。残りの確率で
+        // 前回値と無関係な値も選び、大小関係の組み合わせを広げる。
+        let mut new_value = |prev: u64, max: u64| {
+            let random = noprop::sample_u64_in(ctx, 0..=max);
+            noprop::sample_choice(
+                ctx,
+                &[
+                    0,
+                    prev,
+                    prev.saturating_sub(1),
+                    prev.saturating_add(1),
+                    random,
+                ],
+            )
+        };
+        let new_uni = new_value(prev_uni, 1000);
+        let new_bidi = new_value(prev_bidi, 1000);
+        let new_data = new_value(prev_data, 100_000);
+
+        let local_wt = wt_settings(draft, 0, 0, 0);
+        let mut client =
+            ClientConnection::new(Settings::new().enable_webtransport_client(local_wt));
+        client
+            .set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        client.set_previous_wt_settings(wt_settings(
+            previous_draft,
+            prev_uni,
+            prev_bidi,
+            prev_data,
+        ));
+
+        let peer_wt = wt_settings(draft, new_uni, new_bidi, new_data);
+        let peer_settings = Settings::new().enable_webtransport_server(peer_wt);
+        let result = client.feed_stream(3, &settings_control_stream(&peer_settings), false);
+
+        let decreased = new_uni < prev_uni || new_bidi < prev_bidi || new_data < prev_data;
+        // draft-17 だけが前回値を破棄する。旧コードポイントの版は前回の版に
+        // かかわらず減少検出の対象になる
+        let expect_error = draft != DraftVersion::Draft17 && decreased;
+        if expect_error {
+            assert!(
+                matches!(
+                    result,
+                    Err(Error::ConnectionError(ErrorCode::SettingsError))
+                ),
+                "旧コードポイントの版で初期上限が減少した場合は H3_SETTINGS_ERROR になること: {result:?}"
+            );
+        } else {
+            assert!(
+                result.is_ok(),
+                "選択版 {draft:?} で初期上限の減少を検出しないこと: {result:?}"
+            );
+            assert_eq!(
+                client.negotiated_wt_draft_version(),
+                Some(draft),
+                "現在の SETTINGS のコードポイントから選択版が決まること"
+            );
+        }
         Ok(())
     })?;
     Ok(())

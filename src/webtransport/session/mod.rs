@@ -289,7 +289,13 @@ impl Session {
     /// ピアが SETTINGS で初期値を宣言していない場合 (全フィールド 0) は
     /// 呼ばなくても [`FlowControlLimits::new`] と同じ状態になる。
     ///
-    /// draft-ietf-webtrans-http3-16 Section 5.5, 5.6.2, 5.6.4
+    /// 0-RTT 再開時も、前回接続でキャッシュした値ではなく、現在接続で受信した
+    /// ピアの SETTINGS の値を渡す。draft-17 を選択した接続は前回接続の
+    /// WT SETTINGS を引き継がないため、特にこの点が必要になる
+    /// (draft-ietf-webtrans-http3-17 Section 3.2)。
+    ///
+    /// draft-ietf-webtrans-http3-16 Section 5.5, 5.6.2, 5.6.4,
+    /// draft-ietf-webtrans-http3-17 Section 3.2
     /// 将来のドラフトで変更される可能性がある
     pub fn initialize_remote_limits(&mut self, limits: FlowControlLimits) {
         self.remote_limits = limits;

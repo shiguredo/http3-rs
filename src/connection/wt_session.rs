@@ -46,10 +46,19 @@ impl Connection {
 
     /// 0-RTT 再開時の前回接続のピア WebTransport SETTINGS を注入する
     ///
-    /// クライアントが 0-RTT 再開時に、前回接続でキャッシュしたピアの
-    /// WebTransport SETTINGS を注入する。SETTINGS フレーム受信時に
-    /// フロー制御値の減少を検出して H3_SETTINGS_ERROR で接続を閉じる。
-    /// (draft-ietf-webtrans-http3-16 Section 3.2)
+    /// draft-14 / 15 / 16 の 0-RTT 再開用である。クライアントが 0-RTT 再開時に、
+    /// 前回接続でキャッシュしたピアの WebTransport SETTINGS を注入する。
+    /// SETTINGS フレーム受信時に、接続で選択した版が draft-14 / 15 / 16 の場合に限り、
+    /// 初期フロー制御値 (単方向 / 双方向ストリーム上限、データ上限) のいずれかが
+    /// 前回値より小さければ H3_SETTINGS_ERROR で接続を閉じる
+    /// (draft-ietf-webtrans-http3-14 Section 3.2,
+    ///  draft-ietf-webtrans-http3-16 Section 3.2)。
+    ///
+    /// draft-17 を選択した接続では前回接続の WT SETTINGS を引き継がず、
+    /// 現在接続で受信した値と省略時のデフォルト値だけを使うため、この値は使われない
+    /// (draft-ietf-webtrans-http3-17 Section 3.2)。版は SETTINGS のコードポイントの
+    /// 交差で決まるので、値を注入したことだけを理由に旧規則が適用されることはない。
+    /// draft-17 の 0-RTT 再開では注入しなくてよい。
     pub fn set_previous_wt_settings(&mut self, settings: crate::webtransport::Settings) {
         self.previous_wt_settings = Some(settings);
     }
@@ -240,6 +249,59 @@ impl Connection {
             .is_some_and(|settings| settings.advertises_wt_enabled())
     }
 
+    /// 指定したピア SETTINGS を使って接続で使う WebTransport のドラフト版を選ぶ
+    ///
+    /// [`Connection::negotiated_wt_draft_version`] と、SETTINGS フレーム受信時の
+    /// 版判定の両方から使う。受信処理では `self.peer_settings` を更新する前に
+    /// 判定する必要があるため、ピアの HTTP/3 SETTINGS を引数で受け取る。
+    ///
+    /// `peer_settings` が `None` の場合はピアの SETTINGS を未受信として扱う。
+    /// サーバーはクライアントの SETTINGS を受信するまで版を決められない
+    /// (draft-ietf-webtrans-http3-17 Section 7.1)。
+    /// HTTP/3 SETTINGS 全体を受け取るのは、サーバーで「SETTINGS 未受信」と
+    /// 「受信済みだが WebTransport の広告がない」を区別するため。
+    /// 選択規則の詳細は [`Connection::negotiated_wt_draft_version`] を参照。
+    /// 将来のドラフトで変更される可能性がある
+    pub(crate) fn select_wt_draft_version(
+        &self,
+        peer_settings: Option<&crate::settings::Settings>,
+    ) -> Option<DraftVersion> {
+        let local = self.local_settings.wt_settings.as_ref()?;
+        match self.role {
+            Role::Client => {
+                let peer = peer_settings?.wt_settings.as_ref()?;
+                if let Some(draft) = local.first_mutual_draft(peer) {
+                    return Some(draft);
+                }
+                // 本文版だけに対応するクライアントは SETTINGS_WT_ENABLED を送らず、
+                // 対応するドラフト版のコードポイントも広告しない。そのようなクライアントは、
+                // ピアが本文版のコードポイントを広告していれば本文版を選ぶ
+                // (draft-ietf-webtrans-http3-17 Section 7.1)。
+                (!local.advertises_any_draft_version()
+                    && peer.advertises_draft_version(DraftVersion::Draft17))
+                .then_some(DraftVersion::Draft17)
+            }
+            Role::Server => {
+                // クライアントの SETTINGS を受信するまでは版を決められない
+                // (draft-ietf-webtrans-http3-17 Section 7.1: サーバーは
+                //  クライアントの SETTINGS を受信するまで WebTransport リクエストを
+                //  処理してはならない)。
+                let peer_settings = peer_settings?;
+                if let Some(peer) = peer_settings.wt_settings.as_ref()
+                    && let Some(draft) = local.first_mutual_draft(peer)
+                {
+                    return Some(draft);
+                }
+                // クライアントが SETTINGS_WT_ENABLED を送らない場合、または
+                // サーバーが対応しないコードポイントだけを送る場合は本文版を選ぶ
+                // (draft-ietf-webtrans-http3-17 Section 7.1 の 3 番目の箇条書き)。
+                local
+                    .advertises_draft_version(DraftVersion::Draft17)
+                    .then_some(DraftVersion::Draft17)
+            }
+        }
+    }
+
     /// 接続単位で選択した WebTransport のドラフト版を返す
     ///
     /// SETTINGS のコードポイントによる版選択の結果を返す。
@@ -268,40 +330,9 @@ impl Connection {
     /// いる場合に CONNECT を受理してはならない。
     /// 将来のドラフトで変更される可能性がある
     pub fn negotiated_wt_draft_version(&self) -> Option<DraftVersion> {
-        let local = self.local_settings.wt_settings.as_ref()?;
-        match self.role {
-            Role::Client => {
-                let peer = self.peer_settings.as_ref()?.wt_settings.as_ref()?;
-                if let Some(draft) = local.first_mutual_draft(peer) {
-                    return Some(draft);
-                }
-                // 本文版だけに対応するクライアントは SETTINGS_WT_ENABLED を送らず、
-                // 対応するドラフト版のコードポイントも広告しない。そのようなクライアントは、
-                // ピアが本文版のコードポイントを広告していれば本文版を選ぶ
-                // (draft-ietf-webtrans-http3-17 Section 7.1)。
-                (!local.advertises_any_draft_version()
-                    && peer.advertises_draft_version(DraftVersion::Draft17))
-                .then_some(DraftVersion::Draft17)
-            }
-            Role::Server => {
-                // クライアントの SETTINGS を受信するまでは版を決められない
-                // (draft-ietf-webtrans-http3-17 Section 7.1: サーバーは
-                //  クライアントの SETTINGS を受信するまで WebTransport リクエストを
-                //  処理してはならない)。
-                let peer_settings = self.peer_settings.as_ref()?;
-                if let Some(peer) = peer_settings.wt_settings.as_ref()
-                    && let Some(draft) = local.first_mutual_draft(peer)
-                {
-                    return Some(draft);
-                }
-                // クライアントが SETTINGS_WT_ENABLED を送らない場合、または
-                // サーバーが対応しないコードポイントだけを送る場合は本文版を選ぶ
-                // (draft-ietf-webtrans-http3-17 Section 7.1 の 3 番目の箇条書き)。
-                local
-                    .advertises_draft_version(DraftVersion::Draft17)
-                    .then_some(DraftVersion::Draft17)
-            }
-        }
+        // SETTINGS 受信処理と同じ選択規則を使う。受信処理では peer_settings を
+        // 更新する前に判定するため、選択規則は `select_wt_draft_version` に集約する。
+        self.select_wt_draft_version(self.peer_settings.as_ref())
     }
 
     /// WebTransport の能力ネゴシエーションが完了しているかどうかを判定する
