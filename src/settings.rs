@@ -449,6 +449,9 @@ impl Settings {
     /// WebTransport のドラフトパターンを返す
     ///
     /// `wt_settings` が `None` または WebTransport として解釈できない場合は `None`。
+    /// 接続で使う版は [`crate::Connection::negotiated_wt_draft_version`] で決める。
+    /// 本関数は互換判定用であり、複数の広告を 1 つの版に畳み込むため接続版の
+    /// 決定には使わない。
     pub fn webtransport_draft_pattern(&self) -> Option<webtransport::DraftVersion> {
         self.wt_settings
             .as_ref()

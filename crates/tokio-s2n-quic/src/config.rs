@@ -156,7 +156,11 @@ pub struct ClientConfig {
     pub disable_cert_validation: bool,
     /// HTTP/3 設定
     pub h3_settings: H3Settings,
-    /// WebTransport ドラフトバージョン (デフォルト: Draft15)
+    /// CONNECT の `:protocol` トークン系統を選ぶためのドラフトバージョン
+    /// (デフォルト: Draft15)
+    ///
+    /// `:protocol` は version からトークン系統だけを決めるため、draft-15 / 16 / 17 は
+    /// 同じ値になる。接続で使う版そのものは SETTINGS のコードポイントで決まる。
     pub draft_version: DraftVersion,
 }
 
@@ -195,6 +199,7 @@ impl ClientConfig {
     }
 
     /// WebTransport ドラフトバージョンを設定する
+    /// CONNECT の `:protocol` トークン系統を選ぶためのドラフトバージョンを設定する
     pub fn wt_draft_version(mut self, version: DraftVersion) -> Self {
         self.draft_version = version;
         self

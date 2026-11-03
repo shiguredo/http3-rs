@@ -239,19 +239,6 @@ mod draft02 {
             "draft-02 クライアントの CONNECT が拒否された: {result:?}"
         );
     }
-
-    #[test]
-    fn draft_detection_correct() {
-        let mut server = setup_server(false);
-        let client_ctrl = build_draft02_client_ctrl();
-        feed_client_settings(&mut server, &client_ctrl);
-
-        let peer = server.peer_settings().expect("test must succeed");
-        assert_eq!(
-            peer.webtransport_draft_pattern(),
-            Some(DraftVersion::Draft02)
-        );
-    }
 }
 
 // =========================================================================
@@ -330,19 +317,6 @@ mod draft07 {
             "Safari パターンの CONNECT が拒否された: {result:?}"
         );
     }
-
-    #[test]
-    fn draft_detection_correct() {
-        let mut server = setup_server(false);
-        let client_ctrl = build_draft07_client_ctrl();
-        feed_client_settings(&mut server, &client_ctrl);
-
-        let peer = server.peer_settings().expect("test must succeed");
-        assert_eq!(
-            peer.webtransport_draft_pattern(),
-            Some(DraftVersion::Draft07)
-        );
-    }
 }
 
 // =========================================================================
@@ -392,19 +366,6 @@ mod draft14 {
         assert!(
             result.is_ok(),
             "draft-14 クライアントの CONNECT が拒否された (ENABLE_CONNECT_PROTOCOL はクライアントに送信義務なし): {result:?}"
-        );
-    }
-
-    #[test]
-    fn draft_detection_correct() {
-        let mut server = setup_server(false);
-        let client_ctrl = build_draft14_client_ctrl_with_ecp();
-        feed_client_settings(&mut server, &client_ctrl);
-
-        let peer = server.peer_settings().expect("test must succeed");
-        assert_eq!(
-            peer.webtransport_draft_pattern(),
-            Some(DraftVersion::Draft14)
         );
     }
 }
@@ -473,19 +434,6 @@ mod draft15 {
             "draft-15 で RESET_STREAM_AT 未対応は拒否されるべき: {err:?}"
         );
     }
-
-    #[test]
-    fn draft_detection_correct() {
-        let mut server = setup_server(true);
-        let client_ctrl = build_draft15_client_ctrl_with_ecp();
-        feed_client_settings(&mut server, &client_ctrl);
-
-        let peer = server.peer_settings().expect("test must succeed");
-        assert_eq!(
-            peer.webtransport_draft_pattern(),
-            Some(DraftVersion::Draft15)
-        );
-    }
 }
 
 // =========================================================================
@@ -533,34 +481,6 @@ mod common {
         server
             .feed_stream(0, &frame, false)
             .expect("旧 draft のサーバーは版依存の検証をスキップして CONNECT を処理すること");
-    }
-
-    #[test]
-    fn connect_rejected_when_no_common_draft() {
-        // サーバーが draft-15 / 16 まで、クライアントが draft-17 だけに対応する場合、
-        // 共通する版がないためサーバーは CONNECT を受理しない
-        // (draft-ietf-webtrans-http3-17 Section 7.1)
-        let mut server = setup_server(true);
-        let wt = webtransport::Settings::new()
-            .wt_enabled_draft17(vi(1))
-            .wt_initial_max_data(vi(1024));
-        let settings = Settings::new().enable_webtransport_client(wt);
-        let mut client = shiguredo_http3::ClientConnection::new(settings);
-        client
-            .set_control_stream_id(2)
-            .expect("テスト用の制御ストリーム設定に成功すること");
-        let (client_ctrl, _) = client
-            .take_stream_data(2)
-            .expect("テスト用のクライアント SETTINGS 取得に成功すること");
-        feed_client_settings(&mut server, &client_ctrl);
-
-        let headers = wt_connect_headers(DraftVersion::Draft15);
-        let frame = build_headers_frame(&headers);
-        let result = server.feed_stream(0, &frame, false);
-        assert!(
-            matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
-            "共通する版がない場合は CONNECT を受理しないこと: {result:?}"
-        );
     }
 
     #[test]
@@ -1048,51 +968,30 @@ mod pending_data_frame {
     }
 
     #[test]
-    fn draft07_pending_data_buffered() {
-        let mut server = setup_server(false);
-        let client_ctrl = build_draft07_client_ctrl();
-        feed_client_settings(&mut server, &client_ctrl);
+    fn draft07_draft14_draft15_pending_data_buffered() {
+        // 楽観的カプセル送信: draft-07 以降の Pending 中の DATA は
+        // バッファリングされる (draft-02 は破棄する)
+        for (draft, reset_stream_at) in [
+            (DraftVersion::Draft07, false),
+            (DraftVersion::Draft14, true),
+            (DraftVersion::Draft15, true),
+        ] {
+            let mut server = setup_server(reset_stream_at);
+            let client_ctrl = match draft {
+                DraftVersion::Draft07 => build_draft07_client_ctrl(),
+                DraftVersion::Draft14 => build_draft14_client_ctrl_with_ecp(),
+                _ => build_draft15_client_ctrl_with_ecp(),
+            };
+            feed_client_settings(&mut server, &client_ctrl);
 
-        let headers = wt_connect_headers(DraftVersion::Draft07);
-        let frame = build_headers_then_data(&headers, &[0x00]);
-        // 楽観的カプセル送信: Pending 中の DATA はバッファリングされる
-        let result = server.feed_stream(0, &frame, false);
-        assert!(
-            result.is_ok(),
-            "draft-07 の Pending 中 DATA がバッファリングされずエラーになった: {result:?}"
-        );
-    }
-
-    #[test]
-    fn draft14_pending_data_buffered() {
-        let mut server = setup_server(true);
-        let client_ctrl = build_draft14_client_ctrl_with_ecp();
-        feed_client_settings(&mut server, &client_ctrl);
-
-        let headers = wt_connect_headers(DraftVersion::Draft14);
-        let frame = build_headers_then_data(&headers, &[0x00]);
-        // 楽観的カプセル送信: Pending 中の DATA はバッファリングされる
-        let result = server.feed_stream(0, &frame, false);
-        assert!(
-            result.is_ok(),
-            "draft-14 の Pending 中 DATA がバッファリングされずエラーになった: {result:?}"
-        );
-    }
-
-    #[test]
-    fn draft15_pending_data_buffered() {
-        let mut server = setup_server(true);
-        let client_ctrl = build_draft15_client_ctrl_with_ecp();
-        feed_client_settings(&mut server, &client_ctrl);
-
-        let headers = wt_connect_headers(DraftVersion::Draft15);
-        let frame = build_headers_then_data(&headers, &[0x00]);
-        // 楽観的カプセル送信: Pending 中の DATA はバッファリングされる
-        let result = server.feed_stream(0, &frame, false);
-        assert!(
-            result.is_ok(),
-            "draft-15 の Pending 中 DATA がバッファリングされずエラーになった: {result:?}"
-        );
+            let headers = wt_connect_headers(draft);
+            let frame = build_headers_then_data(&headers, &[0x00]);
+            let result = server.feed_stream(0, &frame, false);
+            assert!(
+                result.is_ok(),
+                "{draft:?} の Pending 中 DATA がバッファリングされずエラーになった: {result:?}"
+            );
+        }
     }
 
     /// WebTransport カプセルを DATA フレームとしてエンコードするヘルパー
@@ -1718,6 +1617,804 @@ mod draft17_connect {
         assert!(
             matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
             "reset_stream_at 非対応なら拒否すること: {result:?}"
+        );
+    }
+}
+
+// =========================================================================
+// 接続単位のドラフト版選択
+// (draft-ietf-webtrans-http3-17 Section 3.1, 7.1)
+//
+// 完了条件の表の各行を、実際に生成した SETTINGS / CONNECT のバイト列を
+// `ClientConnection` / `ServerConnection` に渡して検証する。
+// =========================================================================
+
+mod version_selection {
+    use super::*;
+    use shiguredo_http3::ClientConnection;
+    use shiguredo_http3::webtransport::ConnectRequest;
+    use shiguredo_http3::webtransport::Settings as WtSettings;
+    use shiguredo_http3::webtransport::connect::ServerSettingsParams;
+
+    /// 版の広告に使う既定パラメータ
+    fn params() -> ServerSettingsParams {
+        ServerSettingsParams::default()
+    }
+
+    /// 指定したドラフト版を広告するクライアント SETTINGS を構築する
+    fn client_wt(versions: &[DraftVersion]) -> WtSettings {
+        WtSettings::for_draft_versions(versions, params().max_sessions)
+    }
+
+    /// 指定したドラフト版を広告するサーバー接続を作成する
+    fn make_server(versions: &[DraftVersion], transport_verified: bool) -> ServerConnection {
+        let wt = WtSettings::for_draft_versions(versions, params().max_sessions);
+        let mut server = ServerConnection::new(Settings::new().enable_webtransport_server(wt));
+        server
+            .set_control_stream_id(3)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        if transport_verified {
+            server
+                .set_webtransport_transport_verified(true, true)
+                .expect("テスト用の transport parameter 検証に成功すること");
+        }
+        server
+    }
+
+    /// 指定した WebTransport SETTINGS を広告するクライアント接続を作成する
+    fn make_client(wt: WtSettings, transport_verified: bool) -> ClientConnection {
+        let mut client = ClientConnection::new(Settings::new().enable_webtransport_client(wt));
+        client
+            .set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        if transport_verified {
+            client
+                .set_webtransport_transport_verified(true, true)
+                .expect("テスト用の transport parameter 検証に成功すること");
+        }
+        client
+    }
+
+    /// クライアントの制御ストリーム (SETTINGS) を取り出す
+    fn take_client_control(client: &mut ClientConnection) -> Vec<u8> {
+        client
+            .take_stream_data(2)
+            .expect("テスト用のクライアント SETTINGS 取得に成功すること")
+            .0
+    }
+
+    /// サーバーの制御ストリーム (SETTINGS) を取り出す
+    fn take_server_control(server: &mut ServerConnection) -> Vec<u8> {
+        server
+            .take_stream_data(3)
+            .expect("テスト用のサーバー SETTINGS 取得に成功すること")
+            .0
+    }
+
+    /// サーバーとクライアントの SETTINGS を交換する
+    fn exchange_settings(server: &mut ServerConnection, client: &mut ClientConnection) {
+        let client_ctrl = take_client_control(client);
+        let server_ctrl = take_server_control(server);
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("サーバーのクライアント SETTINGS 受信に成功すること");
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("クライアントのサーバー SETTINGS 受信に成功すること");
+        server
+            .drain_events()
+            .expect("テスト用のサーバーイベント取得に成功すること");
+        client
+            .drain_events()
+            .expect("テスト用のクライアントイベント取得に成功すること");
+    }
+
+    /// 指定した HTTP/3 設定を持つクライアントの制御ストリームを作る
+    fn control_stream_with(settings: Settings) -> Vec<u8> {
+        let mut client = ClientConnection::new(settings);
+        client
+            .set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        client
+            .take_stream_data(2)
+            .expect("テスト用のクライアント SETTINGS 取得に成功すること")
+            .0
+    }
+
+    /// 指定した版のトークンで CONNECT を構築し、サーバーに流し込む
+    fn feed_connect_to_server(
+        server: &mut ServerConnection,
+        stream_id: u64,
+        draft: DraftVersion,
+    ) -> Result<(), Error> {
+        let headers = ConnectRequest::new("https", "example.com", "/wt")
+            .draft_version(draft)
+            .to_headers()
+            .expect("テスト用の CONNECT ヘッダー作成に成功すること");
+        let frame = build_headers_frame(&headers);
+        server.feed_stream(stream_id, &frame, false)
+    }
+
+    /// クライアントが選択結果に基づいて生成した CONNECT をサーバーに流し込む
+    fn send_connect_via_client(
+        server: &mut ServerConnection,
+        client: &mut ClientConnection,
+        draft: DraftVersion,
+    ) -> Result<u64, Error> {
+        let headers = ConnectRequest::new("https", "example.com", "/wt")
+            .draft_version(draft)
+            .to_headers()
+            .expect("テスト用の CONNECT ヘッダー作成に成功すること");
+        let stream_id = client.send_request(&headers, false)?;
+        let (request, _) = client
+            .take_stream_data(stream_id)
+            .expect("テスト用の CONNECT ヘッダー取得に成功すること");
+        server.feed_stream(stream_id, &request, false)?;
+        Ok(stream_id)
+    }
+
+    /// サーバーが WT CONNECT を受理して 200 応答を返す
+    fn accept_connect(server: &mut ServerConnection, stream_id: u64) {
+        let response =
+            vec![Header::new(b":status", b"200").expect("テスト用のヘッダー作成に成功すること")];
+        server
+            .send_response(stream_id, &response, false)
+            .expect("テスト用のレスポンス送信に成功すること");
+    }
+
+    /// クライアントから見たセッションを確立する
+    ///
+    /// CONNECT の送信、サーバーの受理、200 応答の受信まで進める。
+    /// サーバー側で発生したイベントも併せて返す (保留していたストリームや
+    /// datagram の配送はセッション確立時に起きるため)。
+    fn establish_session(
+        server: &mut ServerConnection,
+        client: &mut ClientConnection,
+        draft: DraftVersion,
+    ) -> (u64, Vec<Event>) {
+        let stream_id = send_connect_via_client(server, client, draft)
+            .expect("テスト用の WT CONNECT が受理されること");
+        accept_connect(server, stream_id);
+        let (response, _) = server
+            .take_stream_data(stream_id)
+            .expect("テスト用の 200 応答取得に成功すること");
+        client
+            .feed_stream(stream_id, &response, false)
+            .expect("テスト用の 200 応答受信に成功すること");
+        let server_events = server
+            .drain_events()
+            .expect("テスト用のサーバーイベント取得に成功すること");
+        client
+            .drain_events()
+            .expect("テスト用のクライアントイベント取得に成功すること");
+        (stream_id, server_events)
+    }
+
+    #[test]
+    fn server_rejects_old_only_client_when_only_new_codepoints_exist() {
+        // サーバーが SETTINGS_WT_ENABLED (0x2c7cf000) だけを広告し、クライアントが
+        // 旧 draft のコードポイント (draft-02) だけを広告する場合、共通する版が
+        // ないため CONNECT を受理しない (draft-ietf-webtrans-http3-17 Section 7.1)。
+        // SETTINGS_WT_ENABLED を広告するサーバーはコードポイント交渉を行うため、
+        // 旧 draft のクライアントは交差を作れない
+        let mut server = make_server(&[DraftVersion::Draft15], true);
+        let mut client = make_client(client_wt(&[DraftVersion::Draft02]), true);
+        exchange_settings(&mut server, &mut client);
+
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            None,
+            "共通する版がないこと"
+        );
+        let result = feed_connect_to_server(&mut server, 0, DraftVersion::Draft02);
+        assert!(
+            matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
+            "共通する版がない場合は CONNECT を受理しないこと: {result:?}"
+        );
+    }
+
+    #[test]
+    fn server_selects_document_version_without_client_advertisement() {
+        // 表の 1 行目: 本文版のみのサーバー + WT 広告なしのクライアント → 本文版
+        let mut server = make_server(&[DraftVersion::Draft17], true);
+        // 本文版だけに対応するクライアントは SETTINGS_WT_ENABLED を送らない
+        // (draft-ietf-webtrans-http3-17 Section 7.1)。テストでは wt_settings を
+        // 空でない値にするため SETTINGS_WT_INITIAL_MAX_DATA だけを設定する
+        // (フロー制御の初期値: 同 Section 5.1)
+        let mut client = make_client(WtSettings::new().wt_initial_max_data(vi(1024)), true);
+
+        exchange_settings(&mut server, &mut client);
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft17),
+            "WT 広告のないクライアントには本文版を選ぶこと"
+        );
+        // 本文版だけに対応するクライアントは、ピアが本文版を広告していれば
+        // 本文版を選んで CONNECT を開始できる
+        assert_eq!(
+            client.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft17),
+            "本文版だけのクライアントは本文版を選ぶこと"
+        );
+        let session_start =
+            send_connect_via_client(&mut server, &mut client, DraftVersion::Draft17)
+                .expect("本文版だけのクライアントの CONNECT が受理されること");
+        assert_eq!(session_start, 0, "CONNECT は stream 0 で送られること");
+    }
+
+    #[test]
+    fn document_version_only_client_receives_server_initiated_streams() {
+        // 本文版だけに対応するクライアント (SETTINGS_WT_ENABLED を送らない) でも、
+        // セッション確立後のサーバー開始 bidi / uni / datagram を受信できる
+        // (draft-ietf-webtrans-http3-17 Section 4.3, 4.5, 4.6)
+        let mut server = make_server(&[DraftVersion::Draft17], true);
+        let mut client = make_client(WtSettings::new().wt_initial_max_data(vi(1024)), true);
+        exchange_settings(&mut server, &mut client);
+        let (session_id, _events) =
+            establish_session(&mut server, &mut client, DraftVersion::Draft17);
+        assert_eq!(session_id, 0);
+
+        // サーバー開始 bidi (stream 1) の 0x41 bidi
+        client
+            .feed_stream(1, &[0x40, 0x41, 0x00], false)
+            .expect("本文版だけのクライアントでもサーバー開始 bidi を受理すること");
+        // サーバー開始 uni (stream 7。stream 3 はサーバーの制御ストリーム) の 0x54
+        client
+            .feed_stream(7, &[0x40, 0x54, 0x00], false)
+            .expect("本文版だけのクライアントでもサーバー開始 uni を受理すること");
+        // datagram (Quarter Stream ID = 0)
+        client
+            .feed_datagram(&[0x00, 0x01, 0x02])
+            .expect("本文版だけのクライアントでも datagram を受理すること");
+
+        let events = client
+            .drain_events()
+            .expect("テスト用のクライアントイベント取得に成功すること");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::UniStreamOpen { stream_id: 7, .. })
+            )),
+            "サーバー開始 uni ストリームが開くこと: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::Datagram { session_id: 0, .. })
+            )),
+            "datagram が配送されること: {events:?}"
+        );
+    }
+
+    #[test]
+    fn server_selects_document_version_when_both_codepoints_are_advertised() {
+        // 表の 2 行目: 本文版と旧 draft + クライアントが新 ID と旧 ID → 本文版
+        let drafts = [DraftVersion::Draft15, DraftVersion::Draft17];
+        let mut server = make_server(&drafts, true);
+        let mut client = make_client(client_wt(&drafts), true);
+
+        exchange_settings(&mut server, &mut client);
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft17),
+            "新 ID を広告するクライアントには本文版を選ぶこと"
+        );
+        assert_eq!(
+            client.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft17)
+        );
+
+        // クライアントが選択結果に基づいて生成した CONNECT が受理される
+        send_connect_via_client(&mut server, &mut client, DraftVersion::Draft17)
+            .expect("本文版の CONNECT が受理されること");
+
+        // 選択版以外のトークンは受理しない
+        assert!(
+            matches!(
+                feed_connect_to_server(&mut server, 4, DraftVersion::Draft02),
+                Err(Error::StreamError(ErrorCode::MessageError))
+            ),
+            "選択版以外の :protocol トークンは拒否されること"
+        );
+    }
+
+    #[test]
+    fn server_selects_highest_common_old_draft_when_client_sends_only_old_id() {
+        // 表の 3 行目: 本文版と旧 draft + クライアントは対応する旧 ID のみ
+        let mut server = make_server(&[DraftVersion::Draft15, DraftVersion::Draft17], true);
+        let mut client = make_client(client_wt(&[DraftVersion::Draft15]), true);
+
+        exchange_settings(&mut server, &mut client);
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft15),
+            "対応する旧 ID だけなら共通する旧 draft の最上位を選ぶこと"
+        );
+        assert_eq!(
+            client.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft15)
+        );
+        send_connect_via_client(&mut server, &mut client, DraftVersion::Draft15)
+            .expect("旧 draft の CONNECT が受理されること");
+    }
+
+    #[test]
+    fn server_selects_highest_common_old_draft_among_multiple() {
+        // 旧 draft が複数共通する場合は優先順位の最も高い版を選ぶ。
+        // draft-07 と draft-14 は Safari 互換のため draft-07 を優先する
+        let drafts = [
+            DraftVersion::Draft07,
+            DraftVersion::Draft14,
+            DraftVersion::Draft15,
+        ];
+        let mut server = make_server(&drafts, true);
+        let mut client = make_client(client_wt(&drafts), true);
+        exchange_settings(&mut server, &mut client);
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft15),
+            "旧 draft のうち最も優先順位の高い版を選ぶこと"
+        );
+
+        // draft-07 と draft-14 だけなら Safari 互換で draft-07 を選ぶ
+        let legacy = [DraftVersion::Draft07, DraftVersion::Draft14];
+        let mut server = make_server(&legacy, true);
+        let mut client = make_client(client_wt(&legacy), true);
+        exchange_settings(&mut server, &mut client);
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft07),
+            "draft-07 と draft-14 の併送は draft-07 を優先すること"
+        );
+    }
+
+    #[test]
+    fn server_selects_document_version_when_client_has_no_supported_old_id() {
+        // 表の 4 行目: 本文版と旧 draft + クライアントは対応しない旧 ID のみ
+        let mut server = make_server(&[DraftVersion::Draft15, DraftVersion::Draft17], true);
+        let mut client = make_client(client_wt(&[DraftVersion::Draft02]), true);
+
+        exchange_settings(&mut server, &mut client);
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft17),
+            "対応する旧 ID がない場合は本文版を選ぶこと"
+        );
+        assert_eq!(
+            client.negotiated_wt_draft_version(),
+            None,
+            "交差する版がないクライアントは版を選ばないこと"
+        );
+        let headers = ConnectRequest::new("https", "example.com", "/wt")
+            .draft_version(DraftVersion::Draft17)
+            .to_headers()
+            .expect("テスト用の CONNECT ヘッダー作成に成功すること");
+        let err = client.send_request(&headers, false).unwrap_err();
+        assert!(
+            matches!(err, Error::WtSetup(WtSetupError::UnknownDraftVersion)),
+            "交差する版がないクライアントは CONNECT を開始しないこと: {err:?}"
+        );
+
+        // サーバーは実際に生成した CONNECT バイト列を本文版として受理する
+        feed_connect_to_server(&mut server, 0, DraftVersion::Draft17)
+            .expect("本文版の CONNECT が受理されること");
+    }
+
+    #[test]
+    fn client_does_not_select_version_it_does_not_support() {
+        // サーバーは本文版と draft-02 を広告するが、クライアントは draft-02 だけに
+        // 対応する。クライアントはサーバーの広告だけから本文版を選ばない
+        // (draft-ietf-webtrans-http3-17 Section 7.1)。
+        let mut server = make_server(&[DraftVersion::Draft02, DraftVersion::Draft17], true);
+        let mut client = make_client(client_wt(&[DraftVersion::Draft02]), true);
+        exchange_settings(&mut server, &mut client);
+
+        assert_eq!(
+            client.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft02),
+            "クライアントは自分が対応する版だけを選ぶこと"
+        );
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft02),
+            "サーバーも共通する旧 draft を選ぶこと"
+        );
+        send_connect_via_client(&mut server, &mut client, DraftVersion::Draft02)
+            .expect("draft-02 の CONNECT が受理されること");
+    }
+
+    #[test]
+    fn legacy_draft_connections_keep_their_selected_version() {
+        // draft-02 / 07 / 14 / 15 (16 は 15 と同じコードポイント) の接続が
+        // 従来どおり成立することを、選択結果と実際の CONNECT で確認する
+        for expected in [
+            DraftVersion::Draft02,
+            DraftVersion::Draft07,
+            DraftVersion::Draft14,
+            DraftVersion::Draft15,
+        ] {
+            let mut server = make_server(&[expected], true);
+            let mut client = make_client(client_wt(&[expected]), true);
+            exchange_settings(&mut server, &mut client);
+            assert_eq!(
+                server.negotiated_wt_draft_version(),
+                Some(expected),
+                "{expected:?} の接続で従来の共通版が選ばれること"
+            );
+            assert_eq!(
+                client.negotiated_wt_draft_version(),
+                Some(expected),
+                "{expected:?} の接続でクライアントも同じ版を選ぶこと"
+            );
+            send_connect_via_client(&mut server, &mut client, expected)
+                .expect("従来の draft の CONNECT が受理されること");
+        }
+    }
+
+    #[test]
+    fn client_does_not_start_connect_without_common_version() {
+        // サーバーは draft-15 まで、クライアントは draft-17 だけに対応する
+        let mut server = make_server(&[DraftVersion::Draft15], true);
+        let mut client = make_client(client_wt(&[DraftVersion::Draft17]), true);
+        exchange_settings(&mut server, &mut client);
+
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            None,
+            "本文版に対応しないサーバーは版を選ばないこと"
+        );
+        assert_eq!(client.negotiated_wt_draft_version(), None);
+
+        let headers = ConnectRequest::new("https", "example.com", "/wt")
+            .draft_version(DraftVersion::Draft17)
+            .to_headers()
+            .expect("テスト用の CONNECT ヘッダー作成に成功すること");
+        let err = client.send_request(&headers, false).unwrap_err();
+        assert!(
+            matches!(err, Error::WtSetup(WtSetupError::UnknownDraftVersion)),
+            "共通する版がないクライアントは CONNECT を開始しないこと: {err:?}"
+        );
+
+        // サーバーも同一の CONNECT バイト列を受理しない
+        assert!(
+            matches!(
+                feed_connect_to_server(&mut server, 0, DraftVersion::Draft17),
+                Err(Error::StreamError(ErrorCode::MessageError))
+            ),
+            "共通する版がないサーバーは CONNECT を受理しないこと"
+        );
+    }
+
+    #[test]
+    fn connect_is_deferred_until_settings_and_then_rejected_without_wt_advertisement() {
+        // SETTINGS 未着の CONNECT は保留され、エラーにならない。
+        // 受信済みの SETTINGS に WT 広告がない場合は保留した CONNECT を拒否する。
+        // 両者を混同しないことを確認する (本文版に対応しないサーバーで確認する)。
+        let mut server = make_server(&[DraftVersion::Draft15], true);
+        feed_connect_to_server(&mut server, 0, DraftVersion::Draft17)
+            .expect("SETTINGS 未着の CONNECT は保留されること");
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            None,
+            "SETTINGS 未着では版を選択しないこと"
+        );
+        let events = server
+            .drain_events()
+            .expect("テスト用のサーバーイベント取得に成功すること");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, Event::HeadersBegin { stream_id: 0 })),
+            "保留中の CONNECT はヘッダーイベントを発火しないこと"
+        );
+
+        // WebTransport の広告を含まない SETTINGS を流すと、保留分の再検証で拒否される
+        let control = control_stream_with(Settings::new().h3_datagram(true));
+        let result = server.feed_stream(2, &control, false);
+        assert!(
+            matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
+            "WT 広告のない SETTINGS 受信で保留中の CONNECT を拒否すること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn connect_is_rejected_immediately_with_received_settings_without_wt_advertisement() {
+        // SETTINGS 受信済みで WT 広告がない場合、CONNECT は保留せず即拒否する
+        // (本文版に対応しないサーバーで確認する)
+        let mut server = make_server(&[DraftVersion::Draft15], true);
+        let control = control_stream_with(Settings::new().h3_datagram(true));
+        server
+            .feed_stream(2, &control, false)
+            .expect("WT 非対応の SETTINGS 受信自体は成功すること");
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            None,
+            "WT 広告がないため版を選ばないこと"
+        );
+
+        let result = feed_connect_to_server(&mut server, 0, DraftVersion::Draft17);
+        assert!(
+            matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
+            "SETTINGS に WT 広告がない CONNECT は即拒否すること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn connect_is_rejected_when_h3_datagram_is_missing() {
+        // 必須設定 (SETTINGS_H3_DATAGRAM) の不足は WT 広告の有無とは別の拒否理由
+        let mut server = make_server(&[DraftVersion::Draft15, DraftVersion::Draft17], true);
+        let wt = client_wt(&[DraftVersion::Draft15, DraftVersion::Draft17]);
+        let client_settings = Settings {
+            h3_datagram: Some(false),
+            ..Settings::new().enable_webtransport_client(wt)
+        };
+        let control = control_stream_with(client_settings);
+        server
+            .feed_stream(2, &control, false)
+            .expect("テスト用の SETTINGS 受信に成功すること");
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft17),
+            "版の選択自体は成立すること"
+        );
+
+        let result = feed_connect_to_server(&mut server, 0, DraftVersion::Draft17);
+        assert!(
+            matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
+            "H3_DATAGRAM 不足の CONNECT は拒否すること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn connect_is_rejected_when_transport_parameters_are_not_verified() {
+        // 必須 transport parameter の不足も WT 広告の有無とは別の拒否理由
+        let mut server = make_server(&[DraftVersion::Draft15, DraftVersion::Draft17], false);
+        let mut client = make_client(
+            client_wt(&[DraftVersion::Draft15, DraftVersion::Draft17]),
+            true,
+        );
+        exchange_settings(&mut server, &mut client);
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            Some(DraftVersion::Draft17),
+            "版の選択自体は成立すること"
+        );
+
+        let result = feed_connect_to_server(&mut server, 0, DraftVersion::Draft17);
+        assert!(
+            matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
+            "transport parameter 未検証の CONNECT は拒否すること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn pre_negotiation_bidi_stream_is_dispatched_with_common_version() {
+        // SETTINGS 前の 0x41 bidi は保留され、版選択の確定後に WT 経路へ流れる
+        let drafts = [DraftVersion::Draft15, DraftVersion::Draft17];
+        let mut server = make_server(&drafts, true);
+        let mut client = make_client(client_wt(&drafts), true);
+
+        // 0x41 + session_id 0 の bidi ストリーム (stream 8)
+        server
+            .feed_stream(8, &[0x40, 0x41, 0x00], false)
+            .expect("SETTINGS 前の 0x41 bidi は保留されること");
+        exchange_settings(&mut server, &mut client);
+
+        let (session_id, events) =
+            establish_session(&mut server, &mut client, DraftVersion::Draft17);
+        assert_eq!(session_id, 0);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::BidiStreamOpen {
+                    stream_id: 8,
+                    session_id: 0,
+                })
+            )),
+            "SETTINGS 受信後に保留した bidi ストリームが開くこと: {events:?}"
+        );
+    }
+
+    #[test]
+    fn pre_negotiation_bidi_stream_is_rejected_without_common_version() {
+        // 共通する版がない場合、SETTINGS 受信時に保留した 0x41 bidi を拒否する
+        let mut server = make_server(&[DraftVersion::Draft15], true);
+        let mut client = make_client(client_wt(&[DraftVersion::Draft17]), true);
+
+        server
+            .feed_stream(8, &[0x40, 0x41, 0x00], false)
+            .expect("SETTINGS 前の 0x41 bidi は保留されること");
+
+        // 拒否イベントは SETTINGS 受信時に発火するため、ここでは
+        // ヘルパーを使わずに SETTINGS を流し込んでイベントを観測する
+        let client_ctrl = take_client_control(&mut client);
+        let server_ctrl = take_server_control(&mut server);
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("サーバーのクライアント SETTINGS 受信に成功すること");
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("クライアントのサーバー SETTINGS 受信に成功すること");
+        let events = server
+            .drain_events()
+            .expect("テスト用のサーバーイベント取得に成功すること");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::BufferedStreamRejected { stream_id: 8, .. })
+            )),
+            "共通する版がない場合は保留した bidi ストリームを拒否すること: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::BidiStreamOpen { stream_id: 8, .. })
+            )),
+            "拒否した bidi ストリームを WT 経路へ流さないこと: {events:?}"
+        );
+    }
+
+    #[test]
+    fn uni_stream_is_rejected_before_settings_and_accepted_after_negotiation() {
+        // SETTINGS 前の 0x54 uni はストリームエラー。版選択の確定後は受理される
+        let drafts = [DraftVersion::Draft15, DraftVersion::Draft17];
+        let mut server = make_server(&drafts, true);
+        let mut client = make_client(client_wt(&drafts), true);
+
+        let err = server
+            .feed_stream(6, &[0x40, 0x54, 0x00], false)
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::StreamError(ErrorCode::StreamCreationError)),
+            "SETTINGS 前の 0x54 はストリームエラーになること: {err:?}"
+        );
+
+        exchange_settings(&mut server, &mut client);
+        // CONNECT 受理前に届いた 0x54 は Pending セッションでバッファされる
+        server
+            .feed_stream(6, &[0x40, 0x54, 0x00], false)
+            .expect("版選択の確定後は 0x54 を受理すること");
+
+        let (session_id, events) =
+            establish_session(&mut server, &mut client, DraftVersion::Draft17);
+        assert_eq!(session_id, 0);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::UniStreamOpen {
+                    stream_id: 6,
+                    session_id: 0,
+                })
+            )),
+            "セッション確立後にバッファした uni ストリームが開くこと: {events:?}"
+        );
+    }
+
+    #[test]
+    fn uni_stream_is_rejected_when_no_common_version() {
+        // 共通する版がない場合、SETTINGS 後も 0x54 を受理しない
+        let mut server = make_server(&[DraftVersion::Draft15], true);
+        let mut client = make_client(client_wt(&[DraftVersion::Draft17]), true);
+        exchange_settings(&mut server, &mut client);
+
+        let err = server
+            .feed_stream(6, &[0x40, 0x54, 0x00], false)
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::StreamError(ErrorCode::StreamCreationError)),
+            "共通する版がない場合は 0x54 を拒否すること: {err:?}"
+        );
+    }
+
+    #[test]
+    fn datagram_is_dropped_before_settings_and_delivered_after_negotiation() {
+        // SETTINGS 前の datagram は静かに破棄し、版選択の確定後は受理する
+        let drafts = [DraftVersion::Draft15, DraftVersion::Draft17];
+        let mut server = make_server(&drafts, true);
+        let mut client = make_client(client_wt(&drafts), true);
+
+        let datagram = webtransport::Datagram::new(0, b"hello".to_vec())
+            .expect("テスト用の datagram 作成に成功すること");
+        let mut buf = Vec::new();
+        datagram.encode(&mut buf);
+
+        server
+            .feed_datagram(&buf)
+            .expect("SETTINGS 前の datagram は破棄されること");
+        let events = server
+            .drain_events()
+            .expect("テスト用のサーバーイベント取得に成功すること");
+        assert!(
+            events.is_empty(),
+            "SETTINGS 前の datagram はイベントを発火しないこと: {events:?}"
+        );
+
+        exchange_settings(&mut server, &mut client);
+        server
+            .feed_datagram(&buf)
+            .expect("版選択の確定後は datagram を受理すること");
+        let (session_id, events) =
+            establish_session(&mut server, &mut client, DraftVersion::Draft17);
+        assert_eq!(session_id, 0);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::Datagram {
+                    session_id: 0,
+                    payload,
+                }) if payload == b"hello"
+            )),
+            "セッション確立後にバッファした datagram が配送されること: {events:?}"
+        );
+    }
+
+    #[test]
+    fn datagram_is_dropped_when_no_common_version() {
+        // 共通する版がない場合は datagram を受理しない
+        let mut server = make_server(&[DraftVersion::Draft15], true);
+        let mut client = make_client(client_wt(&[DraftVersion::Draft17]), true);
+        exchange_settings(&mut server, &mut client);
+
+        let datagram = webtransport::Datagram::new(0, b"hello".to_vec())
+            .expect("テスト用の datagram 作成に成功すること");
+        let mut buf = Vec::new();
+        datagram.encode(&mut buf);
+        server
+            .feed_datagram(&buf)
+            .expect("共通する版がない datagram は破棄されること");
+        let events = server
+            .drain_events()
+            .expect("テスト用のサーバーイベント取得に成功すること");
+        assert!(
+            events.is_empty(),
+            "共通する版がない datagram はイベントを発火しないこと: {events:?}"
+        );
+    }
+
+    #[test]
+    fn client_accepts_server_bidi_stream_with_common_version() {
+        // クライアント側も選択結果に基づいてサーバー開始 bidi を受理する
+        let drafts = [DraftVersion::Draft15];
+        let mut server = make_server(&drafts, true);
+        let mut client = make_client(client_wt(&drafts), true);
+        exchange_settings(&mut server, &mut client);
+        let (session_id, _events) =
+            establish_session(&mut server, &mut client, DraftVersion::Draft15);
+        assert_eq!(session_id, 0);
+
+        // サーバー開始 bidi (stream 1) の 0x41 bidi
+        client
+            .feed_stream(1, &[0x40, 0x41, 0x00], false)
+            .expect("版選択が確定していればサーバー開始 bidi を受理すること");
+        let events = client
+            .drain_events()
+            .expect("テスト用のクライアントイベント取得に成功すること");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::BidiStreamOpen {
+                    stream_id: 1,
+                    session_id: 0,
+                })
+            )),
+            "サーバー開始 bidi ストリームが開くこと: {events:?}"
+        );
+    }
+
+    #[test]
+    fn client_rejects_server_bidi_stream_without_common_version() {
+        // 共通する版がない場合、クライアントはサーバー開始 bidi を受理しない
+        let mut server = make_server(&[DraftVersion::Draft15], true);
+        let mut client = make_client(client_wt(&[DraftVersion::Draft17]), true);
+        exchange_settings(&mut server, &mut client);
+        assert_eq!(client.negotiated_wt_draft_version(), None);
+
+        let err = client
+            .feed_stream(1, &[0x40, 0x41, 0x00], false)
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::ConnectionError(ErrorCode::StreamCreationError)),
+            "共通する版がないクライアントはサーバー開始 bidi を拒否すること: {err:?}"
         );
     }
 }

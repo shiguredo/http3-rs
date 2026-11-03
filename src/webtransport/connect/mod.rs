@@ -39,6 +39,75 @@ pub const PROTOCOL_WEBTRANSPORT_H3: &str = "webtransport-h3";
 /// 将来のドラフトで廃止される可能性がある。
 pub const PROTOCOL_WEBTRANSPORT_DRAFT02: &str = "webtransport";
 
+/// `:protocol` 疑似ヘッダーが示すプロトコル系統
+///
+/// `:protocol` のトークンは複数のドラフト版で共有されるため、ヘッダーだけでは
+/// 接続で使うドラフト版を一意に決められない。たとえば `webtransport-h3` は
+/// draft-15 / 16 / 17 の共通トークンである (draft-ietf-webtrans-http3-17
+/// Section 9.1)。そのためヘッダー解析の結果はこの型で表し、接続の版判定には
+/// 使わない。接続で使う版は SETTINGS のコードポイントによる接続単位の選択
+/// ([`crate::Connection::negotiated_wt_draft_version`]) で決める。
+///
+/// 後方互換のない変更: [`ConnectRequest`] の `draft_version` フィールド
+/// ([`DraftVersion`]) をこの型の `protocol_token` フィールドに置き換えた。
+/// ヘッダーからトークン系統しか分からないため、この型では版を表現できない。
+///
+/// draft-ietf-webtrans-http3-02 Section 3.3, draft-ietf-webtrans-http3-17 Section 2.1.2, 9.1
+/// 将来のドラフトで変更される可能性がある
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProtocolToken {
+    /// `webtransport-h3` (draft-15 / 16 / 17 の共通トークン)
+    ///
+    /// draft-ietf-webtrans-http3-17 Section 9.1
+    WebTransportH3,
+    /// `webtransport` (draft-02 / 07 / 14 の共通トークン)
+    ///
+    /// draft-ietf-webtrans-http3-17 Section 2.1.2 では capsule-based
+    /// WebTransport (WEBTRANS-H2) のトークンとして位置付けられており、
+    /// 本文書の native QUIC モードとは別プロトコルになる。
+    WebTransport,
+}
+
+impl ProtocolToken {
+    /// トークンの文字列値を返す
+    ///
+    /// 将来のドラフトで変更される可能性がある
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WebTransportH3 => PROTOCOL_WEBTRANSPORT_H3,
+            Self::WebTransport => PROTOCOL_WEBTRANSPORT_DRAFT02,
+        }
+    }
+
+    /// `:protocol` の値からトークン系統を判定する
+    ///
+    /// 未知のトークンは `None` を返す。
+    /// 将来のドラフトで変更される可能性がある
+    pub fn from_bytes(value: &[u8]) -> Option<Self> {
+        if value == PROTOCOL_WEBTRANSPORT_H3.as_bytes() {
+            return Some(Self::WebTransportH3);
+        }
+        if value == PROTOCOL_WEBTRANSPORT_DRAFT02.as_bytes() {
+            return Some(Self::WebTransport);
+        }
+        None
+    }
+
+    /// ドラフト版に対応するトークン系統を返す
+    ///
+    /// 同じトークン系統に複数のドラフト版が対応するため、逆方向の変換
+    /// (トークンからドラフト版を求めること) はできない。
+    /// 将来のドラフトで変更される可能性がある
+    pub fn from_draft_version(version: DraftVersion) -> Self {
+        match version {
+            DraftVersion::Draft02 | DraftVersion::Draft07 | DraftVersion::Draft14 => {
+                Self::WebTransport
+            }
+            DraftVersion::Draft15 | DraftVersion::Draft17 => Self::WebTransportH3,
+        }
+    }
+}
+
 impl fmt::Display for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -342,7 +411,7 @@ mod tests {
             (b":path", b"/wt"),
         ];
         let req = ConnectRequest::from_headers(&headers).expect("test must succeed");
-        assert_eq!(req.draft_version, DraftVersion::Draft15);
+        assert_eq!(req.protocol_token, ProtocolToken::WebTransportH3);
         assert_eq!(req.scheme, "https");
         assert_eq!(req.authority, "example.com");
         assert_eq!(req.path, "/wt");
@@ -361,7 +430,7 @@ mod tests {
             (b":path", b"/"),
         ];
         let req = ConnectRequest::from_headers(&headers).expect("test must succeed");
-        assert_eq!(req.draft_version, DraftVersion::Draft02);
+        assert_eq!(req.protocol_token, ProtocolToken::WebTransport);
         assert_eq!(req.scheme, "https");
     }
 
@@ -382,6 +451,60 @@ mod tests {
             ConnectRequest::from_headers(&headers),
             Err(ConnectError::InvalidProtocol)
         ));
+    }
+
+    #[test]
+    fn test_protocol_token_string_roundtrip() {
+        // トークンの文字列表現と判定が一致すること
+        for (token, value) in [
+            (ProtocolToken::WebTransportH3, PROTOCOL_WEBTRANSPORT_H3),
+            (ProtocolToken::WebTransport, PROTOCOL_WEBTRANSPORT_DRAFT02),
+        ] {
+            assert_eq!(token.as_str(), value);
+            assert_eq!(ProtocolToken::from_bytes(value.as_bytes()), Some(token));
+        }
+        // 未知のトークンは判定できない
+        assert_eq!(ProtocolToken::from_bytes(b"h2c"), None);
+        assert_eq!(ProtocolToken::from_bytes(b""), None);
+    }
+
+    #[test]
+    fn test_protocol_token_from_draft_version() {
+        // 同じトークン系統に複数のドラフト版が対応する
+        for version in [
+            DraftVersion::Draft02,
+            DraftVersion::Draft07,
+            DraftVersion::Draft14,
+        ] {
+            assert_eq!(
+                ProtocolToken::from_draft_version(version),
+                ProtocolToken::WebTransport
+            );
+        }
+        for version in [DraftVersion::Draft15, DraftVersion::Draft17] {
+            assert_eq!(
+                ProtocolToken::from_draft_version(version),
+                ProtocolToken::WebTransportH3
+            );
+        }
+    }
+
+    #[test]
+    fn test_connect_request_draft_version_shares_token_across_versions() {
+        // 同じトークン系統の版を指定した場合、生成されるヘッダーは同一になる。
+        // 接続で使う版は SETTINGS のコードポイントで決まるため、ヘッダーだけでは
+        // draft-15 と draft-17 を区別できない
+        // (draft-ietf-webtrans-http3-17 Section 9.1)。
+        let draft15 = ConnectRequest::new("https", "example.com", "/wt")
+            .draft_version(DraftVersion::Draft15)
+            .to_headers()
+            .expect("test must succeed");
+        let draft17 = ConnectRequest::new("https", "example.com", "/wt")
+            .draft_version(DraftVersion::Draft17)
+            .to_headers()
+            .expect("test must succeed");
+        assert_eq!(draft15[1].value(), draft17[1].value());
+        assert_eq!(draft15[1].value(), PROTOCOL_WEBTRANSPORT_H3.as_bytes());
     }
 
     #[test]

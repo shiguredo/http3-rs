@@ -98,11 +98,6 @@ impl Client {
         Ok(Self { quic, h3 })
     }
 
-    /// ピアの SETTINGS を取得する
-    pub(crate) fn peer_settings(&self) -> Option<&Settings> {
-        self.h3.peer_settings()
-    }
-
     /// ピアの SETTINGS を受信するまで待つ
     pub async fn handshake(&mut self) -> Result<()> {
         let deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;

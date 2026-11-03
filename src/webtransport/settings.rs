@@ -8,11 +8,34 @@
 //!
 //! ID 別の wire 構造とブール値の検査は [`crate::settings::Setting`] が一手に
 //! 担うため、本モジュールは「WebTransport 固有フィールドの型付きコレクション」
-//! と「`Setting` から本構造体への流し込み」のみを提供する。
+//! と「`Setting` から本構造体への流し込み」に加え、複数のドラフト版を広告する
+//! SETTINGS の構築 ([`Settings::for_draft_versions`]) と、広告している版の
+//! 優先順位 ([`Settings::advertised_draft_versions`]) を提供する。
+//! 接続で使う版の選択は [`crate::Connection::negotiated_wt_draft_version`] が行う。
 
 use super::connect::DraftVersion;
 use crate::settings::Setting;
 use crate::varint::VarInt;
+
+/// ドラフト版の選択優先順位 (先頭ほど優先)
+///
+/// 広告の判定と、接続で使う版を選ぶときの優先順位の両方に使う。
+/// draft-15 と draft-16 は同じ SETTINGS コードポイントを共有するため
+/// [`DraftVersion::Draft15`] にまとめる。draft-07 と draft-14 の ID が
+/// 併送された場合は、Safari (Network.framework) 互換のため draft-07 を
+/// draft-14 より優先する ([`Settings::detect_draft_pattern`] と同じ順位)。
+///
+/// この順位は「数値の大きい版を優先する」規則の例外を含む。Safari は
+/// draft-07 と draft-14 の ID を同時に送るが、サーバーが draft-14 の要件で
+/// 応答すると接続できないため、プロジェクトの方針として draft-07 として
+/// 扱う (`docs/SAFARI_WT.md`)。
+const DRAFT_SELECTION_ORDER: [DraftVersion; 5] = [
+    DraftVersion::Draft17,
+    DraftVersion::Draft15,
+    DraftVersion::Draft07,
+    DraftVersion::Draft14,
+    DraftVersion::Draft02,
+];
 
 /// WebTransport 設定 (型付きフィールドのコレクション)
 ///
@@ -200,6 +223,130 @@ impl Settings {
         found.then_some(wt)
     }
 
+    /// 指定したドラフト版を広告する SETTINGS を構築する
+    ///
+    /// 複数のドラフト版に対応する端点は、対応する異なるコードポイントをそれぞれ
+    /// 1 回だけ広告する (draft-ietf-webtrans-http3-17 Section 7.1)。本関数は
+    /// 渡された版が使う SETTINGS コードポイントを過不足なく設定する。同じ版を
+    /// 複数回渡しても 1 回だけ設定する。draft-15 と draft-16 は同じコードポイント
+    /// のため [`DraftVersion::Draft15`] にまとまっている。
+    ///
+    /// 設定するコードポイントは次のとおり:
+    /// - [`DraftVersion::Draft02`]: SETTINGS_ENABLE_WEBTRANSPORT = true
+    /// - [`DraftVersion::Draft07`]: SETTINGS_WEBTRANSPORT_MAX_SESSIONS = `max_sessions`
+    /// - [`DraftVersion::Draft14`]: SETTINGS_WT_MAX_SESSIONS = `max_sessions`
+    /// - [`DraftVersion::Draft15`] (draft-15 / 16): SETTINGS_WT_ENABLED (0x2c7cf000) = 1
+    /// - [`DraftVersion::Draft17`]: SETTINGS_WT_ENABLED (0x20b8933b) = 1
+    ///
+    /// `max_sessions` が 0 の場合、draft-07 / draft-14 のコードポイントは
+    /// 送信しない (0 値を送っても広告にならないため)。
+    ///
+    /// SETTINGS_WT_INITIAL_MAX_* は設定しない。フロー制御の初期値は接続ごとの
+    /// 方針であり、ビルダーメソッド
+    /// ([`Settings::wt_initial_max_streams_uni`] など) で追加する。
+    ///
+    /// # Safari との互換
+    ///
+    /// Safari 26.4 (Network.framework) は draft-07 と draft-14 の ID を併送し、
+    /// 応答 SETTINGS に SETTINGS_WT_MAX_SESSIONS (0x14e9cd29) や
+    /// SETTINGS_WT_ENABLED (0x2c7cf000) を含めると CONNECT を
+    /// `H3_REQUEST_CANCELLED` で拒否する。draft-07 と draft-14 を併せて広告する
+    /// クライアントに応答する場合は、この関数に `[DraftVersion::Draft07]` だけを
+    /// 渡すこと。詳細は `docs/SAFARI_WT.md` を参照。
+    ///
+    /// 検出したクライアントの版ごとに応答 SETTINGS を組み立てる旧来の互換処理は
+    /// [`DraftVersion::build_server_settings`] が持つ。両者は用途が異なるため、
+    /// 接続ごとの設定構築ではこちらを使う。
+    ///
+    /// draft-ietf-webtrans-http3-02 Section 8.2,
+    /// draft-ietf-webtrans-http3-07 Section 8.2,
+    /// draft-ietf-webtrans-http3-14 / -15 / -16 / -17 Section 9.2
+    /// 将来のドラフトで変更される可能性がある
+    pub fn for_draft_versions(versions: &[DraftVersion], max_sessions: VarInt) -> Self {
+        let mut settings = Self::new();
+        for version in versions {
+            match version {
+                DraftVersion::Draft02 => settings.enable_webtransport_draft02 = Some(true),
+                DraftVersion::Draft07 => {
+                    settings.webtransport_max_sessions_draft07 =
+                        (max_sessions != VarInt::ZERO).then_some(max_sessions);
+                }
+                DraftVersion::Draft14 => {
+                    settings.wt_max_sessions_draft14 =
+                        (max_sessions != VarInt::ZERO).then_some(max_sessions);
+                }
+                DraftVersion::Draft15 => settings.wt_enabled = VarInt::from_static(1),
+                DraftVersion::Draft17 => settings.wt_enabled_draft17 = VarInt::from_static(1),
+            }
+        }
+        settings
+    }
+
+    /// この SETTINGS が広告しているドラフト版を優先順位の高い順に返す
+    ///
+    /// 異なる SETTINGS コードポイントを広告している版だけを返す。draft-15 と
+    /// draft-16 は同じコードポイントのため 1 つにまとめる。値が 0 の設定は
+    /// 広告とみなさない。
+    ///
+    /// draft-07 と draft-14 の ID が併送された場合は、Safari (Network.framework)
+    /// 互換のため draft-07 を先に返す ([`Settings::detect_draft_pattern`] と同じ
+    /// 優先順位)。
+    ///
+    /// draft-ietf-webtrans-http3-02 / -07 / -14 / -15 / -16 / -17
+    /// 将来のドラフトで変更される可能性がある
+    pub fn advertised_draft_versions(&self) -> Vec<DraftVersion> {
+        DRAFT_SELECTION_ORDER
+            .into_iter()
+            .filter(|version| self.advertises_draft_version(*version))
+            .collect()
+    }
+
+    /// 指定したドラフト版を広告しているか
+    ///
+    /// 版ごとに SETTINGS コードポイントが異なるため、版ごとに判定する。
+    pub(crate) fn advertises_draft_version(&self, version: DraftVersion) -> bool {
+        match version {
+            DraftVersion::Draft17 => self.wt_enabled_draft17.get() > 0,
+            DraftVersion::Draft15 => self.wt_enabled.get() > 0,
+            DraftVersion::Draft14 => self.wt_max_sessions_draft14.is_some_and(|v| v.get() > 0),
+            DraftVersion::Draft07 => self
+                .webtransport_max_sessions_draft07
+                .is_some_and(|v| v.get() > 0),
+            DraftVersion::Draft02 => self.enable_webtransport_draft02 == Some(true),
+        }
+    }
+
+    /// ピアと共通に広告しているドラフト版のうち、最も優先度の高い版を返す
+    ///
+    /// 優先順位は [`Settings::advertised_draft_versions`] と同じ。Vec を確保せずに
+    /// 判定するため、パケット処理の経路から呼べる。
+    /// (draft-ietf-webtrans-http3-17 Section 7.1)
+    pub(crate) fn first_mutual_draft(&self, peer: &Self) -> Option<DraftVersion> {
+        DRAFT_SELECTION_ORDER.into_iter().find(|version| {
+            self.advertises_draft_version(*version) && peer.advertises_draft_version(*version)
+        })
+    }
+
+    /// 何らかのドラフト版を広告しているか
+    ///
+    /// WebTransport の SETTINGS を持ちながら版を 1 つも広告しない端点は、
+    /// 本文版だけに対応する端点として扱う
+    /// (draft-ietf-webtrans-http3-17 Section 7.1)。
+    pub(crate) fn advertises_any_draft_version(&self) -> bool {
+        DRAFT_SELECTION_ORDER
+            .into_iter()
+            .any(|version| self.advertises_draft_version(version))
+    }
+
+    /// SETTINGS_WT_ENABLED (新旧どちらのコードポイントでも) を広告しているか
+    ///
+    /// draft-15 / 16 / 17 は SETTINGS_WT_ENABLED のコードポイントで版を交渉する。
+    /// この判定は「交差する版がない場合に接続で使う版を決められない」ことを
+    /// 区別するために使う (draft-ietf-webtrans-http3-17 Section 7.1)。
+    pub(crate) fn advertises_wt_enabled(&self) -> bool {
+        self.wt_enabled.get() > 0 || self.wt_enabled_draft17.get() > 0
+    }
+
     /// SETTINGS からドラフトバージョンを検出する
     ///
     /// WebTransport が無効の場合は None を返す。
@@ -225,30 +372,19 @@ impl Settings {
     /// [`DraftVersion::Draft15`] として返す。draft-17 は別コードポイントのため
     /// [`DraftVersion::Draft17`] として区別する。
     ///
+    /// 接続で使う版は [`crate::Connection::negotiated_wt_draft_version`] で決める。
+    /// 本関数は互換判定や表示用であり、複数の広告を 1 つの版に畳み込むため、
+    /// 接続版の決定には使わない。
+    ///
     /// draft-ietf-webtrans-http3-02 / -07 / -14 / -15 / -16 / -17
     /// 将来のドラフトで変更される可能性がある
     pub fn detect_draft_pattern(&self) -> Option<DraftVersion> {
-        // draft-17 の新コードポイントが最も新しい。旧コードポイントと併送された
-        // 場合も draft-17 を優先する (draft-ietf-webtrans-http3-17 Section 7.1)。
-        if self.wt_enabled_draft17.get() > 0 {
-            return Some(DraftVersion::Draft17);
-        }
-        if self.wt_enabled.get() > 0 {
-            return Some(DraftVersion::Draft15);
-        }
-        if self
-            .webtransport_max_sessions_draft07
-            .is_some_and(|v| v.get() > 0)
-        {
-            return Some(DraftVersion::Draft07);
-        }
-        if self.wt_max_sessions_draft14.is_some_and(|v| v.get() > 0) {
-            return Some(DraftVersion::Draft14);
-        }
-        if self.enable_webtransport_draft02 == Some(true) {
-            return Some(DraftVersion::Draft02);
-        }
-        None
+        // 広告の集合の先頭が最も優先される版である。判定順は
+        // `DRAFT_SELECTION_ORDER` に集約し、`advertised_draft_versions` と
+        // 矛盾しないようにする。パケット処理から呼ばれるため Vec を確保しない。
+        DRAFT_SELECTION_ORDER
+            .into_iter()
+            .find(|version| self.advertises_draft_version(*version))
     }
 
     /// WebTransport が有効かどうか
@@ -256,13 +392,9 @@ impl Settings {
     /// draft-02/07/14/15/16/17 のいずれかで有効になっていれば true。
     /// 将来のドラフトで変更される可能性がある
     pub fn is_enabled(&self) -> bool {
-        self.wt_enabled.get() > 0
-            || self.wt_enabled_draft17.get() > 0
-            || self.enable_webtransport_draft02 == Some(true)
-            || self
-                .webtransport_max_sessions_draft07
-                .is_some_and(|v| v.get() > 0)
-            || self.wt_max_sessions_draft14.is_some_and(|v| v.get() > 0)
+        // 広告している版が 1 つでもあれば WebTransport として解釈できる。
+        // パケット処理から呼ばれるため Vec を確保しない。
+        self.advertises_any_draft_version()
     }
 
     /// フロー制御が有効かどうか
@@ -531,6 +663,36 @@ mod tests {
         // WT variant が 1 つも含まれない場合は None
         let entries = [Setting::H3Datagram(true)];
         assert!(Settings::from_payload(&entries).is_none());
+    }
+
+    #[test]
+    fn test_advertised_draft_versions_ignores_zero_values() {
+        let settings = Settings::new()
+            .wt_enabled(v(0))
+            .wt_enabled_draft17(v(0))
+            .webtransport_max_sessions_draft07(v(0))
+            .wt_max_sessions_draft14(v(0))
+            .enable_webtransport_draft02(false);
+        assert!(settings.advertised_draft_versions().is_empty());
+    }
+
+    #[test]
+    fn test_advertises_wt_enabled() {
+        // SETTINGS_WT_ENABLED の新旧どちらのコードポイントでも true
+        assert!(Settings::new().wt_enabled(v(1)).advertises_wt_enabled());
+        assert!(
+            Settings::new()
+                .wt_enabled_draft17(v(1))
+                .advertises_wt_enabled()
+        );
+        // 旧 draft のコードポイントだけでは false
+        assert!(
+            !Settings::new()
+                .enable_webtransport_draft02(true)
+                .webtransport_max_sessions_draft07(v(1))
+                .wt_max_sessions_draft14(v(1))
+                .advertises_wt_enabled()
+        );
     }
 
     #[test]

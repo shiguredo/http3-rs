@@ -1,15 +1,17 @@
 /// WebTransport サーバーサンプル
 ///
-/// shiguredo_http3 (Sans I/O) は draft-ietf-webtrans-http3 の draft-02 / 07 / 14 / 15 / 16
-/// に対応する (draft-16 は draft-15 以降の検証ロジックとして扱う)。本 example は
-/// クライアントの SETTINGS から draft バージョンを自動判定し、適切な応答を返す
-/// (`shiguredo_http3::Settings::webtransport_draft_pattern()`)。
+/// shiguredo_http3 (Sans I/O) は draft-ietf-webtrans-http3 の draft-02 / 07 / 14 / 15 / 16 / 17
+/// に対応する (draft-16 は draft-15 と同じ SETTINGS コードポイント)。本 example は
+/// クライアントの SETTINGS を見てから広告するコードポイントを決め、接続単位の
+/// 選択結果 (`ServerConnection::negotiated_wt_draft_version()`) で実際に使う版を
+/// 決める。Safari (draft-07 と draft-14 を併送) には draft-07 のコードポイントだけを
+/// 返す (docs/SAFARI_WT.md)。
 ///
 /// ただし本 example の QUIC 層である s2n-quic 1.86 は、RESET_STREAM_AT
 /// (draft-ietf-quic-reliable-stream-reset) の送出 API も、ピアの reset_stream_at
 /// transport parameter を取得する API も公開していない。そのため
 /// `set_webtransport_transport_verified` には reset_stream_at 非対応 (false) を渡しており、
-/// draft-14 / 15 / 16 クライアントの CONNECT は sans-I/O 層が H3_MESSAGE_ERROR で拒否する。
+/// draft-14 / 15 / 16 / 17 クライアントの CONNECT は sans-I/O 層が H3_MESSAGE_ERROR で拒否する。
 /// 実際に接続できるのは draft-02 / 07 クライアントに限られる。これは s2n-quic が両 API を
 /// 公開するまでの既知の制限である。
 ///
@@ -74,19 +76,12 @@ async fn run_server(listen: &str, reject_connect: bool) -> Result<(), Error> {
 
     tracing::info!("WebTransport server listening on {listen}");
 
-    // WebTransport 用の HTTP/3 設定
-    // draft-15: SETTINGS_WT_INITIAL_MAX_STREAMS で初期ストリーム上限を通知する
-    // 動的な WT_MAX_STREAMS カプセルによる上限更新は未実装のため、初期値を大きく設定する
-    let v = |value: u64| {
-        shiguredo_http3::VarInt::new(value).expect("WT settings value must fit VarInt")
-    };
-    let wt_settings = shiguredo_http3::webtransport::Settings::new()
-        .wt_enabled(shiguredo_http3::VarInt::from_static(1))
-        .wt_initial_max_streams_uni(v(1000))
-        .wt_initial_max_streams_bidi(v(1000))
-        .enable_webtransport_draft02(true)
-        .webtransport_max_sessions_draft07(v(100));
-    let h3_settings = shiguredo_http3::Settings::default().enable_webtransport_server(wt_settings);
+    // WebTransport の最大セッション数
+    //
+    // 実際に広告するコードポイントは接続ごとに決める (クライアントの SETTINGS を
+    // 受信した後で、対応する全コードポイントまたは Safari 向けの最小構成を選ぶ)。
+    // そのためここでは draft-07 / 14 用の最大セッション数だけを用意する。
+    let max_sessions = shiguredo_http3::VarInt::new(100).expect("max sessions must fit VarInt");
 
     loop {
         tokio::select! {
@@ -109,10 +104,9 @@ async fn run_server(listen: &str, reject_connect: bool) -> Result<(), Error> {
                 match &alpn[..] {
                     b"h3" => {
                         tracing::info!("[{remote}] New WebTransport connection");
-                        let settings = h3_settings;
                         let reject = reject_connect;
                         tokio::spawn(async move {
-                            match handle_connection(connection, settings, remote.clone(), reject)
+                            match handle_connection(connection, max_sessions, remote.clone(), reject)
                                 .await
                             {
                                 Ok(()) => tracing::info!("[{remote}] Connection closed"),
@@ -141,13 +135,13 @@ async fn run_server(listen: &str, reject_connect: bool) -> Result<(), Error> {
 /// HTTP/3 ハンドシェイク後、WebTransport セッションを確立してエコー処理を行う。
 async fn handle_connection(
     connection: s2n_quic::Connection,
-    h3_settings: shiguredo_http3::Settings,
+    max_sessions: shiguredo_http3::VarInt,
     remote: String,
     reject_connect: bool,
 ) -> Result<(), Error> {
     tracing::info!("[{remote}] Starting WebTransport handshake...");
 
-    let request = webtransport::WtSessionRequest::from_connection(connection, h3_settings).await?;
+    let request = webtransport::WtSessionRequest::from_connection(connection, max_sessions).await?;
 
     let path = request.path().to_string();
     let authority = request.authority().to_string();

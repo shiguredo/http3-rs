@@ -13,7 +13,7 @@
 //! 実際に接続できるのは draft-02 / 07 クライアントに限られる。これは s2n-quic が両 API を
 //! 公開するまでの既知の制限である。
 //!
-//! ドラフト判定は `Settings::webtransport_draft_pattern()`、CONNECT 拒否は `WtSessionRequest::reject()` を利用する。
+//! ドラフト判定は `ServerConnection::negotiated_wt_draft_version()`、CONNECT 拒否は `WtSessionRequest::reject()` を利用する。
 
 #![expect(dead_code)]
 
@@ -28,9 +28,7 @@ use shiguredo_http3::webtransport::connect::{ConnectRequest, ConnectResponse};
 use shiguredo_http3::webtransport::stream::{
     ClassifiedUniStream, StreamHeader, StreamHeaderDecodeError, classify_uni_stream_checked,
 };
-use shiguredo_http3::{
-    Event, ServerConnection, Setting, Settings as H3Settings, SettingsPayload, VarInt,
-};
+use shiguredo_http3::{Event, ServerConnection, Setting, Settings as H3Settings, SettingsPayload};
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -108,19 +106,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 struct ServerConnectionState {
     h3_conn: ServerConnection,
-    control_stream_id: Option<u64>,
 }
 
 impl ServerConnectionState {
     fn new(settings: H3Settings) -> Self {
         Self {
             h3_conn: ServerConnection::new(settings),
-            control_stream_id: None,
         }
-    }
-
-    fn set_control_stream_id(&mut self, id: u64) {
-        self.control_stream_id = Some(id);
     }
 
     fn process_stream_data(&mut self, id: u64, data: &[u8], fin: bool) -> Result<Vec<Event>> {
@@ -131,11 +123,6 @@ impl ServerConnectionState {
     fn feed_stream_only(&mut self, id: u64, data: &[u8], fin: bool) -> Result<()> {
         self.h3_conn.feed_stream(id, data, fin)?;
         Ok(())
-    }
-
-    fn take_control_pending(&mut self) -> Option<Vec<u8>> {
-        let id = self.control_stream_id?;
-        self.h3_conn.take_stream_data(id).map(|(d, _)| d)
     }
 
     fn drain_events(&mut self) -> Result<Vec<Event>> {
@@ -169,11 +156,12 @@ pub struct WtSessionRequest {
 impl WtSessionRequest {
     /// QUIC 接続から WebTransport セッションリクエストを作成する
     ///
-    /// クライアントの SETTINGS を先に受信し、draft バージョンを判定してから
-    /// そのバージョンに合わせたサーバー SETTINGS を返す。
+    /// クライアントの SETTINGS を先に受信し、広告する SETTINGS を組み立ててから
+    /// 状態機械を初期化する。クライアントの SETTINGS を流し込んだ後、接続単位の
+    /// 選択結果 (`negotiated_wt_draft_version`) を実際に使う版として保持する。
     pub async fn from_connection(
         connection: s2n_quic::Connection,
-        _h3_settings: H3Settings,
+        max_sessions: shiguredo_http3::VarInt,
     ) -> Result<Self> {
         let (mut handle, stream_acceptor) = connection.split();
         let (mut bidi_acceptor, mut uni_acceptor) = stream_acceptor.split();
@@ -249,20 +237,59 @@ impl WtSessionRequest {
             }
         };
 
-        // shiguredo_http3 のドラフト検出 (複合 SETTINGS はクレート側の優先順位に従う)
-        let draft = client_settings
-            .webtransport_draft_pattern()
-            .unwrap_or_else(|| {
-                tracing::warn!(
-                    "WebTransport: no recognized draft in client SETTINGS, fallback to draft-02"
-                );
-                DraftVersion::Draft02
-            });
-        tracing::info!("WebTransport: client draft detected: {draft:?}");
+        tracing::info!("WebTransport: client SETTINGS: {client_settings:?}");
 
-        // ── Phase 2: draft に合わせたサーバー SETTINGS を構築する ──
-
-        let server_wt = build_server_wt_settings(draft);
+        // ── Phase 2: サーバー H3 設定を用意する ──
+        //
+        // 初期フロー制御値は動的更新が未実装のため大きめに通知する。
+        let initial_max_streams_uni = shiguredo_http3::VarInt::from_static(1000);
+        let initial_max_streams_bidi = shiguredo_http3::VarInt::from_static(1000);
+        let initial_max_data = shiguredo_http3::VarInt::new(8 * 1024 * 1024)
+            .expect("initial max data must fit VarInt");
+        //
+        // 複数のドラフト版に対応する端点は、対応する異なるコードポイントを
+        // それぞれ 1 回広告する (draft-ietf-webtrans-http3-17 Section 7.1)。
+        // ただし Safari 26.4 (Network.framework) は draft-07 と draft-14 の ID を
+        // 併送し、応答 SETTINGS に 0x14e9cd29 や 0x2c7cf000 を含めると
+        // CONNECT を H3_REQUEST_CANCELLED で拒否するため、その組み合わせを
+        // 検出した場合は draft-07 の ID だけを広告する (docs/SAFARI_WT.md)。
+        // 実際に使う版は、クライアントの SETTINGS を流し込んだ後に
+        // `ServerConnection::negotiated_wt_draft_version` で決める。
+        let client_advertised = client_settings
+            .wt_settings
+            .as_ref()
+            .map(|wt| wt.advertised_draft_versions())
+            .unwrap_or_default();
+        let safari_pattern = client_advertised.contains(&DraftVersion::Draft07)
+            && client_advertised.contains(&DraftVersion::Draft14);
+        let server_wt = if safari_pattern {
+            tracing::info!(
+                "WebTransport: Safari pattern detected, advertising draft-07 codepoint only"
+            );
+            shiguredo_http3::webtransport::Settings::for_draft_versions(
+                &[DraftVersion::Draft07],
+                max_sessions,
+            )
+        } else {
+            // 対応する全コードポイントを広告する。draft-15 / 16 / 17 では
+            // SETTINGS_WT_INITIAL_MAX_* で初期フロー制御値を通知する
+            // (Safari 以外は応答 SETTINGS にこれらの値を含めてよい)。
+            shiguredo_http3::webtransport::Settings::for_draft_versions(
+                &[
+                    DraftVersion::Draft02,
+                    DraftVersion::Draft07,
+                    DraftVersion::Draft14,
+                    DraftVersion::Draft15,
+                    DraftVersion::Draft17,
+                ],
+                max_sessions,
+            )
+            .wt_initial_max_streams_uni(initial_max_streams_uni)
+            .wt_initial_max_streams_bidi(initial_max_streams_bidi)
+            .wt_initial_max_data(initial_max_data)
+        };
+        // Safari に返す場合は SETTINGS_WT_INITIAL_MAX_* を含めない
+        // (応答 SETTINGS にこれらの値を含めると CONNECT をリセットする)。
         let server_settings = H3Settings::default().enable_webtransport_server(server_wt);
         tracing::info!("WebTransport: server SETTINGS: {server_settings:?}");
         // 状態機械は CONNECT 待ちループと単方向ストリーム受信タスクから参照される。
@@ -289,7 +316,7 @@ impl WtSessionRequest {
                 encoder_send.id(),
                 decoder_send.id(),
             )?;
-            s.set_control_stream_id(control_send.id());
+            // 制御ストリーム ID は以降の処理で必要ないため保持しない
             data
         };
 
@@ -340,28 +367,22 @@ impl WtSessionRequest {
 
         // ── Phase 4: クライアントの制御ストリームデータを H3 に注入する ──
 
-        let delayed_control_data = {
+        let draft = {
             let mut s = state.lock().expect("mutex should not be poisoned");
             s.feed_stream_only(client_control_id, &client_control_buf, false)?;
             for event in s.drain_events()? {
                 tracing::info!("WebTransport: client control stream event: {event:?}");
             }
-            // サーバー SETTINGS はクライアント SETTINGS 受信後に初めてエンキューされる
-            // (shiguredo_http3 の WebTransport サーバーはピアの draft を見て SETTINGS を組み立てるため)
-            s.take_control_pending()
+            // クライアントの SETTINGS を反映した後で、接続単位の版選択の結果を得る
+            // (draft-ietf-webtrans-http3-17 Section 7.1)。版が決まらない場合は
+            // WebTransport セッションとして扱えないため接続を失敗させる。
+            // サーバー SETTINGS は Phase 3 の時点で制御ストリームへ送信済みである。
+            s.h3_conn.negotiated_wt_draft_version().ok_or_else(|| {
+                Error::InvalidState("no WebTransport draft version is negotiated".to_string())
+            })?
         };
+        tracing::info!("WebTransport: negotiated draft version: {draft:?}");
         tracing::debug!("WebTransport: client control stream data injected into H3 state machine");
-
-        if let Some(data) = delayed_control_data {
-            tracing::info!(
-                "WebTransport: sending delayed server control SETTINGS ({} bytes): {:02x?}",
-                data.len(),
-                data
-            );
-            if !data.is_empty() {
-                control_send.send(Bytes::from(data)).await?;
-            }
-        }
 
         // ── Phase 5: バックグラウンドタスクを開始する ──
 
@@ -1048,43 +1069,6 @@ fn parse_settings_from_control(buf: &[u8]) -> std::result::Result<H3Settings, Se
     let settings = H3Settings::from_payload(&payload);
     tracing::info!("WebTransport: client SETTINGS parsed: {settings:?}");
     Ok(settings)
-}
-
-/// draft バージョンに合わせたサーバー WT 設定を構築する
-fn build_server_wt_settings(draft: DraftVersion) -> shiguredo_http3::webtransport::Settings {
-    tracing::info!("WebTransport: building server settings for {draft:?}");
-    let v = |value: u64| VarInt::new(value).expect("WT settings value must fit VarInt");
-    match draft {
-        // Draft-17: draft-15 / 16 と同じ初期ストリーム上限を返すが、
-        // SETTINGS_WT_ENABLED は新コードポイント (0x20b8933b) で送る。
-        DraftVersion::Draft17 => shiguredo_http3::webtransport::Settings::new()
-            .wt_enabled_draft17(VarInt::from_static(1))
-            .wt_initial_max_streams_uni(v(1000))
-            .wt_initial_max_streams_bidi(v(1000)),
-        DraftVersion::Draft15 => shiguredo_http3::webtransport::Settings::new()
-            .wt_enabled(VarInt::from_static(1))
-            .wt_initial_max_streams_uni(v(1000))
-            .wt_initial_max_streams_bidi(v(1000)),
-        // Draft-14: Safari 26.4 は 0xc671706a (draft-07) と 0x14e9cd29 (draft-14) の両方を送る。
-        // サーバーも両方返すことで、どちらの ID で判定しても WebTransport 対応と認識させる。
-        DraftVersion::Draft14 => shiguredo_http3::webtransport::Settings::new()
-            .wt_max_sessions_draft14(v(100))
-            .webtransport_max_sessions_draft07(v(100))
-            .wt_initial_max_streams_uni(v(1000))
-            .wt_initial_max_streams_bidi(v(1000))
-            .wt_initial_max_data(v(8 * 1024 * 1024)),
-        // Draft-07: Safari 26.4 は応答 SETTINGS に draft-14 系の
-        // WT_INITIAL_MAX_STREAMS_* / WT_INITIAL_MAX_DATA を含めると
-        // H3_REQUEST_CANCELLED (0x10C) で CONNECT をリセットする。
-        // (docs/SAFARI_WT.md 参照) 初期フロー制御値はセッション確立後の
-        // WT_MAX_STREAMS / WT_MAX_DATA カプセルで通知する。
-        DraftVersion::Draft07 => {
-            shiguredo_http3::webtransport::Settings::new().webtransport_max_sessions_draft07(v(100))
-        }
-        DraftVersion::Draft02 => {
-            shiguredo_http3::webtransport::Settings::new().enable_webtransport_draft02(true)
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

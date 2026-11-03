@@ -212,7 +212,14 @@ impl Connection {
         fc_violation
     }
 
-    /// WebTransport SETTINGS を受信していない場合は `None`。
+    /// ピアが広告しているドラフト版の推定値を返す
+    ///
+    /// WebTransport 関連の SETTINGS を受信していない、または版を判定できない場合は
+    /// `None`。`detect_draft_pattern` は Safari 互換などの理由で複数の広告を 1 つの
+    /// 版に畳み込むため、本関数の結果は接続で使う版の判定には使わない
+    /// ([`Connection::negotiated_wt_draft_version`] を使う)。
+    /// ピアの広告パターンだけを参照する互換判定に使う。現在は CONNECT 応答前
+    /// (Pending) の DATA を破棄する draft-02 (Chrome) 互換の判定で使う。
     /// (draft-ietf-webtrans-http3-02/07/14/15/16/17 Section 3.1)
     pub(crate) fn peer_wt_draft_version(&self) -> Option<DraftVersion> {
         self.peer_settings
@@ -221,74 +228,103 @@ impl Connection {
             .and_then(|wt| wt.detect_draft_pattern())
     }
 
-    /// ローカルとピアが共に広告している中で最も新しい WebTransport ドラフトを返す
+    /// ローカルが SETTINGS_WT_ENABLED (新旧どちらのコードポイントでも) を広告しているか
     ///
-    /// バージョンネゴシエーションは「両エンドポイントが広告する集合の交差から
-    /// 最も新しいものを選ぶ」(draft-ietf-webtrans-http3-15 Section 7.1,
-    /// draft-ietf-webtrans-http3-17 Section 7.1)。
-    ///
-    /// 本関数は交差集合から最上位を選ぶだけで、クライアントが新しいコードポイントを
-    /// 送らない場合にどの版へフォールバックするかといった接続時の版選択規則は
-    /// 別途扱う。
-    /// 将来のドラフトで変更される可能性がある
-    pub(crate) fn negotiated_wt_draft_version(&self) -> Option<DraftVersion> {
-        self.mutually_advertised_wt_drafts().into_iter().next()
+    /// draft-15 / 16 / 17 は SETTINGS のコードポイントで版を交渉するため、
+    /// 「交差する版がない」場合に接続で使う版を決められないことを区別するために使う。
+    /// (draft-ietf-webtrans-http3-17 Section 7.1)
+    fn local_advertises_wt_enabled(&self) -> bool {
+        self.local_settings
+            .wt_settings
+            .as_ref()
+            .is_some_and(|settings| settings.advertises_wt_enabled())
     }
 
-    /// ローカルとピアが共に広告している WebTransport ドラフトを新しい順に返す
+    /// 接続単位で選択した WebTransport のドラフト版を返す
     ///
-    /// (draft-ietf-webtrans-http3-15 Section 7.1,
-    ///  draft-ietf-webtrans-http3-17 Section 7.1)
-    /// draft-15 と draft-16 は同じ SETTINGS コードポイントを共有するため
-    /// [`DraftVersion::Draft15`] にまとめ、draft-17 は別コードポイントのため
-    /// [`DraftVersion::Draft17`] として区別する。
+    /// SETTINGS のコードポイントによる版選択の結果を返す。
+    /// ピアの SETTINGS を受信していない場合は `None`。
+    ///
+    /// 選択規則は次のとおり (draft-ietf-webtrans-http3-17 Section 7.1):
+    ///
+    /// - クライアント: ローカルとピアが共に広告している版のうち最も優先度の高い版。
+    ///   交差がなければ `None`。ローカルが対応しない版をピアの広告だけから選ばない
+    /// - サーバー: クライアントが本文版のコードポイントを広告していれば本文版。
+    ///   そうでなければ対応する旧 ID のうち最も優先度の高い版。どちらもなければ
+    ///   本文版に対応していれば本文版、対応していなければ `None`
+    ///
+    /// 優先度は [`Settings::advertised_draft_versions`](crate::webtransport::Settings::advertised_draft_versions)
+    /// の順に従う。draft-07 と draft-14 の ID が併送された場合は、Safari
+    /// (Network.framework) が両方を送り、かつサーバーが draft-14 の要件で応答すると
+    /// 接続できないため、検出と同じく draft-07 を優先する (docs/SAFARI_WT.md)。
+    /// これは「最も新しい版を選ぶ」規則の Safari 互換の例外である。
+    ///
+    /// 本文版だけに対応するクライアントは SETTINGS_WT_ENABLED を送らないため
+    /// (draft-ietf-webtrans-http3-17 Section 7.1)、ローカルが SETTINGS_WT_ENABLED を
+    /// 広告していない場合は、ピアが本文版のコードポイントを広告していれば本文版を選ぶ。
+    ///
+    /// `None` の扱いはロールで異なる。クライアントは使用する版がないため
+    /// WebTransport を開始できない。サーバーは SETTINGS_WT_ENABLED を広告して
+    /// いる場合に CONNECT を受理してはならない。
     /// 将来のドラフトで変更される可能性がある
-    pub(crate) fn mutually_advertised_wt_drafts(&self) -> Vec<DraftVersion> {
-        let Some(local) = self.local_settings.wt_settings.as_ref() else {
-            return Vec::new();
-        };
-        let Some(peer) = self
-            .peer_settings
-            .as_ref()
-            .and_then(|s| s.wt_settings.as_ref())
-        else {
-            return Vec::new();
-        };
-        let advertises = |s: &crate::webtransport::Settings, d: DraftVersion| -> bool {
-            match d {
-                DraftVersion::Draft17 => s.wt_enabled_draft17.get() > 0,
-                DraftVersion::Draft15 => s.wt_enabled.get() > 0,
-                DraftVersion::Draft14 => s.wt_max_sessions_draft14.is_some_and(|v| v.get() > 0),
-                DraftVersion::Draft07 => s
-                    .webtransport_max_sessions_draft07
-                    .is_some_and(|v| v.get() > 0),
-                DraftVersion::Draft02 => s.enable_webtransport_draft02 == Some(true),
+    pub fn negotiated_wt_draft_version(&self) -> Option<DraftVersion> {
+        let local = self.local_settings.wt_settings.as_ref()?;
+        match self.role {
+            Role::Client => {
+                let peer = self.peer_settings.as_ref()?.wt_settings.as_ref()?;
+                if let Some(draft) = local.first_mutual_draft(peer) {
+                    return Some(draft);
+                }
+                // 本文版だけに対応するクライアントは SETTINGS_WT_ENABLED を送らず、
+                // 対応するドラフト版のコードポイントも広告しない。そのようなクライアントは、
+                // ピアが本文版のコードポイントを広告していれば本文版を選ぶ
+                // (draft-ietf-webtrans-http3-17 Section 7.1)。
+                (!local.advertises_any_draft_version()
+                    && peer.advertises_draft_version(DraftVersion::Draft17))
+                .then_some(DraftVersion::Draft17)
             }
-        };
-        [
-            DraftVersion::Draft17,
-            DraftVersion::Draft15,
-            DraftVersion::Draft14,
-            DraftVersion::Draft07,
-            DraftVersion::Draft02,
-        ]
-        .into_iter()
-        .filter(|d| advertises(local, *d) && advertises(peer, *d))
-        .collect()
+            Role::Server => {
+                // クライアントの SETTINGS を受信するまでは版を決められない
+                // (draft-ietf-webtrans-http3-17 Section 7.1: サーバーは
+                //  クライアントの SETTINGS を受信するまで WebTransport リクエストを
+                //  処理してはならない)。
+                let peer_settings = self.peer_settings.as_ref()?;
+                if let Some(peer) = peer_settings.wt_settings.as_ref()
+                    && let Some(draft) = local.first_mutual_draft(peer)
+                {
+                    return Some(draft);
+                }
+                // クライアントが SETTINGS_WT_ENABLED を送らない場合、または
+                // サーバーが対応しないコードポイントだけを送る場合は本文版を選ぶ
+                // (draft-ietf-webtrans-http3-17 Section 7.1 の 3 番目の箇条書き)。
+                local
+                    .advertises_draft_version(DraftVersion::Draft17)
+                    .then_some(DraftVersion::Draft17)
+            }
+        }
     }
 
     /// WebTransport の能力ネゴシエーションが完了しているかどうかを判定する
     ///
+    /// 接続で使う版が決まっていること ([`Connection::negotiated_wt_draft_version`])
+    /// を前提に、必須 SETTINGS と transport parameter を検証する。
     /// (draft-ietf-webtrans-http3-02/07/14/15/16/17 Section 3.1)
     pub(crate) fn is_wt_fully_negotiated(&self) -> bool {
-        // ローカルが WebTransport を有効にしているか
-        if !self.local_settings.is_webtransport_enabled() {
-            return false;
+        // ローカルが WebTransport を有効にしているか。本文版だけに対応する
+        // クライアントは SETTINGS_WT_ENABLED を送らないため、クライアントでは
+        // WebTransport の SETTINGS を持つことだけを条件にする
+        // (draft-ietf-webtrans-http3-17 Section 7.1)。
+        match self.local_settings.wt_settings.as_ref() {
+            None => return false,
+            Some(local_wt) => {
+                if self.role == Role::Server && !local_wt.is_enabled() {
+                    return false;
+                }
+            }
         }
         // peer の SETTINGS を受信済みか
-        let peer = match self.peer_settings.as_ref() {
-            Some(p) => p,
-            None => return false,
+        let Some(peer) = self.peer_settings.as_ref() else {
+            return false;
         };
         // H3_DATAGRAM が有効か (両端共通の必須条件)
         if peer.h3_datagram != Some(true) {
@@ -298,36 +334,24 @@ impl Connection {
         if !self.wt_transport_verified {
             return false;
         }
-        // クライアント側: peer (サーバー) が WebTransport を広告し、ENABLE_CONNECT_PROTOCOL
-        // と必要なら reset_stream_at もそろっているかを検証する。
-        if self.role == Role::Client {
-            if !peer.is_webtransport_enabled() {
-                return false;
-            }
-            let draft = match self.peer_wt_draft_version() {
-                Some(v) => v,
-                None => return false,
-            };
-            if draft.requires_enable_connect_protocol()
-                && peer.enable_connect_protocol != Some(true)
-            {
-                return false;
-            }
-            if draft.requires_reset_stream_at() && !self.wt_reset_stream_at_supported {
-                return false;
-            }
-            return true;
+        let Some(draft) = self.negotiated_wt_draft_version() else {
+            // 版を決められない場合の扱いはロールで異なる。
+            // - クライアント: 使用する版がないため WebTransport を開始できない
+            // - サーバー: ローカルが SETTINGS_WT_ENABLED を広告しているなら
+            //   交差する版がなく受理してはならない。SETTINGS_WT_ENABLED を広告しない
+            //   端点 (draft-02 / 07 / 14) では版が未確定のまま相互運用のため受理する
+            //   (交差なし = 非対応という仕様からの意図的な逸脱)
+            return self.role == Role::Server && !self.local_advertises_wt_enabled();
+        };
+        // クライアント側: サーバーが選択版の要件を満たす SETTINGS を広告しているか
+        if self.role == Role::Client
+            && draft.requires_enable_connect_protocol()
+            && peer.enable_connect_protocol != Some(true)
+        {
+            return false;
         }
-        // サーバー側: ローカルが draft-15 / 16 を採用している場合のみ peer の WT 広告を
-        // 要求する (draft-ietf-webtrans-http3-15 Section 7.1: 双方が
-        // SETTINGS_WT_ENABLED を送る MUST)。
-        // draft-14 以前は Safari 等の interop のため peer 広告を要求しない
-        // (nghttp3 lib/nghttp3_conn.c の TODO コメント参照)。
-        // draft-17 の本文版は、クライアントが SETTINGS_WT_ENABLED を送らない場合にも
-        // 本文で定義された版を選ぶため、クライアントの広告を前提にしない
-        // (draft-ietf-webtrans-http3-17 Section 3.1 / 7.1)。
-        let local_draft = self.local_settings.webtransport_draft_pattern();
-        if matches!(local_draft, Some(DraftVersion::Draft15)) && !peer.is_webtransport_enabled() {
+        // 選択版が要求する QUIC transport parameter
+        if draft.requires_reset_stream_at() && !self.wt_reset_stream_at_supported {
             return false;
         }
         true
@@ -799,8 +823,10 @@ impl Connection {
         if !peer.is_webtransport_enabled() {
             return Err(Error::WtSetup(WtSetupError::WebTransportNotEnabled));
         }
+        // 接続単位の版選択。ローカルが対応しない版をピアの広告だけから選ばない
+        // (draft-ietf-webtrans-http3-17 Section 7.1)。
         let draft = self
-            .peer_wt_draft_version()
+            .negotiated_wt_draft_version()
             .ok_or(Error::WtSetup(WtSetupError::UnknownDraftVersion))?;
         if draft.requires_enable_connect_protocol() && peer.enable_connect_protocol != Some(true) {
             return Err(Error::WtSetup(WtSetupError::EnableConnectProtocolMissing));
@@ -858,13 +884,13 @@ impl Connection {
         let Some(peer) = self.peer_settings.as_ref() else {
             return Ok(());
         };
-        let local_draft = self.local_settings.webtransport_draft_pattern();
-        // ローカルが draft-15 / 16 を採用している場合のみ peer の WT 広告を要求する。
-        // draft-17 の本文版は、クライアントが SETTINGS_WT_ENABLED を送らない場合にも
-        // 本文で定義された版を選ぶため、ここでは要求しない
-        // (draft-ietf-webtrans-http3-15 Section 7.1,
-        //  draft-ietf-webtrans-http3-17 Section 3.1 / 7.1)。
-        if matches!(local_draft, Some(DraftVersion::Draft15)) && !peer.is_webtransport_enabled() {
+        // 接続単位の版選択。SETTINGS_WT_ENABLED を広告しているのに交差する版が
+        // ない場合、接続で使う版を決められないため CONNECT を受理しない
+        // (draft-ietf-webtrans-http3-17 Section 7.1)。
+        // 旧 draft だけに対応する端点はコードポイントによる交渉をしないため、
+        // `None` のまま版依存の検証をスキップする (従来の挙動を維持する)。
+        let draft = self.negotiated_wt_draft_version();
+        if draft.is_none() && self.local_advertises_wt_enabled() {
             return Err(Error::StreamError(ErrorCode::MessageError));
         }
         if peer.h3_datagram != Some(true) {
@@ -873,39 +899,10 @@ impl Connection {
         if !self.wt_transport_verified {
             return Err(Error::StreamError(ErrorCode::MessageError));
         }
-        // 接続単位の版選択: 双方の広告の交差から最上位を選ぶ。クライアントが
-        // SETTINGS_WT_ENABLED を送らない場合、またはサーバーが対応しない
-        // コードポイントだけを送る場合、本文版だけに対応するサーバーは
-        // 本文で定義された版を選ぶ
-        // (draft-ietf-webtrans-http3-17 Section 7.1 の 3 番目の箇条書き)。
-        let negotiated = self.negotiated_wt_draft_version();
-        let draft = match negotiated {
-            Some(draft) => Some(draft),
-            None if matches!(local_draft, Some(DraftVersion::Draft17)) => {
-                Some(DraftVersion::Draft17)
-            }
-            // draft-15 / 16 だけに対応するサーバーは、クライアントが本文版の
-            // コードポイントを広告しているのに共通する版がない場合、接続で
-            // 使う版を決められないため CONNECT を受理しない。draft-14 以前の
-            // コードポイントしか広告しないクライアントは、そもそも
-            // SETTINGS_WT_ENABLED による交渉に参加できないため従来どおり扱う。
-            None if matches!(local_draft, Some(DraftVersion::Draft15))
-                && peer
-                    .wt_settings
-                    .as_ref()
-                    .is_some_and(|wt| wt.wt_enabled_draft17.get() > 0) =>
-            {
+        if let Some(draft) = draft {
+            if draft.requires_reset_stream_at() && !self.wt_reset_stream_at_supported {
                 return Err(Error::StreamError(ErrorCode::MessageError));
             }
-            // draft-14 以前だけに対応する端点は、コードポイントによる交渉を
-            // しないため版依存の検証をスキップする (従来の挙動を維持する)。
-            None => None,
-        };
-        if draft.is_some_and(|d| d.requires_reset_stream_at()) && !self.wt_reset_stream_at_supported
-        {
-            return Err(Error::StreamError(ErrorCode::MessageError));
-        }
-        if let Some(draft) = draft {
             let proto_header = headers
                 .iter()
                 .find(|h| h.name() == b":protocol")
