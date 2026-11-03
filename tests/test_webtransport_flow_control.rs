@@ -513,12 +513,12 @@ fn test_peer_settings_initial_limits_are_monotonic_baseline() {
     );
 }
 
-/// 現在接続の SETTINGS 初期値だけが送信上限とフロー制御カプセルの基準になること
+/// 現在接続の SETTINGS 初期値だけが通知されること
 ///
-/// 0-RTT 再開で前回接続の初期上限を注入しても、現在接続で受信した SETTINGS の値が
-/// イベントに載り、その値だけが Session の比較基準になることを確認する。
-/// Connection がイベントに現在値を載せ、呼び出し側がその値を Session に渡す経路を
-/// シミュレーションする。
+/// 0-RTT 再開で前回接続の初期上限を注入しても、Connection の SETTINGS 受信
+/// イベントには現在接続の値だけが載ることを確認する。前回値が Session の
+/// 比較基準に混入しないことは、イベントの値を `Session::initialize_remote_limits`
+/// に渡す経路で確認する。
 /// (draft-ietf-webtrans-http3-16 Section 5.5, 5.6.2, 5.6.4,
 ///  draft-ietf-webtrans-http3-17 Section 3.2)
 #[test]
@@ -586,7 +586,7 @@ fn test_current_settings_limits_are_baseline_after_resumption() {
     assert_eq!(received.wt_initial_max_streams_bidi, v(1));
     assert_eq!(received.wt_initial_max_data, v(50));
 
-    // Session の比較基準も現在値だけになる
+    // 受け取った値をそのまま Session の比較基準にすると、現在値だけが上限になる
     let mut session = Session::new(0);
     session.initialize_remote_limits(FlowControlLimits {
         max_streams_uni: received.wt_initial_max_streams_uni.get(),
@@ -594,7 +594,6 @@ fn test_current_settings_limits_are_baseline_after_resumption() {
         max_data: received.wt_initial_max_data.get(),
     });
     session.set_established();
-
     assert!(
         session.can_send_data(50),
         "現在の SETTINGS 初期値ちょうどまでは送信できること"
