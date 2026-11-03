@@ -3,7 +3,7 @@
 - Created: 2026-11-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-wt-draft-17-frame-unexpected
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-03
 - Category: change
 
 ## 目的
@@ -25,11 +25,11 @@ draft-ietf-webtrans-http3-17 Section 4.3 に従い、不正な位置や方向で
 - WT_STREAM は length フィールドを持たないため、不正な型と判定できる段階で HTTP/3 フレームの length / payload 全体を待たない。分割入力でも判定を一貫させる
 - 制御ストリームの先頭 SETTINGS 必須規則など、ほかの違反が競合する場合は、RFC 9114 のエラー選択と既存の優先順位を確認する。`H3_MISSING_SETTINGS` の経路を機械的に変更しない
 - 一般のフレーム途中切れや `0x41` 以外の不正シグナルのエラーを、一律に置き換えない
-- 新旧版への適用範囲を明記し、旧コードポイントだけでは draft-15 / 16 を区別できない既存の互換方針と整合させる
+- 不正位置の WT_STREAM に対するエラーは、本文版、旧 draft、WT 未ネゴシエーション時で共通して `H3_FRAME_UNEXPECTED` に更新する。旧版の `H3_FRAME_ERROR` というエラーコードの互換性は維持しない。版を保持しない `RequestStream` / `ControlStreamRecv` の共通処理として変更し、版別判定のための API は追加しない。正当な旧版のストリーム処理は維持する
 
 ## 完了条件
 
-- リクエストの途中、レスポンス方向の先頭 / 途中、SETTINGS 受信後の制御ストリームで、不正な WT_STREAM が `H3_FRAME_UNEXPECTED` になる
+- 本文版、旧 draft、WT 未ネゴシエーション時のいずれでも、リクエストの途中、レスポンス方向の先頭 / 途中、SETTINGS 受信後の制御ストリームで、不正な WT_STREAM が `H3_FRAME_UNEXPECTED` になる
 - WT_STREAM 型の varint が分割された入力と、後続の length が存在しない入力を検証する
 - クライアント開始 / サーバー開始の正当な bidi は引き続き使える
 - 登録済み bidi の逆方向に送られる通常データが、値 `0x41` を含んでも誤拒否されない
