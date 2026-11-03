@@ -153,7 +153,7 @@ Safari は draft-07 の SETTINGS で接続するが、ストリーム作成と�
 
 本リポジトリでは次の二段構えで Safari 互換を実現している:
 
-1. **`detect_draft_pattern` は `DraftVersion::Draft07` を返す**: Safari が送る `0xc671706a` を優先して判定する (draft-14 優先で判定すると応答 SETTINGS を組み立てる際に問題が出ることが実測で確認されているため)。判定順は `draft-15 → draft-07 → draft-14 → draft-02`。
+1. **`detect_draft_pattern` は `DraftVersion::Draft07` を返す**: Safari が送る `0xc671706a` を優先して判定する (draft-14 優先で判定すると応答 SETTINGS を組み立てる際に問題が出ることが実測で確認されているため)。判定順は `draft-17 → draft-15 / 16 → draft-07 → draft-14 → draft-02`。
 2. **`Settings::requires_initial_capsule_flow_control_compat()` で draft-13/14 互換カプセル送出を判定する**: draft-07 として検出した場合でも `WT_INITIAL_MAX_*` が peer から来ていれば `true` を返し、セッション確立直後に `WT_MAX_STREAMS` / `WT_MAX_DATA` カプセルを pending キューに積む。
 
 関連コード:

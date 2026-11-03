@@ -1,6 +1,8 @@
 //! WebTransport Settings のプロパティ
-//! (draft-ietf-webtrans-http3-15 Section 5.1, 9.2)
+//! (draft-ietf-webtrans-http3-15 Section 5.1, 9.2,
+//!  draft-ietf-webtrans-http3-17 Section 5.1, 9.2)
 
+use shiguredo_http3::webtransport::DraftVersion;
 use shiguredo_http3::webtransport::Settings;
 use shiguredo_http3::{Setting, VarInt};
 
@@ -59,12 +61,14 @@ fn prop_settings_iter_matches_builder() -> noprop::TestResult {
     let mut runner = noprop::Runner::new(seed);
     runner.run(256, |ctx| {
         let max_sessions = noprop::sample_u64_in(ctx, 0..100);
+        let draft17_enabled = noprop::sample_u64_in(ctx, 0..100);
         let max_streams_uni = noprop::sample_u64_in(ctx, 0..1000);
         let max_streams_bidi = noprop::sample_u64_in(ctx, 0..1000);
         let max_data = noprop::sample_u64_in(ctx, 0..100000);
         let v = |x: u64| VarInt::new(x).expect("value in VarInt range");
         let settings = Settings::new()
             .wt_enabled(v(max_sessions))
+            .wt_enabled_draft17(v(draft17_enabled))
             .wt_initial_max_streams_uni(v(max_streams_uni))
             .wt_initial_max_streams_bidi(v(max_streams_bidi))
             .wt_initial_max_data(v(max_data));
@@ -79,6 +83,9 @@ fn prop_settings_iter_matches_builder() -> noprop::TestResult {
         if max_sessions > 0 {
             assert!(entries.contains(&Setting::WtEnabled(v(max_sessions))));
         }
+        if draft17_enabled > 0 {
+            assert!(entries.contains(&Setting::WtEnabledDraft17(v(draft17_enabled))));
+        }
         if max_streams_uni > 0 {
             assert!(entries.contains(&Setting::WtInitialMaxStreamsUni(v(max_streams_uni))));
         }
@@ -89,11 +96,126 @@ fn prop_settings_iter_matches_builder() -> noprop::TestResult {
             assert!(entries.contains(&Setting::WtInitialMaxData(v(max_data))));
         }
 
-        let expected_count = [max_sessions, max_streams_uni, max_streams_bidi, max_data]
-            .iter()
-            .filter(|&&v| v > 0)
-            .count();
+        let expected_count = [
+            max_sessions,
+            draft17_enabled,
+            max_streams_uni,
+            max_streams_bidi,
+            max_data,
+        ]
+        .iter()
+        .filter(|&&v| v > 0)
+        .count();
         assert_eq!(entries.len(), expected_count);
+        Ok(())
+    })?;
+    Ok(())
+}
+
+// =============================================================================
+// draft-17 の SETTINGS_WT_ENABLED コードポイント
+// (draft-ietf-webtrans-http3-17 Section 3.1, 5.1, 7.1, 9.2)
+// =============================================================================
+
+/// Property: SETTINGS_WT_MAX_SESSIONS による draft-14 のフロー制御宣言条件は、
+/// SETTINGS_WT_ENABLED (新旧どちらのコードポイントでも) を送る端点には適用しない
+///
+/// draft-15 以降の宣言条件は SETTINGS_WT_INITIAL_MAX_* のみで、
+/// SETTINGS_WT_MAX_SESSIONS は廃止されている
+/// (draft-ietf-webtrans-http3-17 Section 5.1)。
+/// 新旧どちらのコードポイントを送るか、WT_MAX_SESSIONS が 1 か 2 以上かで
+/// 結果が変わる境界をまたぐ入力を生成する。
+#[test]
+fn prop_settings_flow_control_draft17_ignores_max_sessions() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SETTINGS_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        // 新旧の SETTINGS_WT_ENABLED は 0 / 1 / 2 の境界をまたぐ
+        let draft17_enabled = noprop::sample_u64_in(ctx, 0..3);
+        let old_enabled = noprop::sample_u64_in(ctx, 0..3);
+        // WT_MAX_SESSIONS は draft-14 の宣言境界 (1 と 2) をまたぐ
+        let max_sessions = noprop::sample_u64_in(ctx, 0..3);
+        let v = |x: u64| VarInt::new(x).expect("value in VarInt range");
+        let settings = Settings::new()
+            .wt_enabled_draft17(v(draft17_enabled))
+            .wt_enabled(v(old_enabled))
+            .wt_max_sessions_draft14(v(max_sessions));
+
+        // SETTINGS_WT_ENABLED を送らない端点にだけ draft-14 の宣言条件を適用する
+        let sends_wt_enabled = draft17_enabled != 0 || old_enabled != 0;
+        let expected = !sends_wt_enabled && max_sessions > 1;
+        assert_eq!(
+            settings.declares_flow_control(),
+            expected,
+            "新旧コードポイント ({draft17_enabled}/{old_enabled}) と \
+             WT_MAX_SESSIONS {max_sessions} の組み合わせで宣言条件が一致すること"
+        );
+
+        // SETTINGS_WT_INITIAL_MAX_* が非ゼロなら、どの組み合わせでも宣言になる
+        let initial_max_data = noprop::sample_u64_in(ctx, 1..100000);
+        let settings = settings.wt_initial_max_data(v(initial_max_data));
+        assert!(
+            settings.declares_flow_control(),
+            "SETTINGS_WT_INITIAL_MAX_DATA が非ゼロならフロー制御宣言になること"
+        );
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Property: draft 検出は新コードポイント優先で、送られている ID の組み合わせから
+/// 一意に決まる
+///
+/// draft-17 のコードポイントと旧 draft のコードポイントを併送した場合、
+/// 最も新しい版である draft-17 を優先する
+/// (draft-ietf-webtrans-http3-17 Section 7.1)。
+/// 各コードポイントを 0 / 1 / 2 の境界で生成し、期待値を優先順位のオラクルとして
+/// 組み立てる。draft-07 と draft-14 の ID が併送された場合は、Safari
+/// (Network.framework) 互換のため draft-07 を優先する点もオラクルに含める。
+#[test]
+fn prop_settings_detect_draft17_priority() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SETTINGS_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let draft17_enabled = noprop::sample_u64_in(ctx, 0..3);
+        let old_enabled = noprop::sample_u64_in(ctx, 0..3);
+        let max_sessions_draft14 = noprop::sample_u64_in(ctx, 0..3);
+        let max_sessions_draft07 = noprop::sample_u64_in(ctx, 0..3);
+        let draft02_enabled = noprop::sample_bool(ctx);
+        let v = |x: u64| VarInt::new(x).expect("value in VarInt range");
+        let settings = Settings::new()
+            .wt_enabled_draft17(v(draft17_enabled))
+            .wt_enabled(v(old_enabled))
+            .wt_max_sessions_draft14(v(max_sessions_draft14))
+            .webtransport_max_sessions_draft07(v(max_sessions_draft07))
+            .enable_webtransport_draft02(draft02_enabled);
+
+        // 新しい版から順に判定する (draft-15 は draft-15 / 16 の代表)。
+        // draft-07 と draft-14 の ID 併送時は Safari 互換のため draft-07 を優先する
+        // (src/webtransport/settings.rs の detect_draft_pattern を参照)。
+        let expected = if draft17_enabled > 0 {
+            Some(DraftVersion::Draft17)
+        } else if old_enabled > 0 {
+            Some(DraftVersion::Draft15)
+        } else if max_sessions_draft07 > 0 {
+            Some(DraftVersion::Draft07)
+        } else if max_sessions_draft14 > 0 {
+            Some(DraftVersion::Draft14)
+        } else if draft02_enabled {
+            Some(DraftVersion::Draft02)
+        } else {
+            None
+        };
+        assert_eq!(
+            settings.detect_draft_pattern(),
+            expected,
+            "送信済みコードポイントから最も新しい版を検出すること"
+        );
+        assert_eq!(
+            settings.is_enabled(),
+            expected.is_some(),
+            "WebTransport の有効判定が版検出と一致すること"
+        );
         Ok(())
     })?;
     Ok(())

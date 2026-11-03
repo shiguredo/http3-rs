@@ -245,9 +245,11 @@ pub struct Connection {
     previous_wt_settings: Option<crate::webtransport::Settings>,
     /// RESET_STREAM_AT 拡張がサポートされているか
     ///
-    /// draft-15 では RESET_STREAM_AT が必須だが、draft-02/07 では不要。
-    /// `set_webtransport_transport_verified()` で注入される。
-    /// (draft-ietf-webtrans-http3-15 Section 3.1)
+    /// draft-14 / 15 / 16 / 17 では RESET_STREAM_AT が必須だが、
+    /// draft-02 / 07 では不要。`set_webtransport_transport_verified()` で注入される。
+    /// (draft-ietf-webtrans-http3-15 Section 3.1,
+    ///  draft-ietf-webtrans-http3-16 Section 3.1,
+    ///  draft-ietf-webtrans-http3-17 Section 3.1)
     /// 将来のドラフトで変更される可能性がある
     wt_reset_stream_at_supported: bool,
     deferred_encoder_set_capacity: Option<u64>,
@@ -1355,12 +1357,23 @@ impl Connection {
                     let wt_settings = settings.wt_settings;
 
                     // クライアントは SETTINGS_WT_ENABLED > 1 を
-                    // H3_SETTINGS_ERROR 接続エラーとして扱わなければならない
-                    // (draft-ietf-webtrans-http3-16 Section 3.1)
+                    // H3_SETTINGS_ERROR 接続エラーとして扱わなければならない。
+                    // draft-15 / 16 の旧コードポイントと draft-17 の新コードポイントの
+                    // 両方がこの検証の対象になる。この上限規則は draft-16 以降の
+                    // 規定で、draft-15 にはない。両者がコードポイントを共有するため、
+                    // 本実装は厳しい側の規則に合わせる
+                    // (draft-ietf-webtrans-http3-16 Section 3.1,
+                    //  draft-ietf-webtrans-http3-17 Section 3.1)。
+                    // この MUST はクライアントの受信動作に対するものなので、
+                    // サーバー受信時には適用しない。draft 版に対応するサーバーは
+                    // クライアントが送る SETTINGS_WT_ENABLED を版選択に使うため、
+                    // 受信値は保持したうえで接続エラーにしない
+                    // (draft-ietf-webtrans-http3-17 Section 3.1 の draft 限定段落,
+                    //  Section 7.1)。
                     // 将来のドラフトで変更される可能性がある
                     if self.role == Role::Client
                         && let Some(ref wt) = wt_settings
-                        && wt.wt_enabled.get() > 1
+                        && (wt.wt_enabled.get() > 1 || wt.wt_enabled_draft17.get() > 1)
                     {
                         return Err(Error::ConnectionError(ErrorCode::SettingsError));
                     }

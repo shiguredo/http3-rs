@@ -1,13 +1,18 @@
 //! WebTransport CONNECT の draft バージョン別バリデーションテスト
 //!
-//! サーバーが各 draft (02/07/14/15) クライアントからの CONNECT を正しく受理/拒否するか検証。
+//! サーバーが各 draft (02/07/14/15/16/17) クライアントからの CONNECT を正しく受理/拒否するか検証。
 //!
 //! 特に SETTINGS_ENABLE_CONNECT_PROTOCOL (0x08) の要否がドラフトバージョンによって異なる:
 //! - draft-02: 不要 (SETTINGS_ENABLE_WEBTRANSPORT_DRAFT02 が暗示)
 //! - draft-07: 不要 (クライアントは SETTINGS_WEBTRANSPORT_MAX_SESSIONS のみ MUST,
 //!   draft-ietf-webtrans-http3-07 Section 3.2)
 //! - draft-14: 必須 (RFC 9220)
-//! - draft-15: 必須 (RFC 9220)
+//! - draft-15 / 16 / 17: 必須 (RFC 9220)
+//!
+//! draft-15 と draft-16 は SETTINGS_WT_ENABLED のコードポイントを共有し、
+//! draft-17 は別コードポイント (0x20b8933b) を使う
+//! (draft-ietf-webtrans-http3-17 Section 9.2)。
+//! SETTINGS 単体のコードポイント対応は tests/test_webtransport_settings.rs で扱う。
 
 use shiguredo_http3::qpack::Encoder;
 use shiguredo_http3::webtransport::DraftVersion;
@@ -147,7 +152,10 @@ fn build_draft15_client_ctrl_without_ecp() -> Vec<u8> {
     ctrl
 }
 
-/// 全 draft 対応のサーバーを構築する
+/// draft-02 / 07 / 14 / 15 / 16 に対応するサーバーを構築する
+///
+/// draft-17 のコードポイントは広告しないため、draft-17 の検証は
+/// `mod draft17_connect` の専用 SETTINGS で行う。
 fn setup_server(reset_stream_at: bool) -> ServerConnection {
     let wt = webtransport::Settings::new()
         .wt_enabled(vi(1))
@@ -187,7 +195,7 @@ fn wt_connect_headers(draft: DraftVersion) -> Vec<Header> {
         Header::new(
             b":protocol",
             match draft {
-                DraftVersion::Draft15 => b"webtransport-h3" as &[u8],
+                DraftVersion::Draft15 | DraftVersion::Draft17 => b"webtransport-h3" as &[u8],
                 _ => b"webtransport",
             },
         )
@@ -486,6 +494,74 @@ mod draft15 {
 
 mod common {
     use super::*;
+
+    #[test]
+    fn connect_accepted_without_common_draft_for_old_draft_server() {
+        // draft-14 以前だけに対応するサーバーは、SETTINGS_WT_ENABLED による
+        // コードポイント交渉をしない。クライアントが本文版のコードポイントだけを
+        // 広告していても、従来どおり版依存の検証をスキップして CONNECT を処理する
+        // (draft-ietf-webtrans-http3-14 Section 5.1 以前の挙動を維持する)
+        let wt = webtransport::Settings::new().wt_max_sessions_draft14(vi(1));
+        let settings = Settings::new().enable_webtransport_server(wt);
+        let mut server = ServerConnection::new(settings);
+        server
+            .set_control_stream_id(3)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        server
+            .set_webtransport_transport_verified(true, true)
+            .expect("テスト用の transport parameter 検証に成功すること");
+        let _ = server
+            .take_stream_data(3)
+            .expect("テスト用のサーバー SETTINGS 取得に成功すること");
+
+        let client_wt = webtransport::Settings::new()
+            .wt_enabled_draft17(vi(1))
+            .wt_initial_max_data(vi(1024));
+        let mut client = shiguredo_http3::ClientConnection::new(
+            Settings::new().enable_webtransport_client(client_wt),
+        );
+        client
+            .set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        let (client_ctrl, _) = client
+            .take_stream_data(2)
+            .expect("テスト用のクライアント SETTINGS 取得に成功すること");
+        feed_client_settings(&mut server, &client_ctrl);
+
+        let headers = wt_connect_headers(DraftVersion::Draft02);
+        let frame = build_headers_frame(&headers);
+        server
+            .feed_stream(0, &frame, false)
+            .expect("旧 draft のサーバーは版依存の検証をスキップして CONNECT を処理すること");
+    }
+
+    #[test]
+    fn connect_rejected_when_no_common_draft() {
+        // サーバーが draft-15 / 16 まで、クライアントが draft-17 だけに対応する場合、
+        // 共通する版がないためサーバーは CONNECT を受理しない
+        // (draft-ietf-webtrans-http3-17 Section 7.1)
+        let mut server = setup_server(true);
+        let wt = webtransport::Settings::new()
+            .wt_enabled_draft17(vi(1))
+            .wt_initial_max_data(vi(1024));
+        let settings = Settings::new().enable_webtransport_client(wt);
+        let mut client = shiguredo_http3::ClientConnection::new(settings);
+        client
+            .set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        let (client_ctrl, _) = client
+            .take_stream_data(2)
+            .expect("テスト用のクライアント SETTINGS 取得に成功すること");
+        feed_client_settings(&mut server, &client_ctrl);
+
+        let headers = wt_connect_headers(DraftVersion::Draft15);
+        let frame = build_headers_frame(&headers);
+        let result = server.feed_stream(0, &frame, false);
+        assert!(
+            matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
+            "共通する版がない場合は CONNECT を受理しないこと: {result:?}"
+        );
+    }
 
     #[test]
     fn connect_rejected_when_h3_datagram_disabled() {
@@ -1257,6 +1333,391 @@ mod close_session_capsule_framing {
                     if *sid == session_id
             )),
             "raw カプセルバイトからは SessionClosed が発火しないこと: {events:?}"
+        );
+    }
+}
+
+// =========================================================================
+// draft-17 の CONNECT 受理
+// (draft-ietf-webtrans-http3-17 Section 3.1, 7.1)
+//
+// 両端が draft-17 の新コードポイント (0x20b8933b) を広告する場合の CONNECT 受理と、
+// 本文版だけに対応するクライアント (SETTINGS_WT_ENABLED を送らない) の CONNECT 受理を
+// 公開 API 経由で検証する。SETTINGS 単体の保持・検出は
+// tests/test_webtransport_settings.rs で扱う。
+// =========================================================================
+
+mod draft17_connect {
+    use super::*;
+
+    /// draft-17 の新コードポイントと初期フロー制御値を広告するサーバー SETTINGS を構築する
+    fn draft17_server_settings() -> Settings {
+        let wt = webtransport::Settings::new()
+            .wt_enabled_draft17(vi(1))
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(100))
+            .wt_initial_max_data(vi(8 * 1024 * 1024));
+        Settings::new().enable_webtransport_server(wt)
+    }
+
+    /// draft-17 の新コードポイントを広告するクライアント SETTINGS を構築する
+    ///
+    /// draft-17 Section 3.1 がクライアントに求める送信項目に
+    /// SETTINGS_ENABLE_CONNECT_PROTOCOL は含まれないため、
+    /// `Settings::enable_webtransport_client` を使う。
+    fn draft17_client_settings() -> Settings {
+        let wt = webtransport::Settings::new()
+            .wt_enabled_draft17(vi(1))
+            .wt_initial_max_streams_uni(vi(100))
+            .wt_initial_max_streams_bidi(vi(100))
+            .wt_initial_max_data(vi(8 * 1024 * 1024));
+        Settings::new().enable_webtransport_client(wt)
+    }
+
+    /// SETTINGS_WT_ENABLED を送らないクライアントの SETTINGS を構築する
+    ///
+    /// draft-17 の本文版だけに対応するクライアントは SETTINGS_WT_ENABLED を送らず、
+    /// フロー制御は SETTINGS_WT_INITIAL_MAX_* だけで宣言する
+    /// (draft-ietf-webtrans-http3-17 Section 3.1, 5.1)。
+    fn draft17_client_settings_without_wt_enabled() -> Settings {
+        let wt = webtransport::Settings::new().wt_initial_max_data(vi(1024));
+        Settings::new().enable_webtransport_client(wt)
+    }
+
+    /// 両端が draft-17 の新コードポイントを広告する接続を作り、SETTINGS を交換する
+    fn draft17_pair() -> (ServerConnection, shiguredo_http3::ClientConnection) {
+        let mut server = ServerConnection::new(draft17_server_settings());
+        server
+            .set_control_stream_id(3)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        server
+            .set_webtransport_transport_verified(true, true)
+            .expect("テスト用の transport parameter 検証に成功すること");
+        let (server_ctrl, _) = server
+            .take_stream_data(3)
+            .expect("テスト用のサーバー SETTINGS 取得に成功すること");
+
+        let mut client = shiguredo_http3::ClientConnection::new(draft17_client_settings());
+        client
+            .set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        client
+            .set_webtransport_transport_verified(true, true)
+            .expect("テスト用の transport parameter 検証に成功すること");
+        let (client_ctrl, _) = client
+            .take_stream_data(2)
+            .expect("テスト用のクライアント SETTINGS 取得に成功すること");
+
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("クライアントのサーバー SETTINGS 受信に成功すること");
+        while let Some(_ev) = client
+            .poll_event()
+            .expect("テスト用のイベント取得に成功すること")
+        {}
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("サーバーのクライアント SETTINGS 受信に成功すること");
+        while let Some(_ev) = server
+            .poll_event()
+            .expect("テスト用のイベント取得に成功すること")
+        {}
+        (server, client)
+    }
+
+    /// draft-17 の CONNECT を送り、サーバーが 2xx を返してセッションを確立するまで進める
+    ///
+    /// 確立した WebTransport セッション ID を返す。
+    fn establish_draft17_session(
+        server: &mut ServerConnection,
+        client: &mut shiguredo_http3::ClientConnection,
+    ) -> u64 {
+        let headers = wt_connect_headers(DraftVersion::Draft17);
+        let stream_id = client
+            .send_request(&headers, false)
+            .expect("draft-17 の CONNECT 送信に成功すること");
+        let (request, _) = client
+            .take_stream_data(stream_id)
+            .expect("テスト用の CONNECT ヘッダー取得に成功すること");
+        server
+            .feed_stream(stream_id, &request, false)
+            .expect("draft-17 の CONNECT 受理に成功すること");
+
+        let response =
+            vec![Header::new(b":status", b"200").expect("テスト用のヘッダー作成に成功すること")];
+        server
+            .send_response(stream_id, &response, false)
+            .expect("テスト用のレスポンス送信に成功すること");
+
+        loop {
+            match server
+                .poll_event()
+                .expect("SessionEstablished 待機中のイベント取得に成功すること")
+            {
+                Some(Event::WebTransport(WebTransportEvent::SessionEstablished {
+                    session_id,
+                    ..
+                })) => {
+                    assert_eq!(
+                        session_id, stream_id,
+                        "セッション ID は CONNECT ストリーム ID と一致すること"
+                    );
+                    return session_id;
+                }
+                Some(_) => {}
+                None => panic!("SessionEstablished イベントが発火していない"),
+            }
+        }
+    }
+
+    /// 新旧両コードポイントと draft-02 を広告するサーバーとクライアントの接続を作り、
+    /// SETTINGS を交換する
+    ///
+    /// 複数のドラフト版に対応する端点は、異なるコードポイントをそれぞれ 1 回ずつ
+    /// 広告する (draft-ietf-webtrans-http3-17 Section 7.1)。draft-02 の ID を
+    /// 併送することで、交差集合に旧トークン `webtransport` を返す版が含まれる
+    /// 状態になる (選択版のトークンだけが通ることを検証するため)。
+    fn both_codepoints_pair() -> (ServerConnection, shiguredo_http3::ClientConnection) {
+        let server_wt = webtransport::Settings::new()
+            .wt_enabled(vi(1))
+            .wt_enabled_draft17(vi(1))
+            .enable_webtransport_draft02(true)
+            .wt_initial_max_data(vi(1024));
+        let mut server =
+            ServerConnection::new(Settings::new().enable_webtransport_server(server_wt));
+        server
+            .set_control_stream_id(3)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        server
+            .set_webtransport_transport_verified(true, true)
+            .expect("テスト用の transport parameter 検証に成功すること");
+        let (server_ctrl, _) = server
+            .take_stream_data(3)
+            .expect("テスト用のサーバー SETTINGS 取得に成功すること");
+
+        let client_wt = webtransport::Settings::new()
+            .wt_enabled(vi(1))
+            .wt_enabled_draft17(vi(1))
+            .enable_webtransport_draft02(true)
+            .wt_initial_max_data(vi(1024));
+        let mut client = shiguredo_http3::ClientConnection::new(
+            Settings::new().enable_webtransport_client(client_wt),
+        );
+        client
+            .set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        client
+            .set_webtransport_transport_verified(true, true)
+            .expect("テスト用の transport parameter 検証に成功すること");
+        let (client_ctrl, _) = client
+            .take_stream_data(2)
+            .expect("テスト用のクライアント SETTINGS 取得に成功すること");
+
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("クライアントのサーバー SETTINGS 受信に成功すること");
+        while let Some(_ev) = client
+            .poll_event()
+            .expect("テスト用のイベント取得に成功すること")
+        {}
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("サーバーのクライアント SETTINGS 受信に成功すること");
+        while let Some(_ev) = server
+            .poll_event()
+            .expect("テスト用のイベント取得に成功すること")
+        {}
+        (server, client)
+    }
+
+    #[test]
+    fn server_rejects_lower_version_token_when_new_codepoint_is_shared() {
+        // 新旧両コードポイントを併送する接続では最も新しい版 (draft-17) が選ばれる。
+        // `:protocol` は選択した版のトークン "webtransport-h3" でなければならず、
+        // 旧 draft のトークン "webtransport" は受理しない
+        // (draft-ietf-webtrans-http3-17 Section 7.1, 9.1)
+        let (mut server, _client) = both_codepoints_pair();
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":protocol", b"webtransport")
+                .expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":scheme", b"https").expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":authority", b"example.com")
+                .expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":path", b"/wt").expect("テスト用のヘッダー作成に成功すること"),
+        ];
+        let frame = build_headers_frame(&headers);
+        let result = server.feed_stream(0, &frame, false);
+        assert!(
+            matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
+            "選択した版以外のトークンは受理しないこと: {result:?}"
+        );
+    }
+
+    #[test]
+    fn draft17_endpoints_establish_connect_session() {
+        // 両端が新コードポイントを広告する構成で、`:protocol` = "webtransport-h3" の
+        // CONNECT が受理されてセッションが確立する
+        // (draft-ietf-webtrans-http3-17 Section 3.1, 7.1)
+        let (mut server, mut client) = draft17_pair();
+        let session_id = establish_draft17_session(&mut server, &mut client);
+        assert!(
+            server.wt_session_flow_control_enabled(session_id),
+            "両端が SETTINGS_WT_INITIAL_MAX_* を広告するためフロー制御が有効になること"
+        );
+    }
+
+    #[test]
+    fn server_rejects_capsule_webtransport_token_on_draft17() {
+        // 両端が新コードポイントを広告した接続でクライアントが "webtransport" を
+        // 送ってきた場合、サーバーは MessageError でストリームを拒否する。
+        // "webtransport" は capsule-based WebTransport (WEBTRANS-H2) のトークンであり、
+        // 本文版のネイティブ実装では受け付けない
+        // (draft-ietf-webtrans-http3-17 Section 2.1.2, 9.1)
+        let (mut server, _client) = draft17_pair();
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":protocol", b"webtransport")
+                .expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":scheme", b"https").expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":authority", b"example.com")
+                .expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":path", b"/wt").expect("テスト用のヘッダー作成に成功すること"),
+        ];
+        let frame = build_headers_frame(&headers);
+        let result = server.feed_stream(0, &frame, false);
+        assert!(
+            matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
+            "draft-17 で旧 :protocol は拒否されること: {result:?}"
+        );
+    }
+
+    /// draft-17 サーバーに、SETTINGS_WT_ENABLED を送らないクライアントの SETTINGS を
+    /// 受信させた状態を作る
+    ///
+    /// 本文版だけに対応するクライアントは SETTINGS_WT_ENABLED を送らない
+    /// (draft-ietf-webtrans-http3-17 Section 3.1)。サーバーの
+    /// reset_stream_at 対応可否も引数で切り替える。
+    fn draft17_server_with_client_without_codepoint(reset_stream_at: bool) -> ServerConnection {
+        let mut server = ServerConnection::new(draft17_server_settings());
+        server
+            .set_control_stream_id(3)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        server
+            .set_webtransport_transport_verified(true, reset_stream_at)
+            .expect("テスト用の transport parameter 検証に成功すること");
+        let _ = server
+            .take_stream_data(3)
+            .expect("テスト用のサーバー SETTINGS 取得に成功すること");
+
+        let (client_ctrl, _) = {
+            let mut client = shiguredo_http3::ClientConnection::new(
+                draft17_client_settings_without_wt_enabled(),
+            );
+            client
+                .set_control_stream_id(2)
+                .expect("テスト用の制御ストリーム設定に成功すること");
+            client
+                .take_stream_data(2)
+                .expect("テスト用のクライアント SETTINGS 取得に成功すること")
+        };
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("サーバーのクライアント SETTINGS 受信に成功すること");
+        while let Some(_ev) = server
+            .poll_event()
+            .expect("テスト用のイベント取得に成功すること")
+        {}
+
+        let peer = server
+            .peer_settings()
+            .expect("ピア SETTINGS が保持されること");
+        assert!(
+            !peer.is_webtransport_enabled(),
+            "本文版だけに対応するクライアントは SETTINGS_WT_ENABLED を送らないこと"
+        );
+        server
+    }
+
+    #[test]
+    fn draft17_server_accepts_client_without_wt_codepoint() {
+        // クライアントが SETTINGS_WT_ENABLED を送らない場合、サーバーは
+        // 本文で定義された版を選び、その版の要件で CONNECT を検証する。
+        // 本文版の要件を満たす接続は受理され、セッションが確立する
+        // (draft-ietf-webtrans-http3-17 Section 3.1, 7.1)
+        let mut server = draft17_server_with_client_without_codepoint(true);
+
+        let headers = wt_connect_headers(DraftVersion::Draft17);
+        let frame = build_headers_frame(&headers);
+        server
+            .feed_stream(0, &frame, false)
+            .expect("クライアントの SETTINGS_WT_ENABLED がなくても CONNECT を受理すること");
+        let response =
+            vec![Header::new(b":status", b"200").expect("テスト用のヘッダー作成に成功すること")];
+        server
+            .send_response(0, &response, false)
+            .expect("テスト用のレスポンス送信に成功すること");
+
+        loop {
+            match server
+                .poll_event()
+                .expect("SessionEstablished 待機中のイベント取得に成功すること")
+            {
+                Some(Event::WebTransport(WebTransportEvent::SessionEstablished {
+                    session_id,
+                    ..
+                })) => {
+                    assert_eq!(
+                        session_id, 0,
+                        "セッション ID は CONNECT ストリーム ID と一致すること"
+                    );
+                    return;
+                }
+                Some(_) => {}
+                None => panic!("SessionEstablished イベントが発火していない"),
+            }
+        }
+    }
+
+    #[test]
+    fn draft17_server_rejects_capsule_webtransport_token_without_codepoint() {
+        // クライアントが SETTINGS_WT_ENABLED を送らない場合に本文版を選ぶと、
+        // その版のトークンは "webtransport-h3" である。"webtransport" は
+        // capsule-based WebTransport (WEBTRANS-H2) のトークンであり、
+        // 本文版のネイティブ実装として受理してはならない
+        // (draft-ietf-webtrans-http3-17 Section 2.1.2, 7.1, 9.1)
+        let mut server = draft17_server_with_client_without_codepoint(true);
+
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":protocol", b"webtransport")
+                .expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":scheme", b"https").expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":authority", b"example.com")
+                .expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":path", b"/wt").expect("テスト用のヘッダー作成に成功すること"),
+        ];
+        let frame = build_headers_frame(&headers);
+        let result = server.feed_stream(0, &frame, false);
+        assert!(
+            matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
+            "capsule-based のトークンは受理しないこと: {result:?}"
+        );
+    }
+
+    #[test]
+    fn draft17_server_rejects_without_reset_stream_at_without_codepoint() {
+        // クライアントが SETTINGS_WT_ENABLED を送らない場合に本文版を選ぶと、
+        // reset_stream_at transport parameter の対応も要求される
+        // (draft-ietf-webtrans-http3-17 Section 3.1, 7.1)
+        let mut server = draft17_server_with_client_without_codepoint(false);
+
+        let headers = wt_connect_headers(DraftVersion::Draft17);
+        let frame = build_headers_frame(&headers);
+        let result = server.feed_stream(0, &frame, false);
+        assert!(
+            matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
+            "reset_stream_at 非対応なら拒否すること: {result:?}"
         );
     }
 }

@@ -53,7 +53,7 @@ fn valid_settings_entries(ctx: &mut noprop::TestCaseContext) -> Vec<shiguredo_ht
     use shiguredo_http3::{Setting, VarInt};
     let ids = [
         0x01u64, 0x06, 0x07, 0x08, 0x33, 0x2b61, 0x2b64, 0x2b65, 0x14e9cd29, 0x2c7cf000,
-        0x2b603742, 0xc671706a,
+        0x20b8933b, 0x2b603742, 0xc671706a,
     ];
     let count = noprop::sample_usize_in(ctx, 0..8);
     let mut seen = std::collections::HashSet::new();

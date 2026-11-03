@@ -1,6 +1,10 @@
-//! WebTransport SETTINGS (draft-ietf-webtrans-http3-15 Section 9.2)
+//! WebTransport SETTINGS
+//! (draft-ietf-webtrans-http3-15 / -16 / -17 Section 9.2)
 //!
 //! HTTP/3 SETTINGS パラメータの WebTransport 拡張を定義する。
+//! draft-17 は SETTINGS_WT_ENABLED のコードポイントが異なるため、旧版の
+//! 設定値とは別のフィールドで独立に保持する
+//! (draft-ietf-webtrans-http3-17 Section 9.2)。
 //!
 //! ID 別の wire 構造とブール値の検査は [`crate::settings::Setting`] が一手に
 //! 担うため、本モジュールは「WebTransport 固有フィールドの型付きコレクション」
@@ -12,14 +16,24 @@ use crate::varint::VarInt;
 
 /// WebTransport 設定 (型付きフィールドのコレクション)
 ///
-/// draft-ietf-webtrans-http3-02 / -07 / -14 / -15。
+/// draft-ietf-webtrans-http3-02 / -07 / -14 / -15 / -16 / -17。
 /// 将来のドラフトで変更される可能性がある。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     /// WebTransport 有効化 (デフォルト: 0 = WebTransport 無効, 0 より大きければ有効)
-    /// draft-ietf-webtrans-http3-15 Section 3.1, Section 9.2
+    ///
+    /// draft-15 / 16 の旧コードポイント (0x2c7cf000) に載る値。
+    /// draft-17 は別コードポイントの [`Settings::wt_enabled_draft17`] を使う。
+    /// draft-ietf-webtrans-http3-15 / -16 Section 3.1, Section 9.2
     /// 将来のドラフトで変更される可能性がある
     pub wt_enabled: VarInt,
+    /// WebTransport 有効化 (draft-17, デフォルト: 0 = WebTransport 無効)
+    ///
+    /// draft-15 / 16 の SETTINGS_WT_ENABLED (0x2c7cf000) とは別のコードポイント
+    /// 0x20b8933b を使うため、[`Settings::wt_enabled`] とは独立に保持する。
+    /// draft-ietf-webtrans-http3-17 Section 3.1, Section 9.2
+    /// 将来のドラフトで変更される可能性がある
+    pub wt_enabled_draft17: VarInt,
     /// 初期単方向ストリーム上限 (デフォルト: 0)
     pub wt_initial_max_streams_uni: VarInt,
     /// 初期双方向ストリーム上限 (デフォルト: 0)
@@ -46,6 +60,7 @@ impl Settings {
     pub const fn new() -> Self {
         Self {
             wt_enabled: VarInt::ZERO,
+            wt_enabled_draft17: VarInt::ZERO,
             wt_initial_max_streams_uni: VarInt::ZERO,
             wt_initial_max_streams_bidi: VarInt::ZERO,
             wt_initial_max_data: VarInt::ZERO,
@@ -56,10 +71,26 @@ impl Settings {
     }
 
     /// WebTransport 有効化を設定
-    /// draft-ietf-webtrans-http3-15 Section 3.1, Section 9.2
+    ///
+    /// draft-15 / 16 の旧コードポイントに載る値。draft-17 には
+    /// [`Settings::wt_enabled_draft17`] を使う。
+    /// draft-ietf-webtrans-http3-15 / -16 Section 3.1, Section 9.2
     /// 将来のドラフトで変更される可能性がある
     pub fn wt_enabled(mut self, value: VarInt) -> Self {
         self.wt_enabled = value;
+        self
+    }
+
+    /// WebTransport 有効化 (draft-17) を設定
+    ///
+    /// draft-15 / 16 の [`Settings::wt_enabled`] とは別のコードポイントに載せる値。
+    /// 0 は WebTransport 無効、1 は有効を意味する。サーバーから 2 以上の値を受信した
+    /// クライアントは `H3_SETTINGS_ERROR` とする (draft-ietf-webtrans-http3-17 Section 3.1)。
+    /// [`Settings::wt_enabled`] と併せて設定すると、複数のドラフト版に対応する端点として
+    /// 異なるコードポイントをそれぞれ 1 回ずつ広告する (同 Section 7.1, Section 9.2)。
+    /// 将来のドラフトで変更される可能性がある
+    pub fn wt_enabled_draft17(mut self, value: VarInt) -> Self {
+        self.wt_enabled_draft17 = value;
         self
     }
 
@@ -122,6 +153,11 @@ impl Settings {
                     wt.wt_enabled = v;
                     found = true;
                 }
+                Setting::WtEnabledDraft17(v) => {
+                    debug_assert!(seen_wt_ids.insert(setting.id()));
+                    wt.wt_enabled_draft17 = v;
+                    found = true;
+                }
                 Setting::WtInitialMaxStreamsUni(v) => {
                     debug_assert!(seen_wt_ids.insert(setting.id()));
                     wt.wt_initial_max_streams_uni = v;
@@ -168,8 +204,8 @@ impl Settings {
     ///
     /// WebTransport が無効の場合は None を返す。
     ///
-    /// 4 パターン (draft-02 / draft-07 / draft-14 / draft-15) を固有の SETTINGS ID で
-    /// 判別する。判定は新しいドラフトから順に行う。
+    /// 5 パターン (draft-02 / draft-07 / draft-14 / draft-15/16 / draft-17) を
+    /// 固有の SETTINGS ID で判別する。判定は新しいドラフトから順に行う。
     ///
     /// **Safari (Network.framework) の挙動**: draft-07 の ID
     /// `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` と draft-14 の ID `SETTINGS_WT_MAX_SESSIONS`
@@ -179,14 +215,24 @@ impl Settings {
     /// draft-14 固有のカプセルベースフロー制御はセッション確立後に別途扱う。
     ///
     /// 判定キー（上から順）:
-    /// - draft-15: SETTINGS_WT_ENABLED (0x2c7cf000)
+    /// - draft-17: SETTINGS_WT_ENABLED (0x20b8933b)
+    /// - draft-15/16: SETTINGS_WT_ENABLED (0x2c7cf000)
     /// - draft-07: SETTINGS_WEBTRANSPORT_MAX_SESSIONS (0xc671706a)
     /// - draft-14: SETTINGS_WT_MAX_SESSIONS (0x14e9cd29)
     /// - draft-02: SETTINGS_ENABLE_WEBTRANSPORT (0x2b603742)
     ///
-    /// draft-ietf-webtrans-http3-02 / -07 / -14 / -15
+    /// draft-15 と draft-16 は同じコードポイントを共有するため、本関数は両者を
+    /// [`DraftVersion::Draft15`] として返す。draft-17 は別コードポイントのため
+    /// [`DraftVersion::Draft17`] として区別する。
+    ///
+    /// draft-ietf-webtrans-http3-02 / -07 / -14 / -15 / -16 / -17
     /// 将来のドラフトで変更される可能性がある
     pub fn detect_draft_pattern(&self) -> Option<DraftVersion> {
+        // draft-17 の新コードポイントが最も新しい。旧コードポイントと併送された
+        // 場合も draft-17 を優先する (draft-ietf-webtrans-http3-17 Section 7.1)。
+        if self.wt_enabled_draft17.get() > 0 {
+            return Some(DraftVersion::Draft17);
+        }
         if self.wt_enabled.get() > 0 {
             return Some(DraftVersion::Draft15);
         }
@@ -207,10 +253,11 @@ impl Settings {
 
     /// WebTransport が有効かどうか
     ///
-    /// draft-02/07/14/15 のいずれかで有効になっていれば true。
+    /// draft-02/07/14/15/16/17 のいずれかで有効になっていれば true。
     /// 将来のドラフトで変更される可能性がある
     pub fn is_enabled(&self) -> bool {
         self.wt_enabled.get() > 0
+            || self.wt_enabled_draft17.get() > 0
             || self.enable_webtransport_draft02 == Some(true)
             || self
                 .webtransport_max_sessions_draft07
@@ -228,8 +275,9 @@ impl Settings {
     ///
     /// draft-15 以降では `SETTINGS_WT_MAX_SESSIONS` が廃止され、宣言条件は
     /// `SETTINGS_WT_INITIAL_MAX_*` のいずれかが非ゼロであることだけになった
-    /// (draft-ietf-webtrans-http3-15 Section 5.1)。
-    /// そのため `SETTINGS_WT_ENABLED` を送る draft-15/16 の端点が互換のために
+    /// (draft-ietf-webtrans-http3-15 Section 5.1,
+    ///  draft-ietf-webtrans-http3-17 Section 5.1)。
+    /// そのため `SETTINGS_WT_ENABLED` を送る draft-15/16/17 の端点が互換のために
     /// `SETTINGS_WT_MAX_SESSIONS` を併送しても、それをフロー制御の宣言として
     /// 扱わない。draft-14 以前は `SETTINGS_WT_MAX_SESSIONS > 1` も宣言条件に
     /// 含まれるため、`SETTINGS_WT_ENABLED` を送らない端点に対しては
@@ -237,14 +285,17 @@ impl Settings {
     ///
     /// draft-ietf-webtrans-http3-14 Section 5.1,
     /// draft-ietf-webtrans-http3-15 Section 5.1,
-    /// draft-ietf-webtrans-http3-16 Section 5.1
+    /// draft-ietf-webtrans-http3-16 Section 5.1,
+    /// draft-ietf-webtrans-http3-17 Section 5.1
     /// 将来のドラフトで変更される可能性がある
     pub fn declares_flow_control(&self) -> bool {
-        // SETTINGS_WT_ENABLED は draft-15 以降の識別子である。それを送る端点は
-        // draft-15/16 の宣言条件に従うため、draft-14 のヒューリスティック
-        // (WT_MAX_SESSIONS > 1) は適用しない。
+        // SETTINGS_WT_ENABLED (draft-15 / 16 の旧コードポイントと draft-17 の
+        // 新コードポイントのどちらでも) を送る端点は draft-15 以降の宣言条件に
+        // 従うため、draft-14 のヒューリスティック (WT_MAX_SESSIONS > 1) は
+        // 適用しない。
+        let sends_wt_enabled = self.wt_enabled.get() != 0 || self.wt_enabled_draft17.get() != 0;
         let draft14_max_sessions_declaration =
-            self.wt_enabled.get() == 0 && self.wt_max_sessions_draft14.is_some_and(|v| v.get() > 1);
+            !sends_wt_enabled && self.wt_max_sessions_draft14.is_some_and(|v| v.get() > 1);
         draft14_max_sessions_declaration
             || self.wt_initial_max_streams_uni.get() != 0
             || self.wt_initial_max_streams_bidi.get() != 0
@@ -253,7 +304,8 @@ impl Settings {
 
     /// ピアとのネゴシエーション結果としてフロー制御が有効かどうか
     ///
-    /// draft-ietf-webtrans-http3-15 Section 5.1:
+    /// draft-ietf-webtrans-http3-15 Section 5.1,
+    /// draft-ietf-webtrans-http3-17 Section 5.1:
     /// 両端点がフロー制御を使う意図を宣言した場合のみ有効。
     /// 将来のドラフトで変更される可能性がある
     pub fn flow_control_enabled_with_peer(&self, peer: &Self) -> bool {
@@ -268,7 +320,8 @@ impl Settings {
     /// `WT_MAX_STREAMS` / `WT_MAX_DATA` カプセルを要求する。
     ///
     /// そのため、ドラフト判定自体は draft-07 のまま維持しつつ、
-    /// 初期カプセル要否だけは別判定にする。
+    /// 初期カプセル要否だけは別判定にする。draft-15 / 16 / 17 は
+    /// `SETTINGS_WT_INITIAL_MAX_*` で初期値を通知するため対象外である。
     ///
     /// draft-ietf-webtrans-http3-14 Section 5,
     /// Safari 26.4 (Network.framework) 実装互換
@@ -287,9 +340,13 @@ impl Settings {
     /// 設定エントリのイテレータを返す
     ///
     /// 値が 0 / `None` の WebTransport 設定はエントリに含めない。
+    /// draft-15 / 16 の旧コードポイントと draft-17 の新コードポイントは
+    /// 別のエントリとして両方出力する。
     pub fn iter(&self) -> impl Iterator<Item = Setting> + '_ {
         let entries = [
             (self.wt_enabled != VarInt::ZERO).then_some(Setting::WtEnabled(self.wt_enabled)),
+            (self.wt_enabled_draft17 != VarInt::ZERO)
+                .then_some(Setting::WtEnabledDraft17(self.wt_enabled_draft17)),
             (self.wt_initial_max_streams_uni != VarInt::ZERO).then_some(
                 Setting::WtInitialMaxStreamsUni(self.wt_initial_max_streams_uni),
             ),
@@ -321,6 +378,7 @@ mod tests {
     fn test_settings_default() {
         let settings = Settings::default();
         assert_eq!(settings.wt_enabled, VarInt::ZERO);
+        assert_eq!(settings.wt_enabled_draft17, VarInt::ZERO);
         assert!(!settings.is_enabled());
         assert!(!settings.declares_flow_control());
     }
@@ -329,11 +387,13 @@ mod tests {
     fn test_settings_builder() {
         let settings = Settings::new()
             .wt_enabled(v(1))
+            .wt_enabled_draft17(v(1))
             .wt_initial_max_streams_uni(v(100))
             .wt_initial_max_streams_bidi(v(50))
             .wt_initial_max_data(v(1024 * 1024));
 
         assert_eq!(settings.wt_enabled, v(1));
+        assert_eq!(settings.wt_enabled_draft17, v(1));
         assert_eq!(settings.wt_initial_max_streams_uni, v(100));
         assert_eq!(settings.wt_initial_max_streams_bidi, v(50));
         assert_eq!(settings.wt_initial_max_data, v(1024 * 1024));
@@ -445,6 +505,7 @@ mod tests {
         let unknown = Setting::from_wire(v(0xdead), v(1)).expect("test must succeed");
         let entries = [
             Setting::WtEnabled(v(1)),
+            Setting::WtEnabledDraft17(v(1)),
             Setting::WtInitialMaxStreamsUni(v(100)),
             Setting::WtInitialMaxStreamsBidi(v(50)),
             Setting::WtInitialMaxData(v(1024)),
@@ -456,6 +517,7 @@ mod tests {
         ];
         let wt = Settings::from_payload(&entries).expect("test must succeed");
         assert_eq!(wt.wt_enabled, v(1));
+        assert_eq!(wt.wt_enabled_draft17, v(1));
         assert_eq!(wt.wt_initial_max_streams_uni, v(100));
         assert_eq!(wt.wt_initial_max_streams_bidi, v(50));
         assert_eq!(wt.wt_initial_max_data, v(1024));
@@ -475,6 +537,21 @@ mod tests {
     fn test_detect_draft_pattern_draft15() {
         let settings = Settings::new().wt_enabled(v(1));
         assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft15));
+    }
+
+    #[test]
+    fn test_detect_draft_pattern_draft17() {
+        // 新コードポイントの値が 1 以上なら draft-17
+        // (draft-ietf-webtrans-http3-17 Section 3.1, Section 9.2)
+        let settings = Settings::new().wt_enabled_draft17(v(1));
+        assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft17));
+
+        let settings = Settings::new().wt_enabled_draft17(v(2));
+        assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft17));
+
+        // 値 0 は WebTransport 無効を意味するため検出しない
+        let settings = Settings::new().wt_enabled_draft17(v(0));
+        assert_eq!(settings.detect_draft_pattern(), None);
     }
 
     #[test]
@@ -518,12 +595,21 @@ mod tests {
             .wt_max_sessions_draft14(v(1));
         assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft07));
 
-        // draft-15 が最優先
+        // draft-15 は draft-07 / draft-14 より優先
         let settings = Settings::new()
             .wt_enabled(v(1))
             .wt_max_sessions_draft14(v(1))
             .webtransport_max_sessions_draft07(v(1));
         assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft15));
+
+        // draft-17 (新コードポイント) は旧コードポイントやそれ以前より優先される
+        let settings = Settings::new()
+            .wt_enabled(v(1))
+            .wt_enabled_draft17(v(1))
+            .wt_max_sessions_draft14(v(1))
+            .webtransport_max_sessions_draft07(v(1))
+            .enable_webtransport_draft02(true);
+        assert_eq!(settings.detect_draft_pattern(), Some(DraftVersion::Draft17));
     }
 
     #[test]
@@ -599,6 +685,18 @@ mod tests {
     #[test]
     fn test_requires_initial_capsule_flow_control_compat_draft07_plain() {
         let settings = Settings::new().webtransport_max_sessions_draft07(v(1));
+        assert!(!settings.requires_initial_capsule_flow_control_compat());
+    }
+
+    #[test]
+    fn test_requires_initial_capsule_flow_control_compat_draft17() {
+        // draft-17 は SETTINGS_WT_INITIAL_MAX_* で初期値を通知するため、
+        // セッション確立直後の初期カプセルは要求しない
+        let settings = Settings::new()
+            .wt_enabled_draft17(v(1))
+            .wt_initial_max_streams_uni(v(100))
+            .wt_initial_max_streams_bidi(v(100))
+            .wt_initial_max_data(v(8 * 1024 * 1024));
         assert!(!settings.requires_initial_capsule_flow_control_compat());
     }
 

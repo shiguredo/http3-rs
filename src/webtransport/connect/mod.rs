@@ -8,8 +8,8 @@
 //!
 //! - RFC 8441: Bootstrapping WebSockets with HTTP/2 (拡張 CONNECT の定義)
 //! - RFC 9220: Bootstrapping WebSockets with HTTP/3 (HTTP/3 への適用)
-//! - draft-ietf-webtrans-http3-15 Section 3.2: Creating a New Session
-//! - draft-ietf-webtrans-http3-15 Section 3.3: Application Protocol Negotiation
+//! - draft-ietf-webtrans-http3-15 / 16 / 17 Section 3.2: Creating a New Session
+//! - draft-ietf-webtrans-http3-15 / 16 / 17 Section 3.3: Application Protocol Negotiation
 
 mod connect_error;
 mod draft;
@@ -24,32 +24,21 @@ pub use response::ConnectResponse;
 
 use core::fmt;
 
-/// `:protocol` 疑似ヘッダーの値 (draft-ietf-webtrans-http3-15 Section 3.2)
+/// `:protocol` 疑似ヘッダーの値
+/// (draft-ietf-webtrans-http3-15 / 16 / 17 Section 3.2, Section 9.1)
 ///
-/// draft-15 で定義された native QUIC モードのプロトコル識別子。
+/// draft-15 / 16 / 17 で共通の native QUIC モードのプロトコル識別子。
 pub const PROTOCOL_WEBTRANSPORT_H3: &str = "webtransport-h3";
 
 /// `:protocol` 疑似ヘッダーの値 (draft-ietf-webtrans-http3-02 Section 3.3)
 ///
-/// draft-02 で定義されたプロトコル識別子。Chrome 等の実装が draft-02 互換で
-/// この値を送信する場合がある。将来のドラフトで廃止される可能性がある。
+/// draft-02 / 07 / 14 で定義されたプロトコル識別子。Chrome 等の実装が
+/// draft-02 互換でこの値を送信する場合がある。draft-17 Section 2.1.2 では
+/// capsule-based WebTransport (WEBTRANS-H2) のトークンとして位置付けられ、
+/// 本実装が扱うネイティブ版 (`webtransport-h3`) とは別プロトコルになる。
+/// 将来のドラフトで廃止される可能性がある。
 pub const PROTOCOL_WEBTRANSPORT_DRAFT02: &str = "webtransport";
 
-/// WebTransport ドラフトバージョン
-///
-/// `:protocol` 疑似ヘッダーの値がドラフトバージョンによって異なる:
-/// - draft-02, draft-07, draft-14: `webtransport`
-/// - draft-15 (latest): `webtransport-h3`
-///
-/// WebTransport SETTINGS 構築用のパラメータ
-///
-/// `DraftVersion::build_server_settings()` および
-/// `DraftVersion::build_client_settings()` で使用する。
-/// ドラフトバージョンに応じて必要なパラメータのみが反映される。
-///
-/// 各フィールドは VarInt (RFC 9000 §16) に制約される。
-///
-/// CONNECT リクエスト検証エラー (draft-ietf-webtrans-http3-15 Section 3.2)
 impl fmt::Display for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -567,6 +556,7 @@ mod tests {
         assert!(!DraftVersion::Draft07.requires_initial_capsule_flow_control());
         assert!(DraftVersion::Draft14.requires_initial_capsule_flow_control());
         assert!(!DraftVersion::Draft15.requires_initial_capsule_flow_control());
+        assert!(!DraftVersion::Draft17.requires_initial_capsule_flow_control());
     }
 
     #[test]
@@ -575,6 +565,7 @@ mod tests {
         assert!(DraftVersion::Draft07.requires_enable_connect_protocol());
         assert!(DraftVersion::Draft14.requires_enable_connect_protocol());
         assert!(DraftVersion::Draft15.requires_enable_connect_protocol());
+        assert!(DraftVersion::Draft17.requires_enable_connect_protocol());
     }
 
     #[test]
@@ -583,6 +574,54 @@ mod tests {
         assert!(!DraftVersion::Draft07.requires_reset_stream_at());
         assert!(DraftVersion::Draft14.requires_reset_stream_at());
         assert!(DraftVersion::Draft15.requires_reset_stream_at());
+        assert!(DraftVersion::Draft17.requires_reset_stream_at());
+    }
+
+    #[test]
+    fn test_protocol_value() {
+        // draft-15 / 16 / 17 は `webtransport-h3` (draft-ietf-webtrans-http3-17 Section 9.1)、
+        // draft-02 / 07 / 14 は `webtransport` (draft-ietf-webtrans-http3-02 Section 3.3)
+        for draft in [
+            DraftVersion::Draft02,
+            DraftVersion::Draft07,
+            DraftVersion::Draft14,
+        ] {
+            assert_eq!(
+                draft.protocol_value(),
+                PROTOCOL_WEBTRANSPORT_DRAFT02,
+                "{draft:?} の :protocol トークン"
+            );
+        }
+        for draft in [DraftVersion::Draft15, DraftVersion::Draft17] {
+            assert_eq!(
+                draft.protocol_value(),
+                PROTOCOL_WEBTRANSPORT_H3,
+                "{draft:?} の :protocol トークン"
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_server_settings_draft17() {
+        let params = ServerSettingsParams {
+            initial_max_streams_uni: vi(500),
+            initial_max_streams_bidi: vi(300),
+            ..Default::default()
+        };
+        let s = DraftVersion::Draft17.build_server_settings(&params);
+        // draft-17 は新コードポイントの SETTINGS_WT_ENABLED を送り、
+        // 旧コードポイントは送らない
+        assert_eq!(s.wt_enabled_draft17, vi(1));
+        assert_eq!(s.wt_enabled, VarInt::ZERO);
+        assert_eq!(s.wt_initial_max_streams_uni, vi(500));
+        assert_eq!(s.wt_initial_max_streams_bidi, vi(300));
+        assert_eq!(
+            s.wt_initial_max_data,
+            ServerSettingsParams::default().initial_max_data
+        );
+        assert_eq!(s.webtransport_max_sessions_draft07, None);
+        assert_eq!(s.wt_max_sessions_draft14, None);
+        assert_eq!(s.detect_draft_pattern(), Some(DraftVersion::Draft17));
     }
 
     #[test]
@@ -599,6 +638,24 @@ mod tests {
         assert_eq!(s.webtransport_max_sessions_draft07, None);
         assert_eq!(s.wt_max_sessions_draft14, None);
         assert_eq!(s.detect_draft_pattern(), Some(DraftVersion::Draft15));
+    }
+
+    #[test]
+    fn test_build_client_settings_draft17() {
+        let params = ServerSettingsParams::default();
+        let s = DraftVersion::Draft17.build_client_settings(&params);
+        // draft-17 のクライアントは新コードポイントの SETTINGS_WT_ENABLED を送る
+        assert_eq!(s.wt_enabled_draft17, vi(1));
+        assert_eq!(s.wt_enabled, VarInt::ZERO);
+        assert_eq!(s.wt_initial_max_streams_uni, params.initial_max_streams_uni);
+        assert_eq!(
+            s.wt_initial_max_streams_bidi,
+            params.initial_max_streams_bidi
+        );
+        assert_eq!(s.wt_initial_max_data, params.initial_max_data);
+        assert_eq!(s.webtransport_max_sessions_draft07, None);
+        assert_eq!(s.wt_max_sessions_draft14, None);
+        assert_eq!(s.detect_draft_pattern(), Some(DraftVersion::Draft17));
     }
 
     #[test]

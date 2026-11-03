@@ -14,7 +14,7 @@ use crate::varint::VarInt;
 use crate::webtransport;
 
 // 既知 SETTINGS パラメータの ID 定数 (RFC 9114 / RFC 9204 / RFC 8441 / RFC 9297,
-// draft-ietf-webtrans-http3-02 / -07 / -14 / -15)
+// draft-ietf-webtrans-http3-02 / -07 / -14 / -15 / -16 / -17)
 const ID_QPACK_MAX_TABLE_CAPACITY: u64 = 0x01;
 const ID_MAX_FIELD_SECTION_SIZE: u64 = 0x06;
 const ID_QPACK_BLOCKED_STREAMS: u64 = 0x07;
@@ -26,6 +26,7 @@ const ID_WT_INITIAL_MAX_STREAMS_BIDI: u64 = 0x2b65;
 const ID_ENABLE_WEBTRANSPORT_DRAFT02: u64 = 0x2b603742;
 const ID_WT_MAX_SESSIONS_DRAFT14: u64 = 0x14e9cd29;
 const ID_WT_ENABLED: u64 = 0x2c7cf000;
+const ID_WT_ENABLED_DRAFT17: u64 = 0x20b8933b;
 const ID_WEBTRANSPORT_MAX_SESSIONS_DRAFT07: u64 = 0xc671706a;
 
 /// SETTINGS ID が HTTP/2 専用のものかどうかを判定する
@@ -67,10 +68,26 @@ pub enum Setting {
     /// H3 Datagram 有効化 (RFC 9297 §2.1.1, ID = 0x33)
     H3Datagram(bool),
 
-    /// SETTINGS_WT_ENABLED (draft-ietf-webtrans-http3-15 §3.1, §9.2, ID = 0x2c7cf000)
+    /// SETTINGS_WT_ENABLED (draft-ietf-webtrans-http3-15 / -16 §3.1, §9.2, ID = 0x2c7cf000)
     ///
+    /// 版のサフィックスがないのは、draft-15 と draft-16 が同じコードポイントを
+    /// 共有しているため。値は 0 = WebTransport 無効、1 = 有効。draft-16 では
+    /// サーバーから 2 以上を受信したクライアントは `H3_SETTINGS_ERROR` とする
+    /// (draft-ietf-webtrans-http3-16 Section 3.1)。draft-15 にはこの上限規則がなく、
+    /// 0 より大きい値をサポートとして扱う。draft-17 も同じ上限規則を
+    /// 新コードポイントに対して定める (draft-ietf-webtrans-http3-17 Section 3.1)。
+    /// draft-17 は [`Setting::WtEnabledDraft17`] の別コードポイントを使う。
     /// 将来のドラフトで変更される可能性がある。
     WtEnabled(VarInt),
+    /// SETTINGS_WT_ENABLED (draft-ietf-webtrans-http3-17 §3.1, §9.2, ID = 0x20b8933b)
+    ///
+    /// draft-15 / 16 の [`Setting::WtEnabled`] (0x2c7cf000) とは別のコードポイントで、
+    /// draft-17 の設定として独立に保持する。両方を同時に送受信できる
+    /// (draft-ietf-webtrans-http3-17 Section 7.1)。
+    /// 値は 0 = WebTransport 無効、1 = 有効。サーバーから 2 以上を受信した
+    /// クライアントは `H3_SETTINGS_ERROR` とする (同 Section 3.1)。
+    /// 将来のドラフトで変更される可能性がある。
+    WtEnabledDraft17(VarInt),
     /// SETTINGS_WT_MAX_SESSIONS (draft-ietf-webtrans-http3-14 §9.2, ID = 0x14e9cd29)
     ///
     /// 将来のドラフトで変更される可能性がある。
@@ -83,15 +100,15 @@ pub enum Setting {
     ///
     /// 将来のドラフトで変更される可能性がある。
     WebTransportMaxSessionsDraft07(VarInt),
-    /// SETTINGS_WT_INITIAL_MAX_DATA (draft-ietf-webtrans-http3-14/15, ID = 0x2b61)
+    /// SETTINGS_WT_INITIAL_MAX_DATA (draft-ietf-webtrans-http3-14/15/16/17, ID = 0x2b61)
     ///
     /// 将来のドラフトで変更される可能性がある。
     WtInitialMaxData(VarInt),
-    /// SETTINGS_WT_INITIAL_MAX_STREAMS_UNI (draft-ietf-webtrans-http3-14/15, ID = 0x2b64)
+    /// SETTINGS_WT_INITIAL_MAX_STREAMS_UNI (draft-ietf-webtrans-http3-14/15/16/17, ID = 0x2b64)
     ///
     /// 将来のドラフトで変更される可能性がある。
     WtInitialMaxStreamsUni(VarInt),
-    /// SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI (draft-ietf-webtrans-http3-14/15, ID = 0x2b65)
+    /// SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI (draft-ietf-webtrans-http3-14/15/16/17, ID = 0x2b65)
     ///
     /// 将来のドラフトで変更される可能性がある。
     WtInitialMaxStreamsBidi(VarInt),
@@ -217,6 +234,7 @@ impl Setting {
             ID_ENABLE_CONNECT_PROTOCOL => Self::EnableConnectProtocol(check_bool(id, value)?),
             ID_H3_DATAGRAM => Self::H3Datagram(check_bool(id, value)?),
             ID_WT_ENABLED => Self::WtEnabled(value),
+            ID_WT_ENABLED_DRAFT17 => Self::WtEnabledDraft17(value),
             ID_WT_MAX_SESSIONS_DRAFT14 => Self::WtMaxSessionsDraft14(value),
             ID_ENABLE_WEBTRANSPORT_DRAFT02 => {
                 Self::EnableWebTransportDraft02(check_bool(id, value)?)
@@ -248,6 +266,7 @@ impl Setting {
             }
             Self::H3Datagram(b) => (VarInt::from_static(ID_H3_DATAGRAM), bool_v(b)),
             Self::WtEnabled(v) => (VarInt::from_static(ID_WT_ENABLED), v),
+            Self::WtEnabledDraft17(v) => (VarInt::from_static(ID_WT_ENABLED_DRAFT17), v),
             Self::WtMaxSessionsDraft14(v) => (VarInt::from_static(ID_WT_MAX_SESSIONS_DRAFT14), v),
             Self::EnableWebTransportDraft02(b) => (
                 VarInt::from_static(ID_ENABLE_WEBTRANSPORT_DRAFT02),
@@ -381,10 +400,13 @@ impl Settings {
     /// WebTransport 固有の設定 (ストリーム上限、データ上限、ドラフトバージョン等) は
     /// `webtransport::Settings` のビルダーメソッドで事前に構築して渡す。
     ///
-    /// # バージョンネゴシエーション (draft-ietf-webtrans-http3-15 Section 7.1)
+    /// # バージョンネゴシエーション
+    /// (draft-ietf-webtrans-http3-15 Section 7.1,
+    ///  draft-ietf-webtrans-http3-17 Section 7.1)
     ///
-    /// - 各ドラフトバージョンは異なる SETTINGS_WT_ENABLED コードポイントを使用する
-    /// - 複数バージョン対応時、各バージョンのコードポイントでそれぞれ送信する
+    /// - 互換性のない変更を伴うドラフト版は、異なる SETTINGS_WT_ENABLED
+    ///   コードポイントを使用する (draft-15 と draft-16 は同一)
+    /// - 複数バージョン対応時、異なるコードポイントごとにそれぞれ送信する
     /// - サーバーはクライアントの SETTINGS を受信するまで WebTransport リクエストの処理を待つ
     ///
     /// 将来のドラフトで変更される可能性がある
@@ -404,9 +426,11 @@ impl Settings {
     /// クライアントは送信しない
     /// (draft-ietf-webtrans-http3-15 Section 3.1 のクライアント送信項目リスト参照)。
     ///
-    /// draft バージョンの場合は `SETTINGS_WT_ENABLED` もクライアントから送信する
-    /// 必要がある (draft-ietf-webtrans-http3-15 Section 7.1 の MUST)。これは
-    /// `wt` の中身で表現する。
+    /// ドラフト版に対応するクライアントは、対応するコードポイントごとに
+    /// `SETTINGS_WT_ENABLED` を送信する必要がある
+    /// (draft-ietf-webtrans-http3-15 Section 7.1 の MUST)。本文版だけに対応する
+    /// クライアントは送らない (draft-ietf-webtrans-http3-17 Section 3.1 / 7.1)。
+    /// どちらも `wt` の中身で表現する。
     ///
     /// 将来のドラフトで変更される可能性がある
     pub fn enable_webtransport_client(mut self, wt: webtransport::Settings) -> Self {
@@ -417,7 +441,7 @@ impl Settings {
 
     /// WebTransport が有効かどうか
     ///
-    /// draft-02/07/14/15 のいずれかで有効になっていれば true
+    /// draft-02/07/14/15/16/17 のいずれかで有効になっていれば true
     pub fn is_webtransport_enabled(&self) -> bool {
         self.wt_settings.as_ref().is_some_and(|wt| wt.is_enabled())
     }
@@ -468,6 +492,7 @@ impl Settings {
                 // WebTransport variant は `webtransport::Settings::from_payload` で反映する。
                 // ここでは H3 フィールドに反映しないことを明示する。
                 Setting::WtEnabled(_)
+                | Setting::WtEnabledDraft17(_)
                 | Setting::WtMaxSessionsDraft14(_)
                 | Setting::EnableWebTransportDraft02(_)
                 | Setting::WebTransportMaxSessionsDraft07(_)
@@ -628,6 +653,10 @@ mod tests {
             Setting::WtEnabled(v(1))
         );
         assert_eq!(
+            Setting::from_wire(v(0x20b8933b), v(1)).expect("test must succeed"),
+            Setting::WtEnabledDraft17(v(1))
+        );
+        assert_eq!(
             Setting::from_wire(v(0x14e9cd29), v(1)).expect("test must succeed"),
             Setting::WtMaxSessionsDraft14(v(1))
         );
@@ -664,6 +693,7 @@ mod tests {
             Setting::H3Datagram(true),
             Setting::H3Datagram(false),
             Setting::WtEnabled(v(1)),
+            Setting::WtEnabledDraft17(v(1)),
             Setting::WtMaxSessionsDraft14(v(7)),
             Setting::EnableWebTransportDraft02(true),
             Setting::WebTransportMaxSessionsDraft07(v(3)),
@@ -683,6 +713,8 @@ mod tests {
     fn test_setting_id() {
         assert_eq!(Setting::QpackMaxTableCapacity(v(4096)).id(), v(0x01));
         assert_eq!(Setting::H3Datagram(true).id(), v(0x33));
+        assert_eq!(Setting::WtEnabled(v(1)).id(), v(0x2c7cf000));
+        assert_eq!(Setting::WtEnabledDraft17(v(1)).id(), v(0x20b8933b));
         let unknown = Setting::from_wire(v(0xfeed), v(0)).expect("test must succeed");
         assert_eq!(unknown.id(), v(0xfeed));
     }
