@@ -3,6 +3,7 @@
 //! CONNECT リクエスト/レスポンスのバリデーションエラーと
 //! トランスポート能力の検証エラーを定義する。
 
+/// CONNECT リクエスト検証エラー (draft-ietf-webtrans-http3-15 / 16 / 17 Section 3.2)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectError {
     /// `:scheme` が `https` でない

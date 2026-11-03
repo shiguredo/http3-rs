@@ -23,7 +23,8 @@
 //!
 //! # 参照
 //!
-//! - [draft-ietf-webtrans-http3-15](https://datatracker.ietf.org/doc/draft-ietf-webtrans-http3/)
+//! - [draft-ietf-webtrans-http3-15](https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-15.txt)
+//! - [draft-ietf-webtrans-http3-16](https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-16.txt)
 //! - [draft-ietf-webtrans-http3-17](https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-17.txt)
 
 pub mod capsule;

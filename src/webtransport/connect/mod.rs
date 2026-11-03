@@ -38,21 +38,6 @@ pub const PROTOCOL_WEBTRANSPORT_H3: &str = "webtransport-h3";
 /// 将来のドラフトで廃止される可能性がある。
 pub const PROTOCOL_WEBTRANSPORT_DRAFT02: &str = "webtransport";
 
-/// WebTransport ドラフトバージョン
-///
-/// `:protocol` 疑似ヘッダーの値がドラフトバージョンによって異なる:
-/// - draft-02, draft-07, draft-14: `webtransport`
-/// - draft-15 / 16 / 17: `webtransport-h3`
-///
-/// WebTransport SETTINGS 構築用のパラメータ
-///
-/// `DraftVersion::build_server_settings()` および
-/// `DraftVersion::build_client_settings()` で使用する。
-/// ドラフトバージョンに応じて必要なパラメータのみが反映される。
-///
-/// 各フィールドは VarInt (RFC 9000 §16) に制約される。
-///
-/// CONNECT リクエスト検証エラー (draft-ietf-webtrans-http3-15 Section 3.2)
 impl fmt::Display for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

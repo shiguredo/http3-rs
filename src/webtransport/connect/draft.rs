@@ -9,6 +9,10 @@ use super::{PROTOCOL_WEBTRANSPORT_DRAFT02, PROTOCOL_WEBTRANSPORT_H3};
 
 /// WebTransport over HTTP/3 のドラフト版の識別子
 ///
+/// `:protocol` 疑似ヘッダーの値がドラフトバージョンによって異なる:
+/// - draft-02, draft-07, draft-14: `webtransport`
+/// - draft-15 / 16 / 17: `webtransport-h3`
+///
 /// SETTINGS のコードポイントと `:protocol` トークンで版を識別するための値であり、
 /// 各ドラフト仕様全体への準拠を表すものではない。たとえば [`DraftVersion::Draft17`]
 /// は draft-17 の SETTINGS コードポイントに対応する版を表し、draft-17 の全規定
@@ -106,7 +110,7 @@ impl DraftVersion {
     ///
     /// カプセルベースのフロー制御は draft-14 Section 5 で導入された。
     /// Safari (Network.framework) のように draft-07 の ID も併送するクライアントは
-    /// `Settings::detect_draft_pattern()` の時点で draft-14 として判定される。
+    /// `Settings::detect_draft_pattern()` の時点で draft-07 として判定される。
     ///
     /// - draft-15 / 16 / 17: SETTINGS_WT_INITIAL_MAX_STREAMS で初期上限を通知するため不要
     /// - draft-14: 必要
@@ -215,6 +219,12 @@ impl DraftVersion {
     }
 }
 
+/// WebTransport SETTINGS 構築用のパラメータ
+///
+/// [`DraftVersion::build_server_settings()`] および
+/// [`DraftVersion::build_client_settings()`] で使用する。
+/// ドラフトバージョンに応じて必要なパラメータのみが反映される。
+/// 各フィールドは VarInt (RFC 9000 §16) に制約される。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServerSettingsParams {
     /// 最大セッション数 (draft-07/14 で使用)

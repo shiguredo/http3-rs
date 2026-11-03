@@ -1427,6 +1427,86 @@ mod draft17_connect {
         }
     }
 
+    /// 新旧両コードポイントを広告するサーバーとクライアントの接続を作り、
+    /// SETTINGS を交換する
+    ///
+    /// 複数のドラフト版に対応する端点は、異なるコードポイントをそれぞれ 1 回ずつ
+    /// 広告する (draft-ietf-webtrans-http3-17 Section 7.1)。
+    fn both_codepoints_pair() -> (ServerConnection, shiguredo_http3::ClientConnection) {
+        let server_wt = webtransport::Settings::new()
+            .wt_enabled(vi(1))
+            .wt_enabled_draft17(vi(1))
+            .wt_initial_max_data(vi(1024));
+        let mut server =
+            ServerConnection::new(Settings::new().enable_webtransport_server(server_wt));
+        server
+            .set_control_stream_id(3)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        server
+            .set_webtransport_transport_verified(true, true)
+            .expect("テスト用の transport parameter 検証に成功すること");
+        let (server_ctrl, _) = server
+            .take_stream_data(3)
+            .expect("テスト用のサーバー SETTINGS 取得に成功すること");
+
+        let client_wt = webtransport::Settings::new()
+            .wt_enabled(vi(1))
+            .wt_enabled_draft17(vi(1))
+            .wt_initial_max_data(vi(1024));
+        let mut client = shiguredo_http3::ClientConnection::new(
+            Settings::new().enable_webtransport_client(client_wt),
+        );
+        client
+            .set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        client
+            .set_webtransport_transport_verified(true, true)
+            .expect("テスト用の transport parameter 検証に成功すること");
+        let (client_ctrl, _) = client
+            .take_stream_data(2)
+            .expect("テスト用のクライアント SETTINGS 取得に成功すること");
+
+        client
+            .feed_stream(3, &server_ctrl, false)
+            .expect("クライアントのサーバー SETTINGS 受信に成功すること");
+        while let Some(_ev) = client
+            .poll_event()
+            .expect("テスト用のイベント取得に成功すること")
+        {}
+        server
+            .feed_stream(2, &client_ctrl, false)
+            .expect("サーバーのクライアント SETTINGS 受信に成功すること");
+        while let Some(_ev) = server
+            .poll_event()
+            .expect("テスト用のイベント取得に成功すること")
+        {}
+        (server, client)
+    }
+
+    #[test]
+    fn server_rejects_lower_version_token_when_new_codepoint_is_shared() {
+        // 新旧両コードポイントを併送する接続では最も新しい版 (draft-17) が選ばれる。
+        // `:protocol` は選択した版のトークン "webtransport-h3" でなければならず、
+        // 旧 draft のトークン "webtransport" は受理しない
+        // (draft-ietf-webtrans-http3-17 Section 7.1, 9.1)
+        let (mut server, _client) = both_codepoints_pair();
+        let headers = vec![
+            Header::new(b":method", b"CONNECT").expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":protocol", b"webtransport")
+                .expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":scheme", b"https").expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":authority", b"example.com")
+                .expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":path", b"/wt").expect("テスト用のヘッダー作成に成功すること"),
+        ];
+        let frame = build_headers_frame(&headers);
+        let result = server.feed_stream(0, &frame, false);
+        assert!(
+            matches!(result, Err(Error::StreamError(ErrorCode::MessageError))),
+            "選択した版以外のトークンは受理しないこと: {result:?}"
+        );
+    }
+
     #[test]
     fn draft17_endpoints_establish_connect_session() {
         // 両端が新コードポイントを広告する構成で、`:protocol` = "webtransport-h3" の

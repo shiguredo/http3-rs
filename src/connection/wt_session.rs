@@ -900,17 +900,10 @@ impl Connection {
                 .find(|h| h.name() == b":protocol")
                 .map(|h| h.value())
                 .ok_or(Error::StreamError(ErrorCode::MessageError))?;
-            // 交差から版を選んだ場合は共通広告の中のトークンであることを確認する。
-            // クライアントが広告しない場合は選択した版のトークンであることを確認する
+            // `:protocol` は選択した版のトークンでなければならない。複数版を
+            // 併送している接続でも、下位版のトークンで接続できるわけではない
             // (draft-ietf-webtrans-http3-17 Section 7.1, 9.1)。
-            let proto_ok = if negotiated.is_some() {
-                self.mutually_advertised_wt_drafts()
-                    .iter()
-                    .any(|d| d.protocol_value().as_bytes() == proto_header)
-            } else {
-                draft.protocol_value().as_bytes() == proto_header
-            };
-            if !proto_ok {
+            if draft.protocol_value().as_bytes() != proto_header {
                 return Err(Error::StreamError(ErrorCode::MessageError));
             }
         }
