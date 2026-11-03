@@ -7021,7 +7021,7 @@ mod tests {
     /// draft-15 / 16 の旧コードポイントを広告するピアの SETTINGS を流し込むヘルパー
     ///
     /// 引数の `wt` は初期上限だけを使い、SETTINGS_WT_ENABLED は旧コードポイントで
-    /// 値 1 を送る。旧コードポイントの減少検出を検証するテストで使う。
+    /// 値 1 を送る。
     fn process_wt_settings(
         conn: &mut Connection,
         wt: &crate::webtransport::Settings,
@@ -7401,8 +7401,9 @@ mod tests {
 
     #[test]
     fn test_previous_wt_settings_max_sessions_not_compared_for_draft15() {
-        // draft-15 以降は SETTINGS_WT_MAX_SESSIONS が廃止されたため、
-        // 最大セッション数を比較しない (draft-15 Section 5.2)。
+        // draft-15 以降は SETTINGS_WT_MAX_SESSIONS が存在しないため、
+        // 最大セッション数を比較しない
+        // (draft-ietf-webtrans-http3-15 Section 9.2 の SETTINGS 一覧を参照)。
         let mut conn = Connection::client(wt_draft15_client_settings());
         conn.set_control_stream_id(2)
             .expect("テスト用の制御ストリーム設定に成功すること");
@@ -7482,7 +7483,8 @@ mod tests {
                 .expect("draft-17 では前回値との大小関係によらず比較しないこと");
             assert_eq!(
                 conn.negotiated_wt_draft_version(),
-                Some(DraftVersion::Draft17)
+                Some(DraftVersion::Draft17),
+                "draft-17 が選択されること"
             );
         }
     }
@@ -7559,10 +7561,10 @@ mod tests {
             .wt_initial_max_streams_bidi(vi(50))
             .wt_initial_max_data(vi(1_048_576));
         let err = process_exact_wt_settings(&mut conn, &wt).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::ConnectionError(ErrorCode::SettingsError)
-        ));
+        assert!(
+            matches!(err, Error::ConnectionError(ErrorCode::SettingsError)),
+            "旧コードポイントの減少検出で H3_SETTINGS_ERROR になること: {err:?}"
+        );
     }
 
     // =========================================================================
