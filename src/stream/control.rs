@@ -6,7 +6,7 @@ use crate::error::{Error, ErrorCode};
 use crate::frame::{self, Frame, GoawayPayload, SettingsPayload};
 use crate::settings::Settings;
 use crate::varint::VarInt;
-use crate::webtransport::stream::BIDIRECTIONAL_SIGNAL_VALUE;
+use crate::webtransport::stream::is_wt_stream_frame_type;
 
 use super::{RecvBuffer, SendBuffer};
 
@@ -206,6 +206,22 @@ impl ControlStreamRecv {
                     self.recv_state = ControlRecvState::WaitingSettings;
                 }
                 ControlRecvState::WaitingSettings | ControlRecvState::Ready => {
+                    // 制御ストリームの WT_STREAM (0x41) は length を持たないため、
+                    // フレームタイプが確定した時点で判定する
+                    // (draft-ietf-webtrans-http3-17 Section 4.3。将来のドラフトで
+                    //  変更される可能性がある)。
+                    // SETTINGS 受信前は RFC 9114 Section 6.2.1 の
+                    // H3_MISSING_SETTINGS を優先する (最初のフレームが SETTINGS 以外
+                    // なら接続エラー)。
+                    if is_wt_stream_frame_type(data) {
+                        let error_code = if self.recv_state == ControlRecvState::WaitingSettings {
+                            ErrorCode::MissingSettings
+                        } else {
+                            ErrorCode::FrameUnexpected
+                        };
+                        return Err(Error::ConnectionError(error_code));
+                    }
+
                     // フレームヘッダーをチェック
                     let header = match frame::decode_frame_header(data) {
                         Ok(h) => h,
@@ -260,10 +276,9 @@ impl ControlStreamRecv {
                             // Settings::from_payload で検証する (二重管理を避ける)
                             self.recv_state = ControlRecvState::Ready;
                         } else {
-                            // SETTINGS 以外の最初のフレームは H3_MISSING_SETTINGS。
-                            // WT_STREAM (0x41) も含む (draft-ietf-webtrans-http3-16
-                            // Section 4.3 の H3_FRAME_ERROR より RFC 9114 Section 6.2.1
-                            // の SETTINGS 先頭必須が優先する)
+                            // SETTINGS 以外の最初のフレームは H3_MISSING_SETTINGS
+                            // (RFC 9114 Section 6.2.1)。WT_STREAM (0x41) は
+                            // フレームタイプ確定時点の判定で先に処理される。
                             return Err(Error::ConnectionError(ErrorCode::MissingSettings));
                         }
                     } else {
@@ -276,13 +291,6 @@ impl ControlStreamRecv {
                             // DATA/HEADERS は制御ストリームでは無効 (RFC 9114 Section 7.2)
                             Frame::Data(_) | Frame::Headers(_) => {
                                 return Err(Error::ConnectionError(ErrorCode::FrameUnexpected));
-                            }
-                            // WT_STREAM (0x41) は制御ストリームでは接続エラー
-                            // (draft-ietf-webtrans-http3-16 Section 4.3)
-                            Frame::Unknown(unknown)
-                                if unknown.frame_type().get() == BIDIRECTIONAL_SIGNAL_VALUE =>
-                            {
-                                return Err(Error::ConnectionError(ErrorCode::FrameError));
                             }
                             _ => {}
                         }
@@ -336,8 +344,8 @@ mod tests {
 
         let frame = stream
             .process()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
         assert!(matches!(frame, Frame::Settings(_)));
         assert!(stream.is_ready());
     }
@@ -351,8 +359,8 @@ mod tests {
         stream.receive(&data);
         stream
             .process()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
         assert!(stream.is_ready());
 
         // 2 回目の SETTINGS フレームは接続エラー (RFC 9114 Section 7.2.4)
@@ -364,7 +372,7 @@ mod tests {
                 result,
                 Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
             ),
-            "expected ConnectionError(FrameUnexpected), got {result:?}"
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
         );
     }
 
@@ -377,8 +385,8 @@ mod tests {
         stream.receive(&data);
         stream
             .process()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
 
         // DATA フレームは制御ストリームで接続エラー (RFC 9114 Section 7.2)
         let data = [0x00, 0x03, 0x01, 0x02, 0x03];
@@ -389,7 +397,7 @@ mod tests {
                 result,
                 Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
             ),
-            "expected ConnectionError(FrameUnexpected), got {result:?}"
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
         );
     }
 
@@ -402,8 +410,8 @@ mod tests {
         stream.receive(&data);
         stream
             .process()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
 
         // HTTP/2 PING フレーム (0x06) は接続エラー (RFC 9114 Section 7.2.8)
         let data = [0x06, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
@@ -414,7 +422,7 @@ mod tests {
                 result,
                 Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
             ),
-            "expected ConnectionError(FrameUnexpected), got {result:?}"
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
         );
     }
 
@@ -437,7 +445,9 @@ mod tests {
     }
 
     #[test]
-    fn test_control_stream_recv_wt_stream_is_frame_error() {
+    fn test_control_stream_recv_wt_stream_without_length_is_frame_unexpected() {
+        // WT_STREAM は length を持たないため、フレームタイプの可変長整数だけで
+        // 不正位置と判定できること (draft-ietf-webtrans-http3-17 Section 4.3)
         let mut stream = ControlStreamRecv::new();
 
         // ストリームタイプ + SETTINGS フレーム
@@ -445,18 +455,55 @@ mod tests {
         stream.receive(&data);
         stream
             .process()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
         assert!(stream.is_ready());
 
-        // SETTINGS 受信後 (Ready 状態) の WT_STREAM (0x41) は接続エラー
-        // (draft-ietf-webtrans-http3-16 Section 4.3)
-        let data = [0x40, 0x41, 0x00];
+        // length を伴わない WT_STREAM 型 (0x41) だけを投入する
+        let data = [0x40, 0x41];
         stream.receive(&data);
         let result = stream.process();
         assert!(
-            matches!(result, Err(Error::ConnectionError(ErrorCode::FrameError))),
-            "expected ConnectionError(FrameError), got {result:?}"
+            matches!(
+                result,
+                Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
+            ),
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_control_stream_recv_wt_stream_split_varint_is_frame_unexpected() {
+        // WT_STREAM 型の可変長整数が 2 チャンクに分割されて到着しても、
+        // 型が確定した時点で不正位置と判定できること
+        // (draft-ietf-webtrans-http3-17 Section 4.3)
+        let mut stream = ControlStreamRecv::new();
+
+        // ストリームタイプ + SETTINGS フレーム
+        let data = [0x00, 0x04, 0x00];
+        stream.receive(&data);
+        stream
+            .process()
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
+        assert!(stream.is_ready());
+
+        // type=0x41 の 1 バイト目だけでは型を確定できないため待機する
+        let chunk1 = [0x40];
+        stream.receive(&chunk1);
+        let result = stream.process().expect("テスト用の処理に成功すること");
+        assert!(result.is_none(), "型が未確定の間は待機すること: {result:?}");
+
+        // 2 バイト目で型が 0x41 に確定するため、length の到着を待たずに接続エラー
+        let chunk2 = [0x41];
+        stream.receive(&chunk2);
+        let result = stream.process();
+        assert!(
+            matches!(
+                result,
+                Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
+            ),
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
         );
     }
 
@@ -467,24 +514,94 @@ mod tests {
         // ストリームタイプ (0x00) を消費して WaitingSettings 状態にする
         let stream_type = [0x00];
         stream.receive(&stream_type);
-        let result = stream.process().expect("test must succeed");
+        let result = stream.process().expect("テスト用の処理に成功すること");
         assert!(
             result.is_none(),
-            "expected stream type consumed, got {result:?}"
+            "ストリームタイプを消費すること: {result:?}"
         );
 
         // SETTINGS 受信前 (WaitingSettings 状態) の WT_STREAM (0x41) は
-        // H3_MISSING_SETTINGS になる (RFC 9114 Section 6.2.1 の SETTINGS 先頭必須が優先。
-        // draft-ietf-webtrans-http3-16 Section 4.3 の H3_FRAME_ERROR より優先する)
-        let data = [0x40, 0x41, 0x00];
-        stream.receive(&data);
+        // H3_MISSING_SETTINGS になる (RFC 9114 Section 6.2.1 の SETTINGS 先頭必須が、
+        // draft-ietf-webtrans-http3-17 Section 4.3 の不正位置の WT_STREAM に対する
+        // H3_FRAME_UNEXPECTED より優先する)。WT_STREAM は length を持たないため、
+        // フレームタイプの可変長整数だけで判定できる。
+        for data in [
+            // フレームタイプだけで後続バイトがない
+            &[0x40u8, 0x41][..],
+            // 後続の varint が 4 (session ID) でも length として待たない
+            &[0x40, 0x41, 0x04][..],
+        ] {
+            let mut stream = ControlStreamRecv::new();
+            stream.receive(&[0x00]);
+            let result = stream.process().expect("テスト用の処理に成功すること");
+            assert!(
+                result.is_none(),
+                "ストリームタイプを消費すること: {result:?}"
+            );
+
+            stream.receive(data);
+            let result = stream.process();
+            assert!(
+                matches!(
+                    result,
+                    Err(Error::ConnectionError(ErrorCode::MissingSettings))
+                ),
+                "SETTINGS 前の WT_STREAM は H3_MISSING_SETTINGS になること: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_control_stream_recv_wt_stream_split_varint_before_settings_is_missing_settings() {
+        // SETTINGS 受信前に WT_STREAM 型の可変長整数が分割されて到着しても、
+        // 型が確定した時点で H3_MISSING_SETTINGS になること
+        // (RFC 9114 Section 6.2.1, draft-ietf-webtrans-http3-17 Section 4.3)
+        let mut stream = ControlStreamRecv::new();
+        stream.receive(&[0x00]);
+        stream.process().expect("テスト用の処理に成功すること");
+
+        // 1 バイト目だけでは型を確定できないため待機する
+        stream.receive(&[0x40]);
+        let result = stream.process().expect("テスト用の処理に成功すること");
+        assert!(result.is_none(), "型が未確定の間は待機すること: {result:?}");
+
+        // 2 バイト目で型が確定するため、length を待たずに接続エラーになる
+        stream.receive(&[0x41]);
         let result = stream.process();
         assert!(
             matches!(
                 result,
                 Err(Error::ConnectionError(ErrorCode::MissingSettings))
             ),
-            "expected ConnectionError(MissingSettings), got {result:?}"
+            "型の確定で H3_MISSING_SETTINGS になること: {result:?}"
         );
+    }
+
+    #[test]
+    fn test_control_stream_recv_unknown_frame_is_returned() {
+        // 0x41 以外の未知フレームはデコーダーが Frame::Unknown として返す
+        // (接続層はこれを無視する。RFC 9114 Section 9 / Section 7.2.8)
+        let mut stream = ControlStreamRecv::new();
+
+        // ストリームタイプ + SETTINGS フレーム
+        let data = [0x00, 0x04, 0x00];
+        stream.receive(&data);
+        stream
+            .process()
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
+        assert!(stream.is_ready());
+
+        // 予約フレーム (0x21) は未知フレームとして返される (RFC 9114 Section 7.2.8)
+        let data = [0x21, 0x00];
+        stream.receive(&data);
+        let result = stream
+            .process()
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
+        match result {
+            Frame::Unknown(unknown) => assert_eq!(unknown.frame_type().get(), 0x21),
+            other => panic!("未知フレームが返ること: {other:?}"),
+        }
     }
 }

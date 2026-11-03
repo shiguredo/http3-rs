@@ -1642,12 +1642,15 @@ mod version_selection {
     }
 
     /// 指定したドラフト版を広告するクライアント SETTINGS を構築する
-    fn client_wt(versions: &[DraftVersion]) -> WtSettings {
+    pub(super) fn client_wt(versions: &[DraftVersion]) -> WtSettings {
         WtSettings::for_draft_versions(versions, params().max_sessions)
     }
 
     /// 指定したドラフト版を広告するサーバー接続を作成する
-    fn make_server(versions: &[DraftVersion], transport_verified: bool) -> ServerConnection {
+    pub(super) fn make_server(
+        versions: &[DraftVersion],
+        transport_verified: bool,
+    ) -> ServerConnection {
         make_server_with_wt(
             WtSettings::for_draft_versions(versions, params().max_sessions),
             transport_verified,
@@ -1669,7 +1672,7 @@ mod version_selection {
     }
 
     /// 指定した WebTransport SETTINGS を広告するクライアント接続を作成する
-    fn make_client(wt: WtSettings, transport_verified: bool) -> ClientConnection {
+    pub(super) fn make_client(wt: WtSettings, transport_verified: bool) -> ClientConnection {
         let mut client = ClientConnection::new(Settings::new().enable_webtransport_client(wt));
         client
             .set_control_stream_id(2)
@@ -1699,7 +1702,7 @@ mod version_selection {
     }
 
     /// サーバーとクライアントの SETTINGS を交換する
-    fn exchange_settings(server: &mut ServerConnection, client: &mut ClientConnection) {
+    pub(super) fn exchange_settings(server: &mut ServerConnection, client: &mut ClientConnection) {
         let client_ctrl = take_client_control(client);
         let server_ctrl = take_server_control(server);
         server
@@ -1774,7 +1777,7 @@ mod version_selection {
     /// CONNECT の送信、サーバーの受理、200 応答の受信まで進める。
     /// サーバー側で発生したイベントも併せて返す (保留していたストリームや
     /// datagram の配送はセッション確立時に起きるため)。
-    fn establish_session(
+    pub(super) fn establish_session(
         server: &mut ServerConnection,
         client: &mut ClientConnection,
         draft: DraftVersion,
@@ -2515,5 +2518,183 @@ mod version_selection {
             .wt_initial_max_streams_bidi(vi(25))
             .wt_initial_max_data(vi(512_000));
         assert_draft17_resumption_ok(previous_wt_draft17(), current);
+    }
+}
+
+// =========================================================================
+// 不正な位置の WT_STREAM と bidi ストリームのデータ配送
+// (draft-ietf-webtrans-http3-17 Section 4.3)
+// =========================================================================
+
+mod wt_stream_handling {
+    use super::version_selection::{
+        client_wt, establish_session, exchange_settings, make_client, make_server,
+    };
+    use super::*;
+
+    #[test]
+    fn misplaced_wt_stream_is_frame_unexpected_across_drafts() {
+        // WT_STREAM の不正位置のエラーは版に依存せず H3_FRAME_UNEXPECTED になること
+        // (draft-ietf-webtrans-http3-17 Section 4.3)。実装は版情報を保持しない
+        // 共通処理のため、旧 draft と本文版の代表 2 版で確認する。
+        for draft in [DraftVersion::Draft15, DraftVersion::Draft17] {
+            // リクエストストリームの途中で受信した場合
+            let mut server = make_server(&[draft], true);
+            let mut client = make_client(client_wt(&[draft]), true);
+            exchange_settings(&mut server, &mut client);
+            let (session_id, _events) = establish_session(&mut server, &mut client, draft);
+            assert_eq!(session_id, 0, "セッション ID 0 で CONNECT が成立すること");
+
+            // 通常の HTTP リクエスト (WT CONNECT 以外) を送る
+            let headers = vec![
+                Header::new(b":method", b"GET").expect("テスト用のヘッダー作成に成功すること"),
+                Header::new(b":path", b"/").expect("テスト用のヘッダー作成に成功すること"),
+                Header::new(b":scheme", b"https").expect("テスト用のヘッダー作成に成功すること"),
+                Header::new(b":authority", b"example.com")
+                    .expect("テスト用のヘッダー作成に成功すること"),
+            ];
+            let stream_id = client
+                .send_request(&headers, false)
+                .expect("テスト用のリクエスト送信に成功すること");
+            let (request_data, _) = client
+                .take_stream_data(stream_id)
+                .expect("テスト用のリクエストデータ取得に成功すること");
+            server
+                .feed_stream(stream_id, &request_data, false)
+                .expect("リクエストの受信に成功すること");
+            server
+                .drain_events()
+                .expect("テスト用のサーバーイベント取得に成功すること");
+
+            let err = server
+                .feed_stream(stream_id, &[0x40, 0x41], false)
+                .expect_err("リクエスト途中の WT_STREAM は拒否されること");
+            assert!(
+                matches!(err, Error::ConnectionError(ErrorCode::FrameUnexpected)),
+                "{draft:?} のリクエストストリームでは H3_FRAME_UNEXPECTED になること: {err:?}"
+            );
+
+            // SETTINGS 受信後の制御ストリームで受信した場合
+            let mut control_server = make_server(&[draft], true);
+            let mut control_client = make_client(client_wt(&[draft]), true);
+            exchange_settings(&mut control_server, &mut control_client);
+            let err = control_server
+                .feed_stream(2, &[0x40, 0x41], false)
+                .expect_err("制御ストリームの WT_STREAM は拒否されること");
+            assert!(
+                matches!(err, Error::ConnectionError(ErrorCode::FrameUnexpected)),
+                "{draft:?} の制御ストリームでは H3_FRAME_UNEXPECTED になること: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn negotiated_bidi_streams_deliver_application_data() {
+        // ネゴシエーション完了後のクライアント開始 / サーバー開始 bidi が、
+        // 引き続きアプリケーションデータを配送できること
+        // (draft-ietf-webtrans-http3-17 Section 4.3)。
+        // 単体テストとの違いは、実際の SETTINGS / CONNECT 交換を経由する点にある。
+        let mut server = make_server(&[DraftVersion::Draft17], true);
+        let mut client = make_client(client_wt(&[DraftVersion::Draft17]), true);
+        exchange_settings(&mut server, &mut client);
+        let (session_id, _events) =
+            establish_session(&mut server, &mut client, DraftVersion::Draft17);
+        assert_eq!(session_id, 0, "セッション ID 0 で CONNECT が成立すること");
+
+        // クライアント開始 bidi (stream 8): 0x41 + session ID 0 + アプリケーションデータ
+        server
+            .feed_stream(8, &[0x40, 0x41, 0x00, b'a', b'p', b'p'], false)
+            .expect("クライアント開始 bidi を受理すること");
+        let events = server
+            .drain_events()
+            .expect("テスト用のサーバーイベント取得に成功すること");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::BidiStreamOpen {
+                    stream_id: 8,
+                    session_id: 0,
+                })
+            )),
+            "クライアント開始 bidi ストリームが開くこと: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::BidiStreamData { stream_id: 8, data })
+                    if data == b"app"
+            )),
+            "クライアント開始 bidi のアプリケーションデータが届くこと: {events:?}"
+        );
+
+        // サーバー開始 bidi (stream 1): 0x41 + session ID 0 + アプリケーションデータ
+        client
+            .feed_stream(1, &[0x40, 0x41, 0x00, b'a', b'p', b'p'], false)
+            .expect("サーバー開始 bidi を受理すること");
+        let events = client
+            .drain_events()
+            .expect("テスト用のクライアントイベント取得に成功すること");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::BidiStreamOpen {
+                    stream_id: 1,
+                    session_id: 0,
+                })
+            )),
+            "サーバー開始 bidi ストリームが開くこと: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::BidiStreamData { stream_id: 1, data })
+                    if data == b"app"
+            )),
+            "サーバー開始 bidi のアプリケーションデータが届くこと: {events:?}"
+        );
+    }
+
+    #[test]
+    fn registered_local_bidi_stream_accepts_reverse_data_containing_wt_stream_value() {
+        // ローカル開始 bidi の逆方向に流れる通常のアプリケーションデータは
+        // HTTP/3 のフレームとして解釈しないため、先頭や途中に 0x41 を含んでいても
+        // WT_STREAM として拒否しないこと (draft-ietf-webtrans-http3-17 Section 4.3)
+        let mut server = make_server(&[DraftVersion::Draft17], true);
+        let mut client = make_client(client_wt(&[DraftVersion::Draft17]), true);
+        exchange_settings(&mut server, &mut client);
+        let (session_id, _events) =
+            establish_session(&mut server, &mut client, DraftVersion::Draft17);
+        assert_eq!(session_id, 0, "セッション ID 0 で CONNECT が成立すること");
+
+        // サーバー開始 bidi (stream 1) をローカル WT ストリームとして登録する
+        server
+            .register_local_wt_stream(0, 1)
+            .expect("ローカル開始 bidi の登録に成功すること");
+
+        // ピアが逆方向に送るアプリケーションデータ。先頭と途中に 0x41 を含むが、
+        // 登録済み WT bidi ストリームの受信データはそのままアプリケーションへ渡す
+        let payload = [0x41, 0x00, 0x40, 0x41, 0xff];
+        server
+            .feed_stream(1, &payload, false)
+            .expect("登録済み bidi の逆方向データは拒否しないこと");
+
+        let events = server
+            .drain_events()
+            .expect("テスト用のサーバーイベント取得に成功すること");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::BidiStreamData { stream_id: 1, data })
+                    if data == &payload
+            )),
+            "0x41 を含む逆方向データがそのまま配送されること: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::BidiStreamOpen { stream_id: 1, .. })
+            )),
+            "登録済みストリームでは BidiStreamOpen を発火しないこと: {events:?}"
+        );
     }
 }

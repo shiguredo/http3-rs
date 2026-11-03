@@ -7,9 +7,9 @@ use crate::error::{Error, ErrorCode};
 use crate::frame::{self, DataPayload, Frame, HeadersPayload};
 use crate::limits::DEFAULT_MAX_RECEIVED_BODY_SIZE;
 use crate::qpack::Header;
-use crate::webtransport::stream::BIDIRECTIONAL_SIGNAL_VALUE;
+use crate::webtransport::stream::is_wt_stream_frame_type;
 
-use super::{RecvBuffer, SendBuffer, StreamState};
+use super::{RecvBuffer, SendBuffer, StreamKind, StreamState};
 
 /// リクエストストリーム送信状態
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,15 +100,16 @@ pub struct RequestStream {
     /// 接続ロール
     ///
     /// WT_STREAM (0x41) をストリーム先頭で受信したときの扱いをロールで分ける
-    /// (draft-ietf-webtrans-http3-16 Section 4.3)。サーバー側のみ「very first
-    /// bytes of a request stream」に該当する先頭位置を無視してよい。
+    /// (draft-ietf-webtrans-http3-17 Section 4.3)。サーバー側のみ "the very first
+    /// bytes sent by the initiator of a bidirectional stream" に該当する先頭位置を
+    /// 無視してよい。
     role: Role,
     /// 最初のフレームを処理済みかどうか
     ///
-    /// WT_STREAM (0x41) の「very first bytes」判定に使用する。
-    /// `Frame::Unknown` のスキップを含む最初のフレーム消費時に立てる。
-    /// (RFC 9114 Section 9: 未知フレームは無視しつつも、先頭位置の例外を
-    ///  正確に判定するため)
+    /// WT_STREAM (0x41) の "the very first bytes" 判定に使用する
+    /// (draft-ietf-webtrans-http3-17 Section 4.3)。`Frame::Unknown` のスキップを
+    /// 含む最初のフレーム消費時に立てる (RFC 9114 Section 9 の未知フレームの
+    /// 無視を挟んでも先頭位置の例外を正確に判定するため)。
     first_frame_processed: bool,
 }
 
@@ -318,6 +319,27 @@ impl RequestStream {
                 return Ok(None);
             }
 
+            // 不正な位置の WT_STREAM (0x41) は接続エラー H3_FRAME_UNEXPECTED。
+            // length フィールドを持たないため、フレームタイプが確定した時点で判定する
+            // (分割された可変長整数でも一貫して拒否できる)。
+            // サーバー側の先頭位置だけが
+            // "the very first bytes sent by the initiator of a bidirectional stream"
+            // に該当し、MUST NOT の対象外として無視する
+            // (draft-ietf-webtrans-http3-17 Section 4.3。将来のドラフトで変更される
+            //  可能性がある)。
+            let is_first_frame = !self.first_frame_processed;
+            // 例外は、サーバーが受信側となるクライアント開始の双方向ストリームの先頭に
+            // 限る (ストリームの開始者だけが "the very first bytes" を送れる)。
+            let initiator_is_client = matches!(
+                StreamKind::from_stream_id(self.stream_id),
+                StreamKind::ClientBidi
+            );
+            let server_first_frame =
+                self.role == Role::Server && is_first_frame && initiator_is_client;
+            if !server_first_frame && is_wt_stream_frame_type(data) {
+                return Err(Error::ConnectionError(ErrorCode::FrameUnexpected));
+            }
+
             // フレームヘッダーをチェック
             let header = match frame::decode_frame_header(data) {
                 Ok(h) => h,
@@ -373,7 +395,6 @@ impl RequestStream {
 
             // 最初のフレーム消費時に先頭フレーム処理済みフラグを立てる
             // (詳細は `first_frame_processed` フィールド定義を参照)
-            let is_first_frame = !self.first_frame_processed;
             self.first_frame_processed = true;
 
             match frame {
@@ -422,34 +443,18 @@ impl RequestStream {
                     }
                     return Ok(Some(RawReceivedData::Data(data)));
                 }
-                Frame::Unknown(unknown) => {
-                    // WT_STREAM (0x41) はリクエストストリームの先頭以外で受信すると接続エラー
-                    // (draft-ietf-webtrans-http3-16 Section 4.3)
-                    //
-                    // サーバー側の先頭位置のみ「very first bytes of a request stream」に
-                    // 該当し MUST NOT の対象外として無視する (RFC 9114 Section 9)。
-                    // クライアント側はレスポンス受信方向のストリームで先頭に受信しても
-                    // 「any other circumstances」に該当するため常にエラーにする。
-                    //
-                    // このパスが実際に動作するのは WT 未ネゴシエーション時に 0x41 を
-                    // 送る非準拠ピアにのみ到達する (ネゴシエーション済みなら connection 層の
-                    // dispatch_client_bidi_stream が先頭 varint を捕捉する)。
-                    //
-                    // なお WT_STREAM は length を持たない (draft-16 Section 4.3:
-                    // "WT_STREAM lacks length and is not a proper HTTP/3 frame") ため、
-                    // ワイヤ上の 2 番目の varint は length ではなく session_id であり、
-                    // 本実装は HTTP/3 フレームとして length に解釈して消費する。
-                    // session_id が 0 でなければ実ペイロードの先頭を length 分巻き込んで
-                    // 解釈がずれるが、非準拠ピアに対する挙動のため許容する。
-                    let server_first_frame = self.role == Role::Server && is_first_frame;
-                    if unknown.frame_type().get() == BIDIRECTIONAL_SIGNAL_VALUE
-                        && !server_first_frame
-                    {
-                        return Err(Error::ConnectionError(ErrorCode::FrameError));
-                    }
+                Frame::Unknown(_) => {
                     // RFC 9114 Section 9 / Section 7.2.8: 不明なフレームは無視する
-                    // (Reserved Frame Types: 0x1f * N + 0x21)
-                    // ループを継続して次のフレームを処理
+                    // (Reserved Frame Types: 0x1f * N + 0x21)。
+                    //
+                    // WT_STREAM (0x41) がこのアームに到達するのは、サーバー側の
+                    // 先頭位置で受信した場合だけである (それ以外の位置ではフレーム
+                    // タイプ確定時点で拒否する。draft-ietf-webtrans-http3-17
+                    // Section 4.3)。WT_STREAM は length を持たないため、2 番目の
+                    // 可変長整数 (session ID) を本実装は length として消費する。
+                    // session ID が 0 でなければ解釈がずれるが、先頭シグナルの実処理は
+                    // connection 層のディスパッチが担うため、ここでは無視する。
+                    // ループを継続して次のフレームを処理する
                 }
                 // SETTINGS/GOAWAY/MAX_PUSH_ID はリクエストストリームで受信した場合は接続エラー
                 // (RFC 9114 Section 7.2.4, 7.2.6, 7.2.7)
@@ -634,10 +639,10 @@ mod tests {
     fn test_request_stream_send_encoded_headers() {
         let mut stream = RequestStream::new(0, Role::Server);
         let headers = vec![
-            Header::new(b":method", b"GET").expect("test must succeed"),
-            Header::new(b":path", b"/").expect("test must succeed"),
-            Header::new(b":scheme", b"https").expect("test must succeed"),
-            Header::new(b":authority", b"example.com").expect("test must succeed"),
+            Header::new(b":method", b"GET").expect("テスト用の処理に成功すること"),
+            Header::new(b":path", b"/").expect("テスト用の処理に成功すること"),
+            Header::new(b":scheme", b"https").expect("テスト用の処理に成功すること"),
+            Header::new(b":authority", b"example.com").expect("テスト用の処理に成功すること"),
         ];
 
         // QPACK エンコード
@@ -645,12 +650,12 @@ mod tests {
         let mut qpack_buf = vec![0u8; 4096];
         let qpack_len = encoder
             .encode(&mut qpack_buf, &headers, 0)
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること");
         qpack_buf.truncate(qpack_len);
 
         stream
             .send_encoded_headers(&qpack_buf, false, false)
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること");
         assert!(stream.has_pending_send());
 
         let (data, fin) = stream.get_send_data();
@@ -661,20 +666,22 @@ mod tests {
     #[test]
     fn test_request_stream_send_body() {
         let mut stream = RequestStream::new(0, Role::Server);
-        let headers = vec![Header::new(b":method", b"POST").expect("test must succeed")];
+        let headers = vec![Header::new(b":method", b"POST").expect("テスト用の処理に成功すること")];
 
         // QPACK エンコード
         let mut encoder = QpackEncoder::new();
         let mut qpack_buf = vec![0u8; 4096];
         let qpack_len = encoder
             .encode(&mut qpack_buf, &headers, 0)
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること");
         qpack_buf.truncate(qpack_len);
 
         stream
             .send_encoded_headers(&qpack_buf, false, false)
-            .expect("test must succeed");
-        stream.send_body(b"hello", true).expect("test must succeed");
+            .expect("テスト用の処理に成功すること");
+        stream
+            .send_body(b"hello", true)
+            .expect("テスト用の処理に成功すること");
 
         let (data, _fin) = stream.get_send_data();
         assert!(!data.is_empty());
@@ -686,20 +693,22 @@ mod tests {
         // FIN はデータ全消費後の追加呼び出しで (空, fin=true) として交付される
         // (RFC 9114 Section 4.1)
         let mut stream = RequestStream::new(0, Role::Server);
-        let headers = vec![Header::new(b":method", b"POST").expect("test must succeed")];
+        let headers = vec![Header::new(b":method", b"POST").expect("テスト用の処理に成功すること")];
 
         // QPACK エンコード
         let mut encoder = QpackEncoder::new();
         let mut qpack_buf = vec![0u8; 4096];
         let qpack_len = encoder
             .encode(&mut qpack_buf, &headers, 0)
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること");
         qpack_buf.truncate(qpack_len);
 
         stream
             .send_encoded_headers(&qpack_buf, false, false)
-            .expect("test must succeed");
-        stream.send_body(b"hello", true).expect("test must succeed");
+            .expect("テスト用の処理に成功すること");
+        stream
+            .send_body(b"hello", true)
+            .expect("テスト用の処理に成功すること");
 
         // データ消費前は fin=false (FIN はデータと同時に交付されない)
         let (data, fin) = stream.get_send_data();
@@ -731,7 +740,7 @@ mod tests {
                 result,
                 Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
             ),
-            "expected ConnectionError(FrameUnexpected), got {result:?}"
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
         );
     }
 
@@ -747,7 +756,7 @@ mod tests {
                 result,
                 Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
             ),
-            "expected ConnectionError(FrameUnexpected), got {result:?}"
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
         );
     }
 
@@ -767,7 +776,7 @@ mod tests {
                 result,
                 Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
             ),
-            "expected ConnectionError(FrameUnexpected), got {result:?}"
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
         );
     }
 
@@ -783,7 +792,7 @@ mod tests {
                 result,
                 Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
             ),
-            "expected ConnectionError(FrameUnexpected), got {result:?}"
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
         );
     }
 
@@ -806,9 +815,9 @@ mod tests {
         // HEADERS フレーム (QPACK: RIC=0, DeltaBase=0, Indexed :method GET)
         let data = [0x01, 0x03, 0x00, 0x00, 0xd1];
         stream.receive(&data, false);
-        let _ = stream.process_raw().expect("test must succeed"); // Headers
+        let _ = stream.process_raw().expect("テスト用の処理に成功すること"); // Headers
         stream.receive(&[], true);
-        let result = stream.process_raw().expect("test must succeed");
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
         assert!(
             matches!(result, Some(RawReceivedData::StreamEnd)),
             "expected StreamEnd, got {result:?}"
@@ -825,8 +834,8 @@ mod tests {
 
         let result = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
         if let RawReceivedData::Headers(encoded) = result {
             // エンコードされたフィールドセクションが返される
             assert_eq!(encoded, vec![0x00, 0x00, 0xd1]);
@@ -847,13 +856,13 @@ mod tests {
         stream.receive(&headers_frame, false);
         let _ = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
 
         // 上限ちょうどの DATA は受理される
         let data_frame = [0x00, 0x04, b'h', b'e', b'l', b'l'];
         stream.receive(&data_frame, false);
-        let result = stream.process_raw().expect("test must succeed");
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
         assert!(
             matches!(result, Some(RawReceivedData::Data(_))),
             "上限ちょうどの DATA は受理されること"
@@ -885,12 +894,12 @@ mod tests {
         stream.receive(&headers_frame, false);
         let _ = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
 
         let data_frame = [0x00, 0x05, b'h', b'e', b'l', b'l', b'o'];
         stream.receive(&data_frame, false);
-        let result = stream.process_raw().expect("test must succeed");
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
         assert!(
             matches!(result, Some(RawReceivedData::Data(_))),
             "WT CONNECT の DATA はボディ上限の対象外であること"
@@ -912,8 +921,8 @@ mod tests {
         stream.receive(&headers_frame, false);
         let result = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
         assert!(
             matches!(result, RawReceivedData::Headers(_)),
             "expected Headers, got {result:?}"
@@ -924,8 +933,8 @@ mod tests {
         stream.receive(&data_frame, false);
         let result = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
         assert!(
             matches!(result, RawReceivedData::Data(_)),
             "expected Data, got {result:?}"
@@ -935,8 +944,8 @@ mod tests {
         stream.receive(&headers_frame, false);
         let result = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
         assert!(
             matches!(result, RawReceivedData::Trailers(_)),
             "expected Trailers, got {result:?}"
@@ -954,8 +963,8 @@ mod tests {
         stream.receive(&headers_frame, false);
         let result = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
         assert!(matches!(result, RawReceivedData::Headers(_)));
 
         // 1xx 通知 (状態を WaitingHeaders に戻す)
@@ -965,8 +974,8 @@ mod tests {
         stream.receive(&headers_frame, false);
         let result = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
         assert!(
             matches!(result, RawReceivedData::Headers(_)),
             "expected Headers for final response after 1xx, got {result:?}"
@@ -977,8 +986,8 @@ mod tests {
         stream.receive(&data_frame, false);
         let result = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
         assert!(
             matches!(result, RawReceivedData::Data(_)),
             "expected Data after final response, got {result:?}"
@@ -995,15 +1004,15 @@ mod tests {
         stream.receive(&headers_frame, false);
         let _ = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed"); // Headers
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること"); // Headers
 
         // 2 回目 HEADERS (トレーラー)
         stream.receive(&headers_frame, false);
         let _ = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed"); // Trailers
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること"); // Trailers
 
         // 3 回目 HEADERS は接続エラー
         stream.receive(&headers_frame, false);
@@ -1013,70 +1022,71 @@ mod tests {
                 result,
                 Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
             ),
-            "expected ConnectionError(FrameUnexpected), got {result:?}"
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
         );
     }
 
     #[test]
     fn test_request_stream_server_first_frame_wt_stream_is_ignored() {
         // サーバー側のリクエストストリーム先頭位置の WT_STREAM (0x41) は
-        // 「very first bytes of a request stream」に該当し MUST NOT の対象外として
-        // 無視される (draft-ietf-webtrans-http3-16 Section 4.3 / RFC 9114 Section 9)
+        // "the very first bytes sent by the initiator of a bidirectional stream" に
+        // 該当し MUST NOT の対象外として無視される
+        // (draft-ietf-webtrans-http3-17 Section 4.3 / RFC 9114 Section 9)
         //
-        // このパスが実際に動作するのは WT 未ネゴシエーション時のみ
-        // (ネゴシエーション済みなら connection 層の dispatch_client_bidi_stream が
-        //  先頭 varint を捕捉して WT ストリーム経路に回す)。
+        // connection 層経由ではこの経路に到達しない (サーバーはクライアント開始の
+        // 新規双方向ストリームの先頭 varint を dispatch_client_bidi_stream で判定し、
+        // 0x41 なら WT 経路・保留・拒否のいずれかに回す)。公開 RequestStream API を
+        // 直接使う場合の防御的な挙動である。
         let mut stream = RequestStream::new(0, Role::Server);
         // type=0x41 (2 バイト varint) + len=0
-        // ワイヤ実態としては sid=0 の WT ストリームヘッダーとバイト同一
-        // (sid=0 は StreamHeader として合法なため実ワイヤ到達可能)
+        // ワイヤ実態としては session ID=0 の WT ストリームヘッダーとバイト同一
+        // (session ID=0 は StreamHeader として合法なため実ワイヤ到達可能)
         let wt_stream = [0x40, 0x41, 0x00];
         stream.receive(&wt_stream, false);
-        let result = stream.process_raw().expect("test must succeed");
-        assert!(
-            result.is_none(),
-            "expected WT_STREAM to be ignored, got {result:?}"
-        );
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
+        assert!(result.is_none(), "WT_STREAM は無視されること: {result:?}");
 
         // 無視後もストリームは正常に動作し、後続の HEADERS が処理される
         let headers_frame = [0x01, 0x03, 0x00, 0x00, 0xd1];
         stream.receive(&headers_frame, false);
         let result = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
         assert!(
             matches!(result, RawReceivedData::Headers(_)),
-            "expected Headers after ignored WT_STREAM, got {result:?}"
+            "WT_STREAM の無視後に HEADERS が処理されること: {result:?}"
         );
     }
 
     #[test]
     fn test_request_stream_server_first_frame_wt_stream_len_nonzero_is_ignored() {
-        // サーバー側の先頭位置の WT_STREAM (0x41) はペイロード長が 0 でなくても
-        // 未知フレームとして無視される (RFC 9114 Section 9)
+        // サーバー側の先頭位置の WT_STREAM (0x41) は未知フレームとして無視される
+        // (draft-ietf-webtrans-http3-17 Section 4.3 / RFC 9114 Section 9)。
+        //
+        // WT_STREAM は length を持たないため、ワイヤ上の 2 番目の可変長整数は
+        // session ID である。本実装はサーバー側の先頭位置に限り HTTP/3 フレームとして
+        // length に解釈して消費する (session ID が 0 以外なら解釈がずれるが、
+        // 先頭シグナルとしての利用は connection 層のディスパッチが担う)。
         let mut stream = RequestStream::new(0, Role::Server);
         // type=0x41 (2 バイト varint), len=1, payload=[0x00]
-        // 人工構築: sid は 4 の倍数制約があるため実ワイヤのヘッダーとは一致しないが、
-        // length 前置のフレームとして解釈される場合の消費量を検証する
+        // 人工構築: session ID は 4 の倍数制約があるため実ワイヤのヘッダーとは
+        // 一致しないが、length 前置のフレームとして解釈される場合の消費量を検証する
         let wt_stream = [0x40, 0x41, 0x01, 0x00];
         stream.receive(&wt_stream, false);
-        let result = stream.process_raw().expect("test must succeed");
-        assert!(
-            result.is_none(),
-            "expected WT_STREAM to be ignored, got {result:?}"
-        );
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
+        assert!(result.is_none(), "WT_STREAM は無視されること: {result:?}");
 
         // 無視後もストリームは正常に動作し、後続の HEADERS が処理される
         let headers_frame = [0x01, 0x03, 0x00, 0x00, 0xd1];
         stream.receive(&headers_frame, false);
         let result = stream
             .process_raw()
-            .expect("test must succeed")
-            .expect("test must succeed");
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
         assert!(
             matches!(result, RawReceivedData::Headers(_)),
-            "expected Headers after ignored WT_STREAM, got {result:?}"
+            "WT_STREAM の無視後に HEADERS が処理されること: {result:?}"
         );
     }
 
@@ -1089,86 +1099,233 @@ mod tests {
         // type=0x41 (2 バイト varint) を 2 チャンクに分割
         let chunk1 = [0x40];
         stream.receive(&chunk1, false);
-        let result = stream.process_raw().expect("test must succeed");
-        assert!(
-            result.is_none(),
-            "expected partial varint to wait, got {result:?}"
-        );
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
+        assert!(result.is_none(), "型が未確定の間は待機すること: {result:?}");
 
         // 残りの varint バイト + len=0
         let chunk2 = [0x41, 0x00];
         stream.receive(&chunk2, false);
-        let result = stream.process_raw().expect("test must succeed");
-        assert!(
-            result.is_none(),
-            "expected WT_STREAM to be ignored, got {result:?}"
-        );
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
+        assert!(result.is_none(), "WT_STREAM は無視されること: {result:?}");
     }
 
     #[test]
-    fn test_request_stream_server_second_frame_wt_stream_is_frame_error() {
-        // サーバー側のリクエストストリーム 2 フレーム目以降の WT_STREAM (0x41) は
-        // H3_FRAME_ERROR 接続エラー (draft-ietf-webtrans-http3-16 Section 4.3)
+    fn test_request_stream_truncated_frame_is_frame_error() {
+        // 可変長整数が途中で終わる入力は WT_STREAM 型の判定対象にせず、
+        // 一般のフレーム途中切れとして H3_FRAME_ERROR のままにすること
+        // (RFC 9114 Section 7.1)
         let mut stream = RequestStream::new(0, Role::Server);
 
         // 1 フレーム目: 予約フレーム (0x21) は無視される (RFC 9114 Section 7.2.8)
         let reserved = [0x21, 0x00];
         stream.receive(&reserved, false);
-        let result = stream.process_raw().expect("test must succeed");
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
+        assert!(result.is_none(), "予約フレームは無視されること: {result:?}");
+
+        // 2 フレーム目: type=0x41 の 1 バイト目だけで FIN する (型を確定できない)
+        stream.receive(&[0x40], true);
+        let result = stream.process_raw();
+        assert!(
+            matches!(result, Err(Error::ConnectionError(ErrorCode::FrameError))),
+            "H3_FRAME_ERROR になること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_request_stream_server_second_frame_wt_stream_without_length_is_frame_unexpected() {
+        // WT_STREAM は length を持たないため、フレームタイプの可変長整数だけで
+        // 不正位置と判定できること (draft-ietf-webtrans-http3-17 Section 4.3)
+        let mut stream = RequestStream::new(0, Role::Server);
+
+        // 1 フレーム目: 予約フレーム (0x21) は無視される (RFC 9114 Section 7.2.8)
+        let reserved = [0x21, 0x00];
+        stream.receive(&reserved, false);
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
+        assert!(result.is_none(), "予約フレームは無視されること: {result:?}");
+
+        // 2 フレーム目: フレームタイプ 0x41 までで length が存在しない入力でも
+        // 接続エラーになること
+        let wt_stream_type_only = [0x40, 0x41];
+        stream.receive(&wt_stream_type_only, false);
+        let result = stream.process_raw();
+        assert!(
+            matches!(
+                result,
+                Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
+            ),
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_request_stream_server_initiated_stream_wt_stream_is_frame_unexpected() {
+        // サーバー開始の双方向ストリーム (stream_id = 1) の受信方向は開始者が
+        // サーバーであり、クライアント開始 bidi の先頭例外は適用されない。
+        // 先頭の WT_STREAM (0x41) も H3_FRAME_UNEXPECTED になること
+        // (draft-ietf-webtrans-http3-17 Section 4.3)。
+        let mut stream = RequestStream::new(1, Role::Server);
+        stream.receive(&[0x40, 0x41], false);
+        let result = stream.process_raw();
+        assert!(
+            matches!(
+                result,
+                Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
+            ),
+            "サーバー開始ストリームでは先頭例外を適用しないこと: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_request_stream_wt_stream_with_incomplete_length_is_frame_unexpected() {
+        // WT_STREAM の型が確定した後は、後続の可変長整数が不完全でも
+        // 型の受信時点で H3_FRAME_UNEXPECTED になること
+        // (draft-ietf-webtrans-http3-17 Section 4.3: WT_STREAM は length を持たない
+        //  ため、後続バイトを length として解釈しない)
+        let mut stream = RequestStream::new(0, Role::Server);
+
+        // 1 フレーム目: 予約フレーム (0x21) は無視される (RFC 9114 Section 7.2.8)
+        stream.receive(&[0x21, 0x00], false);
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
+        assert!(result.is_none(), "予約フレームは無視されること: {result:?}");
+
+        // 2 フレーム目: 型 0x41 + 8 バイト可変長整数の途中 (2 バイト目まで)
+        stream.receive(&[0x40, 0x41, 0xc0, 0x00], false);
+        let result = stream.process_raw();
+        assert!(
+            matches!(
+                result,
+                Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
+            ),
+            "型が確定すれば length が不完全でも H3_FRAME_UNEXPECTED になること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_request_stream_server_wt_stream_after_ignored_first_frame_is_frame_unexpected() {
+        // サーバー側の先頭位置で WT_STREAM を無視した後、2 個目の WT_STREAM は
+        // 先頭位置ではないため接続エラーにする
+        // (draft-ietf-webtrans-http3-17 Section 4.3)。
+        // 先頭フレーム処理済みフラグが `Frame::Unknown` の消費時にも立つことを固定する。
+        let mut stream = RequestStream::new(0, Role::Server);
+
+        // 1 フレーム目: 先頭位置の WT_STREAM は無視される
+        stream.receive(&[0x40, 0x41, 0x00], false);
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
         assert!(
             result.is_none(),
-            "expected reserved frame to be skipped, got {result:?}"
+            "先頭位置の WT_STREAM は無視されること: {result:?}"
         );
 
-        // 2 フレーム目: WT_STREAM (0x41) は接続エラー
-        let wt_stream = [0x40, 0x41, 0x00];
-        stream.receive(&wt_stream, false);
+        // 2 フレーム目: 同じ WT_STREAM でも 2 個目は接続エラー
+        stream.receive(&[0x40, 0x41, 0x00], false);
         let result = stream.process_raw();
         assert!(
-            matches!(result, Err(Error::ConnectionError(ErrorCode::FrameError))),
-            "expected ConnectionError(FrameError), got {result:?}"
+            matches!(
+                result,
+                Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
+            ),
+            "先頭以外の WT_STREAM は H3_FRAME_UNEXPECTED になること: {result:?}"
         );
     }
 
     #[test]
-    fn test_request_stream_client_first_frame_wt_stream_is_frame_error() {
-        // クライアント側はレスポンス受信方向のストリームで先頭に WT_STREAM (0x41) を
-        // 受信した場合も H3_FRAME_ERROR 接続エラー
-        // (draft-ietf-webtrans-http3-16 Section 4.3: 「very first bytes of a request
-        //  stream」の例外はストリーム開始側にのみ該当する)
+    fn test_request_stream_server_second_frame_wt_stream_split_varint_is_frame_unexpected() {
+        // WT_STREAM 型の可変長整数が 2 チャンクに分割されて到着しても、
+        // 型が確定した時点で不正位置と判定できること
+        // (draft-ietf-webtrans-http3-17 Section 4.3)
+        let mut stream = RequestStream::new(0, Role::Server);
+
+        // 1 フレーム目: 予約フレーム (0x21) は無視される (RFC 9114 Section 7.2.8)
+        let reserved = [0x21, 0x00];
+        stream.receive(&reserved, false);
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
+        assert!(result.is_none(), "予約フレームは無視されること: {result:?}");
+
+        // 2 フレーム目: type=0x41 の 1 バイト目だけでは型を確定できないため待機する
+        let chunk1 = [0x40];
+        stream.receive(&chunk1, false);
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
+        assert!(result.is_none(), "型が未確定の間は待機すること: {result:?}");
+
+        // 2 バイト目で型が 0x41 に確定するため、length の到着を待たずに接続エラー
+        let chunk2 = [0x41];
+        stream.receive(&chunk2, false);
+        let result = stream.process_raw();
+        assert!(
+            matches!(
+                result,
+                Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
+            ),
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_request_stream_client_first_frame_wt_stream_without_length_is_frame_unexpected() {
+        // クライアント側でも length を持たない WT_STREAM 型だけで判定できること
+        // (draft-ietf-webtrans-http3-17 Section 4.3)
         let mut stream = RequestStream::new(0, Role::Client);
-        // WT_STREAM (0x41) フレーム: type=0x41 (2 バイト varint), len=0
-        let wt_stream = [0x40, 0x41, 0x00];
-        stream.receive(&wt_stream, false);
+        let wt_stream_type_only = [0x40, 0x41];
+        stream.receive(&wt_stream_type_only, false);
         let result = stream.process_raw();
         assert!(
-            matches!(result, Err(Error::ConnectionError(ErrorCode::FrameError))),
-            "expected ConnectionError(FrameError), got {result:?}"
+            matches!(
+                result,
+                Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
+            ),
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
         );
     }
 
     #[test]
-    fn test_request_stream_client_second_frame_wt_stream_is_frame_error() {
+    fn test_request_stream_client_second_frame_wt_stream_is_frame_unexpected() {
         // クライアント側のリクエストストリーム 2 フレーム目以降の WT_STREAM (0x41) も
-        // H3_FRAME_ERROR 接続エラー (draft-ietf-webtrans-http3-16 Section 4.3)
+        // H3_FRAME_UNEXPECTED 接続エラー (draft-ietf-webtrans-http3-17 Section 4.3)
         let mut stream = RequestStream::new(0, Role::Client);
 
         // 1 フレーム目: 予約フレーム (0x21) は無視される (RFC 9114 Section 7.2.8)
         let reserved = [0x21, 0x00];
         stream.receive(&reserved, false);
-        let result = stream.process_raw().expect("test must succeed");
-        assert!(
-            result.is_none(),
-            "expected reserved frame to be skipped, got {result:?}"
-        );
+        let result = stream.process_raw().expect("テスト用の処理に成功すること");
+        assert!(result.is_none(), "予約フレームは無視されること: {result:?}");
 
         // 2 フレーム目: WT_STREAM (0x41) は接続エラー
         let wt_stream = [0x40, 0x41, 0x00];
         stream.receive(&wt_stream, false);
         let result = stream.process_raw();
         assert!(
-            matches!(result, Err(Error::ConnectionError(ErrorCode::FrameError))),
-            "expected ConnectionError(FrameError), got {result:?}"
+            matches!(
+                result,
+                Err(Error::ConnectionError(ErrorCode::FrameUnexpected))
+            ),
+            "H3_FRAME_UNEXPECTED になること: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_request_stream_data_payload_starting_with_wt_stream_value_is_accepted() {
+        // アプリケーションデータのペイロード中に WT_STREAM と同じバイト列が現れても、
+        // フレームタイプの位置ではないため WT_STREAM として扱わないこと
+        // (draft-ietf-webtrans-http3-17 Section 4.3)
+        let mut stream = RequestStream::new(0, Role::Server);
+
+        let headers_frame = [0x01, 0x03, 0x00, 0x00, 0xd1];
+        stream.receive(&headers_frame, false);
+        let _ = stream
+            .process_raw()
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
+
+        // DATA フレーム (type=0x00, len=2) のペイロードが 0x40 0x41 で始まる
+        let data_frame = [0x00, 0x02, 0x40, 0x41];
+        stream.receive(&data_frame, false);
+        let result = stream
+            .process_raw()
+            .expect("テスト用の処理に成功すること")
+            .expect("テスト用の処理に成功すること");
+        assert!(
+            matches!(result, RawReceivedData::Data(ref data) if data == &[0x40, 0x41]),
+            "ペイロード中の 0x41 は WT_STREAM として扱わないこと: {result:?}"
         );
     }
 }

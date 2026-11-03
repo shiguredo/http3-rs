@@ -166,8 +166,9 @@ fn encode_unknown_frame(buf: &mut [u8], payload: &UnknownFrame) -> Option<usize>
     let frame_type = payload.frame_type();
 
     // WT_STREAM (0x41) は長さを持たないフレームであり、HTTP/3 フレームとして送信してはならない
-    // (draft-ietf-webtrans-http3-16 Section 4.3: "Endpoints MUST NOT send WT_STREAM as a frame
-    // type on HTTP/3 streams other than the very first bytes of a request stream")。
+    // (draft-ietf-webtrans-http3-17 Section 4.3: "Endpoints MUST NOT send WT_STREAM as a frame
+    // type on HTTP/3 streams other than as the very first bytes sent by the initiator of a
+    // bidirectional stream")。
     // コードが表す数値は webtransport ストリームの双方向シグナル値と同じだが、
     // frame モジュールは webtransport 層よりも下位のレイヤーであるためリテラルで扱う。
     if frame_type.get() == 0x41 {
@@ -218,7 +219,7 @@ mod tests {
     #[test]
     fn test_encode_unknown_frame_wt_stream_is_rejected() {
         // WT_STREAM (0x41) をフレームとしてエンコードすると None
-        // (draft-ietf-webtrans-http3-16 Section 4.3)
+        // (draft-ietf-webtrans-http3-17 Section 4.3)
         let payload = UnknownFrame::new(VarInt::from_static(0x41), vec![0x00, 0x01])
             .expect("test must succeed");
         let frame = Frame::Unknown(payload);
