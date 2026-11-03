@@ -3,7 +3,7 @@
 - Created: 2026-11-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/update-wt-draft-17-documentation
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-03
 - Category: doc
 
 ## 目的
