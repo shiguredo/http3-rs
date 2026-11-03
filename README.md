@@ -31,7 +31,7 @@ Rust で実装された依存 0 かつ Sans I/O な HTTP/3 と WebTransport over
 - QUIC 非依存
   - 任意の QUIC 実装と組み合わせ可能
 - RFC 9114 (HTTP/3) および RFC 9204 (QPACK) 準拠
-- WebTransport over HTTP/3 (draft-ietf-webtrans-http3-16) サポート
+- WebTransport over HTTP/3 (draft-ietf-webtrans-http3 の draft-02 / 07 / 14 / 15 / 16 / 17) サポート
 
 ## 使い方
 
@@ -335,7 +335,7 @@ assert_eq!(session.state(), SessionState::Draining);
 
 ## WebTransport over HTTP/3
 
-draft-ietf-webtrans-http3 の複数バージョンをサポートし、ピアの SETTINGS から自動的に draft を判定して応答します。
+draft-ietf-webtrans-http3 の複数バージョンをサポートします。ピアの SETTINGS から接続単位で版を選択し、選択した版に合わせて CONNECT とストリームを処理します。
 
 ### 対応 draft バージョン
 
@@ -344,38 +344,147 @@ draft-ietf-webtrans-http3 の複数バージョンをサポートし、ピアの
 | draft-02 | 対応 | `SETTINGS_ENABLE_WEBTRANSPORT` / `:protocol = webtransport` |
 | draft-07 | 対応 | `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` / セッションゴーン / ドレイン |
 | draft-14 | 対応 | `SETTINGS_WT_MAX_SESSIONS` / カプセルベースフロー制御 |
-| draft-15 | 対応 | `SETTINGS_WT_ENABLED` / `:protocol = webtransport-h3` / ALPN |
+| draft-15 | 対応 | `SETTINGS_WT_ENABLED` (`0x2c7cf000`) / `:protocol = webtransport-h3` / ALPN |
 | draft-16 | 対応 | 単調性チェック厳密化 / エラー種別変更 / `SETTINGS_WT_ENABLED > 1` 検証 |
+| draft-17 | 対応 | 本文版 / `SETTINGS_WT_ENABLED` (`0x20b8933b`) / 前回接続の WT SETTINGS を破棄。部分配送付きリセットのアプリケーション指定オフセットは未対応 |
+
+draft-17 の仕様は、その本文で定義された版 (以下、本文版) と、それ以前の draft で定義された版を `SETTINGS_WT_ENABLED` のコードポイントで区別します。draft-17 の時点では RFC 番号が確定していないため、本 README ではこの版を draft-17 の本文版と呼びます。本文版は `0x20b8933b` を使い、draft-15 / 16 の `0x2c7cf000` とは別のコードポイントで識別します。
+
+SETTINGS コードポイントが同一のため、draft-15 と draft-16 は SETTINGS だけでは区別できません。`SETTINGS_WT_ENABLED > 1` をクライアントが受信した場合の拒否は draft-16 / 17 の規則です。draft-15 と draft-16 はコードポイントを共有するため、本実装は draft-15 を選んだ接続にもこの規則を適用します。フロー制御カプセルの単調性判定はドラフト分岐を持たず、draft-14 以降のすべての版に適用します。
 
 詳細な差分は [`docs/WT_HTTP3.md`](docs/WT_HTTP3.md) を参照してください。
 
-SETTINGS コードポイントが同一のため、draft-15 と draft-16 は SETTINGS だけでは区別できません。本実装は draft-16 の検証ロジック (単調性チェック、`SETTINGS_WT_ENABLED > 1` の拒否など) を draft-15 以降に適用します。
+### バージョンネゴシエーション
+
+接続で使う版は、SETTINGS のコードポイントを交わして接続単位で決めます。端点は対応する版のコードポイントを 1 回ずつ広告し、`0x2c7cf000` (draft-15 / 16) と `0x20b8933b` (draft-17 の本文版) を区別します。
+
+版の選択は、draft-17 の本文版、draft-15 / 16、draft-07、draft-14、draft-02 の優先順位で行います。この順位は「数値の大きい版を選ぶ」規則に対する例外を含みます。draft-07 と draft-14 のコードポイントが併送された場合、本実装は Safari 26.4 (Network.framework) との互換のため draft-07 を優先します。この例外は Safari 以外の端点が同じ組み合わせを広告した場合にも適用されます。詳細は [`docs/SAFARI_WT.md`](docs/SAFARI_WT.md) を参照してください。
+
+- サーバーは、クライアントが送る `SETTINGS_WT_ENABLED` を通常は無視します。旧 draft にも対応するサーバーは、クライアントが広告したコードポイントを版の選択に使います
+- サーバーは、クライアントが `0x20b8933b` を広告していれば本文版を選びます。広告していなければ、共通する旧 draft のうち優先順位の高い版を選びます。共通する旧 draft がなく、サーバーが本文版に対応していれば本文版を選びます
+- 本文版だけに対応するクライアントは `SETTINGS_WT_ENABLED` を送りません。サーバーが `0x20b8933b` を広告していれば、クライアントは本文版を選びます。サーバーは `SETTINGS_WT_ENABLED` を送らないクライアントを本文版として扱います
+- 本文版と旧 draft の両方に対応するクライアントは、対応するコードポイントをそれぞれ広告します。`0x20b8933b` を送った場合、サーバーは本文版を選びます。`0x20b8933b` を送らない場合、サーバーは共通する旧 draft のうち優先順位の高い版を選びます
+- 旧 draft だけに対応するクライアントは、旧 draft のコードポイントだけを広告します。本文版に対応するサーバーは、共通する旧 draft があればそのうち優先順位の高い版を選びます。共通する旧 draft がなければ本文版を選びますが、そのクライアントは本文版に対応しないためセッションを確立できません
+- クライアントは、ローカルとサーバーが共通して広告する版のうち優先順位の高い版を選びます。共通する版がなく、ローカルが版を 1 つも広告せず、サーバーが `0x20b8933b` を広告している場合は本文版を選びます。それ以外で共通する版がない場合、使用する版がないため WebTransport を開始しません
+- サーバーは、クライアントの SETTINGS を受信するまで WebTransport リクエストの処理を保留します。本文版に対応せず、`SETTINGS_WT_ENABLED` を広告していながら共通する版がない場合、サーバーはクライアントの CONNECT を拒否します
+
+### 設定方法
+
+`webtransport::Settings::for_draft_versions` は、渡した版の SETTINGS コードポイントを広告する設定を組み立てます。
+
+- `DraftVersion::Draft17` を渡すと `SETTINGS_WT_ENABLED` (`0x20b8933b`) を送ります。サーバーが本文版に対応することを示す場合は、この設定が必要です
+- 本文版だけに対応するクライアントは `SETTINGS_WT_ENABLED` を送りません。`for_draft_versions` に `DraftVersion::Draft17` を渡さず、版を 1 つも含まない `webtransport::Settings::new()` を `enable_webtransport_client` に渡します。この場合も、サーバーが `0x20b8933b` を広告していれば本文版が選ばれます
+- 本文版と旧 draft の両方に対応するクライアントは、対応する旧 draft のコードポイントと `DraftVersion::Draft17` の両方を含めます
+- フロー制御を有効にする場合は、`wt_initial_max_streams_uni` などのビルダーメソッドで初期値を設定します。`for_draft_versions` はこれらの初期値を設定しません
+
+```rust
+use shiguredo_http3::Settings;
+use shiguredo_http3::webtransport::{DraftVersion, Settings as WtSettings};
+
+// 本文版に対応するサーバー: SETTINGS_WT_ENABLED (0x20b8933b) を広告する
+let wt = WtSettings::for_draft_versions(
+    &[DraftVersion::Draft17],
+    shiguredo_http3::VarInt::from_static(1),
+);
+let server = Settings::default().enable_webtransport_server(wt);
+
+// 本文版だけに対応するクライアント: SETTINGS_WT_ENABLED を送らない
+let wt = WtSettings::new();
+let client = Settings::default().enable_webtransport_client(wt);
+```
 
 ### draft 毎の主要な挙動の違い
 
-| 項目 | draft-02 | draft-07 | draft-14 | draft-15 / draft-16 |
-|------|----------|----------|----------|---------------------|
-| `:protocol` 値 | `webtransport` | `webtransport` | `webtransport` | `webtransport-h3` |
-| SETTINGS パラメータ | `SETTINGS_ENABLE_WEBTRANSPORT` (`0x2b603742`) | `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` (`0xc671706a`) | `SETTINGS_WT_MAX_SESSIONS` (`0x14e9cd29`) | `SETTINGS_WT_ENABLED` (`0x2c7cf000`) |
-| バージョンネゴシエーション | `Sec-Webtransport-Http3-Draft02` ヘッダー | SETTINGS コードポイント | SETTINGS コードポイント + ALPN ヘッダー | SETTINGS コードポイント + ALPN ヘッダー |
-| アプリケーションエラーコード幅 | 8 bit | 32 bit | 32 bit | 32 bit |
-| `SETTINGS_ENABLE_CONNECT_PROTOCOL` | 暗黙 (不要) | サーバーのみ必須 | サーバーのみ必須 | サーバーのみ必須 |
-| `SETTINGS_H3_DATAGRAM` | 不要 | 明示的に必須 | 明示的に必須 | 明示的に必須 |
-| QUIC `max_datagram_frame_size` | 不要 | 明示的に必須 | 明示的に必須 | 明示的に必須 |
-| `reset_stream_at` transport parameter | 不要 | 不要 | 必須 | 必須 |
-| データグラム形式 | Datagram Format Type `WEB_TRANSPORT` (`0xff7c00`) | Quarter Stream ID (RFC 9297) | Quarter Stream ID (RFC 9297) | Quarter Stream ID (RFC 9297) |
-| セッション終了カプセル | `CLOSE_WEBTRANSPORT_SESSION` | `CLOSE_WEBTRANSPORT_SESSION` | `WT_CLOSE_SESSION` | `WT_CLOSE_SESSION` |
-| ドレインカプセル | なし | `DRAIN_WEBTRANSPORT_SESSION` | `WT_DRAIN_SESSION` | `WT_DRAIN_SESSION` |
-| セッション終了時のエラーコード | 指定なし | `WEBTRANSPORT_SESSION_GONE` (`0x170d7b68`) | `WT_SESSION_GONE` (`0x170d7b68`) | `WT_SESSION_GONE` (`0x170d7b68`) |
-| セッションレベルフロー制御 | なし | なし | カプセルベース (`WT_MAX_DATA` / `WT_MAX_STREAMS`) | カプセルベース (`WT_MAX_DATA` / `WT_MAX_STREAMS`) |
-| ALPN ネゴシエーション | なし | なし | `WT-Available-Protocols` / `WT-Protocol` | `WT-Available-Protocols` / `WT-Protocol` |
-| TLS エクスポーター | なし | なし | `EXPORTER-WebTransport` | `EXPORTER-WebTransport` |
-| 優先度制御 | なし | なし | RFC 9218 推奨 | RFC 9218 推奨 |
-| `RESET_STREAM_AT` の使用 | 不要 | 不要 | 必須 (ストリームヘッダー確実配信のため) | 必須 (ストリームヘッダー確実配信のため) |
+#### プロトコルとバージョン
+
+| draft | `:protocol` 値 | アプリケーションエラーコード幅 | SETTINGS パラメータ (コードポイント) |
+|-------|----------------|--------------------------------|--------------------------------------|
+| draft-02 | `webtransport` | 8 bit | `SETTINGS_ENABLE_WEBTRANSPORT` (`0x2b603742`) |
+| draft-07 | `webtransport` | 32 bit | `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` (`0xc671706a`) |
+| draft-14 | `webtransport` | 32 bit | `SETTINGS_WT_MAX_SESSIONS` (`0x14e9cd29`) |
+| draft-15 / draft-16 | `webtransport-h3` | 32 bit | `SETTINGS_WT_ENABLED` (`0x2c7cf000`) |
+| draft-17 | `webtransport-h3` | 32 bit | `SETTINGS_WT_ENABLED` (`0x20b8933b`) |
+
+バージョンネゴシエーションは、draft-02 が `Sec-Webtransport-Http3-Draft02` ヘッダー、draft-07 以降が SETTINGS コードポイントです。draft-14 以降は ALPN (`WT-Available-Protocols` / `WT-Protocol`) も併用します。draft-17 は本文版へのフォールバックを含みます。
+
+#### 前提条件
+
+| draft | `SETTINGS_ENABLE_CONNECT_PROTOCOL` | `SETTINGS_H3_DATAGRAM` | QUIC `max_datagram_frame_size` | `reset_stream_at` transport parameter |
+|-------|-------------------------------------|------------------------|--------------------------------|---------------------------------------|
+| draft-02 | 暗黙 (不要) | 不要 | 不要 | 不要 |
+| draft-07 | サーバーのみ必須 | 明示的に必須 | 明示的に必須 | 不要 |
+| draft-14 | サーバーのみ必須 | 明示的に必須 | 明示的に必須 | 必須 |
+| draft-15 / draft-16 | サーバーのみ必須 | 明示的に必須 | 明示的に必須 | 必須 |
+| draft-17 | サーバーのみ必須 | 明示的に必須 | 明示的に必須 | 必須 |
+
+#### セッション機能
+
+| draft | セッションレベルフロー制御 | ALPN ネゴシエーション | TLS エクスポーター | 優先度制御 |
+|-------|----------------------------|-----------------------|--------------------|------------|
+| draft-02 | なし | なし | なし | なし |
+| draft-07 | なし | なし | なし | なし |
+| draft-14 | カプセルベース (`WT_MAX_DATA` / `WT_MAX_STREAMS`) | `WT-Available-Protocols` / `WT-Protocol` | `EXPORTER-WebTransport` | RFC 9218 推奨 |
+| draft-15 / draft-16 | カプセルベース (`WT_MAX_DATA` / `WT_MAX_STREAMS`) | `WT-Available-Protocols` / `WT-Protocol` | `EXPORTER-WebTransport` | RFC 9218 推奨 |
+| draft-17 | カプセルベース (`WT_MAX_DATA` / `WT_MAX_STREAMS`) | `WT-Available-Protocols` / `WT-Protocol` | `EXPORTER-WebTransport` | RFC 9218 推奨 |
+
+#### 終了とデータグラム
+
+| draft | データグラム形式 | セッション終了カプセル | ドレインカプセル | セッション終了時のエラーコード |
+|-------|------------------|------------------------|------------------|--------------------------------|
+| draft-02 | Datagram Format Type `WEB_TRANSPORT` (`0xff7c00`) | `CLOSE_WEBTRANSPORT_SESSION` | なし | 指定なし |
+| draft-07 | Quarter Stream ID (RFC 9297) | `CLOSE_WEBTRANSPORT_SESSION` | `DRAIN_WEBTRANSPORT_SESSION` | `WEBTRANSPORT_SESSION_GONE` (`0x170d7b68`) |
+| draft-14 | Quarter Stream ID (RFC 9297) | `WT_CLOSE_SESSION` | `WT_DRAIN_SESSION` | `WT_SESSION_GONE` (`0x170d7b68`) |
+| draft-15 / draft-16 | Quarter Stream ID (RFC 9297) | `WT_CLOSE_SESSION` | `WT_DRAIN_SESSION` | `WT_SESSION_GONE` (`0x170d7b68`) |
+| draft-17 | Quarter Stream ID (RFC 9297) | `WT_CLOSE_SESSION` | `WT_DRAIN_SESSION` | `WT_SESSION_GONE` (`0x170d7b68`) |
+
+#### 0-RTT とリセット
+
+| draft | 0-RTT 再開時の WT SETTINGS | 不正な位置の `WT_STREAM` | `RESET_STREAM_AT` の使用 |
+|-------|----------------------------|--------------------------|---------------------------|
+| draft-02 | 0-RTT 非対応 | — | 不要 |
+| draft-07 | 最大セッション数を減らせない | `H3_FRAME_ERROR` | 不要 |
+| draft-14 | サーバーは最大セッション数と初期フロー制御値を減らせない。減少は `H3_SETTINGS_ERROR` | `H3_FRAME_ERROR` | 必須 (ストリームヘッダー確実配信のため) |
+| draft-15 | 同上 (サーバー側の義務) | `H3_FRAME_ERROR` | 必須 (ストリームヘッダー確実配信のため) |
+| draft-16 | サーバーは初期フロー制御値を減らせない。クライアントも減少検出時に `H3_SETTINGS_ERROR` で接続を閉じる | `H3_FRAME_ERROR` | 必須 (ストリームヘッダー確実配信のため) |
+| draft-17 | 前回接続の値を破棄し、現在値だけを使う | `H3_FRAME_UNEXPECTED` | 必須 (ストリームヘッダーとアプリケーション指定オフセットの確実配信のため) |
 
 draft-02 / draft-07 ではセッションレベルフロー制御が存在しないため、同時セッションは原則 1 つに制限されます。draft-14 以降ではカプセルベースのフロー制御 (`WT_MAX_DATA`, `WT_MAX_STREAMS`, `WT_DATA_BLOCKED`, `WT_STREAMS_BLOCKED`) によって複数セッションを扱えます。
 
 sans-I/O 層では、ピアの SETTINGS 受信後・セッション確立前に `webtransport::Session::initialize_remote_limits` を 1 回呼ぶことで、ピアが宣言した初期上限 (`SETTINGS_WT_INITIAL_MAX_*`) を送信側フロー制御と `WT_MAX_STREAMS` / `WT_MAX_DATA` の単調性検証の基準に反映できます。
+
+不正な位置の `WT_STREAM` について、旧 draft の仕様値は `H3_FRAME_ERROR` ですが、本実装は全版で `H3_FRAME_UNEXPECTED` を返します。
+
+### 0-RTT 再開
+
+CONNECT は safe メソッドではないため、0-RTT パケットで WebTransport セッションを開始できません。この制約はすべての版で共通です。
+
+- draft-07 では、サーバーが 0-RTT を受け入れる場合、最大セッション数を前回より減らしてはなりません
+- draft-14 / 15 では、サーバーが 0-RTT を受け入れる場合、最大セッション数と初期フロー制御値 (`SETTINGS_WT_INITIAL_MAX_*`) を前回より減らしてはなりません。減少は互換でない変更とみなされ、`H3_SETTINGS_ERROR` 接続エラーになります。この義務はサーバー側にあります
+- draft-16 では、サーバーが 0-RTT を受け入れる場合に初期フロー制御値を前回より減らせないことに加え、クライアントは再開接続の SETTINGS がキャッシュしたフロー制御値を減少させていたら `H3_SETTINGS_ERROR` で接続を閉じなければなりません。接続を閉じる義務がクライアントに明示されたのは draft-16 からです
+- draft-17 の本文版では、クライアントは前回接続から保持していた WT SETTINGS の値を破棄し、現在接続で受信した値だけを使います。仕様上、サーバーは前回送信した値に関係なく 0-RTT を受理できます。本実装は、接続で draft-17 を選択した場合に前回値と比較しません
+- draft-02 は 0-RTT に対応しません。draft-07 の最大セッション数の減少検出は未対応です
+
+本実装は、クライアント側で draft-14 / 15 / 16 を選択した接続の減少を検出し、`H3_SETTINGS_ERROR` で接続を閉じます。draft-14 / 15 の仕様上の義務はサーバー側ですが、クライアントは受信した SETTINGS から同じ違反を検出できます。版を決定できない場合も、ローカルが draft-14 / 15 に対応して draft-17 に対応せず、ピアも draft-17 を広告しないときに限り、同じ減少検出を行います。
+
+### 接続共有時の制約 (draft-17 Section 8)
+
+複数の WebTransport セッションに 1 本の QUIC 接続を共有させる端点は、WebTransport のフロー制御を実装しなければなりません。この MUST は draft-16 で既に規定されています (Section 5.1 / Section 8)。draft-17 で追加されたのは、フロー制御を無効にした場合の停滞とデッドロックの説明です。
+
+フロー制御を有効にせずにセッションを接続へ相乗りさせると、セッションは下位 QUIC 接続のストリーム数とデータ量の上限まで使えます。同じ接続の HTTP 応答と QPACK ストリームも接続レベルのフロー制御を共有するため、次のようなデッドロックが起こり得ます。
+
+- アプリケーションが WebTransport の読み取りを、同じ接続上の別の HTTP 応答の完了まで待つ
+- その HTTP 応答が、WebTransport セッションが使い切った接続レベルのフロー制御のために進まない
+- 双方が相手の進行を待ち続ける
+
+回避策は、WebTransport のフロー制御を有効にしてセッションごとの上限を設けるか、WebTransport セッションを別の接続へ分離することです。本ライブラリは SETTINGS とカプセルによるフロー制御を提供しますが、有効にするかどうかはアプリケーションと各アダプターの設定に依存します。
+
+### 先行ストリームとデータグラムの拒否 (draft-17 Section 4.6)
+
+クライアントは 2xx 応答を待たずに、WebTransport のストリームやデータグラムを送れます。サーバーも 2xx 応答を送る前からストリームやデータグラムを送れます。これらは CONNECT の応答より先に到着し得るため、端点はセッションへ関連付けられるまでバッファリングします。バッファリングは必須ではなく、上限を超えた場合は仕様上 `WT_BUFFERED_STREAM_REJECTED` でストリームを閉じ、データグラムを破棄します。
+
+本実装の sans-I/O 層は、上限を超えたストリームを `WebTransportEvent::BufferedStreamRejected` で通知するだけで、`RESET_STREAM` / `STOP_SENDING` を送出しません。通知を受けた利用側 (アダプターまたはアプリケーション) が、イベントの `error_code` を使ってリセットを送る責務を負います。tokio-s2n-quic の `H3Server` は、このイベントを受けて `RESET_STREAM` と `STOP_SENDING` を送ります。WebTransport のセッション API はイベントをアプリケーションへ転送するため、アプリケーションがリセットを送ります。
+
+ストリームの拒否は、そのストリームを送ろうとしたセッションを終了させません。アプリケーションは拒否されたデータを、同じセッションの新しいストリームで送り直せます。本実装は拒否とセッション終了を分けて扱いますが、再送は自動では行いません。アプリケーションが新しいストリームを開いて再送してください。
 
 ### draft-15 と draft-16 の差分
 
@@ -388,15 +497,28 @@ SETTINGS コードポイントと `:protocol` は同一です。draft-16 で変�
 | `WT_MAX_STREAMS` > 2^60 | `H3_DATAGRAM_ERROR` (接続エラー) | `WT_FLOW_CONTROL_ERROR` (セッションエラー) |
 | `WT_STREAMS_BLOCKED` > 2^60 | 検証なし | `WT_FLOW_CONTROL_ERROR` (セッションエラー) |
 | 非対応リソースへの応答 | 404 を推奨 | 405 を推奨 |
-| 0-RTT 再開時のフロー制御値減少 | サーバー側の制約 | クライアントも `H3_SETTINGS_ERROR` で接続を閉じる |
+| 0-RTT 再開時のフロー制御値減少 | サーバー側の義務 | クライアントも `H3_SETTINGS_ERROR` で接続を閉じる |
 | 楽観的カプセル送信 | 規定なし | クライアントは 2xx 受信前にカプセルを送ってよい。サーバーは 2xx 送信まで処理しない |
 
-本実装は draft-16 の検証ロジックを draft-15 以降に適用するため、draft-15 の仕様上のコードである `H3_DATAGRAM_ERROR` は使用せず、`WT_MAX_STREAMS > 2^60` も `WT_FLOW_CONTROL_ERROR` (セッションエラー) として扱います。
+本実装は、フロー制御カプセルの単調性判定 (増加しない値はエラー) と `WT_MAX_STREAMS > 2^60` のエラー種別を draft-14 以降のすべての版に適用します。ドラフト分岐はありません。`SETTINGS_WT_ENABLED > 1` をクライアントが受信した場合の拒否は draft-16 / 17 の規則で、本実装は draft-15 を選んだ接続にも適用します。そのため、draft-15 の仕様上のコードである `H3_DATAGRAM_ERROR` は使用せず、`WT_MAX_STREAMS > 2^60` も `WT_FLOW_CONTROL_ERROR` (セッションエラー) として扱います。
+
+### draft-16 と draft-17 の差分
+
+| 項目 | draft-16 | draft-17 |
+|------|----------|----------|
+| `SETTINGS_WT_ENABLED` のコードポイント | `0x2c7cf000` | `0x20b8933b` |
+| 不正な位置の `WT_STREAM` | `H3_FRAME_ERROR` | `H3_FRAME_UNEXPECTED` |
+| 0-RTT 再開時の WT SETTINGS | 前回値の減少を `H3_SETTINGS_ERROR` とする | 前回値を破棄し、現在値だけを使う |
+| 部分配送付きリセット | Reliable Size をストリームヘッダー長以上にする | Reliable Size にアプリケーション指定オフセットを含める |
+| 接続共有時のフロー制御 | セッション共有時のフロー制御実装 MUST と公平性 | MUST に加え、フロー制御無効時の HTTP / QPACK の停滞とデッドロックを明記 |
+| 先行ストリームの拒否 | 上限超過時の拒否を規定 | 拒否がセッションに影響しないことと、新ストリームでの再送を明記 |
+
+部分配送付きリセットのアプリケーション指定オフセットは未対応です。下位 QUIC API が任意の Reliable Size を受け取れないため、現状の sans-I/O 層はストリームヘッダー長のみを Reliable Size として通知します。詳細は [`docs/WT_HTTP3.md`](docs/WT_HTTP3.md) を参照してください。
 
 ### CONNECT リクエスト/レスポンス
 
 - 拡張 CONNECT (RFC 8441, RFC 9220) によるセッション確立
-- ドラフトバージョンネゴシエーション (draft-02/07/14/15/16)
+- ドラフトバージョンネゴシエーション (draft-02 / 07 / 14 / 15 / 16 / 17)
 - `:protocol` 疑似ヘッダー (`webtransport` / `webtransport-h3`)
 - トランスポートケイパビリティ検証 (SETTINGS / QUIC パラメータ)
 - CONNECT リクエスト/レスポンスバリデーション
@@ -451,6 +573,7 @@ SETTINGS コードポイントと `:protocol` は同一です。draft-16 で変�
 - SETTINGS_WEBTRANSPORT_MAX_SESSIONS (0xc671706a) - draft-07
 - SETTINGS_WT_MAX_SESSIONS (0x14e9cd29) - draft-14
 - SETTINGS_WT_ENABLED (0x2c7cf000) - draft-15 / draft-16
+- SETTINGS_WT_ENABLED (0x20b8933b) - draft-17 の本文版
 - SETTINGS_WT_INITIAL_MAX_STREAMS_UNI (0x2b64) - draft-14 以降
 - SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI (0x2b65) - draft-14 以降
 - SETTINGS_WT_INITIAL_MAX_DATA (0x2b61) - draft-14 以降
@@ -490,7 +613,7 @@ QUIC は crates.io の `shiguredo_ngtcp2_tokio` を、HTTP/3 は shiguredo_http3
 
 ## 規格書
 
-このライブラリが準拠している RFC 一覧です。
+このライブラリが参照している RFC と Internet-Draft の一覧です。未対応の規定は本文に注記しています。
 
 - RFC 9000 - QUIC: A UDP-Based Multiplexed and Secure Transport
   - <https://datatracker.ietf.org/doc/html/rfc9000>
@@ -508,10 +631,10 @@ QUIC は crates.io の `shiguredo_ngtcp2_tokio` を、HTTP/3 は shiguredo_http3
 - RFC 9220 - Bootstrapping WebSockets with HTTP/3
   - <https://datatracker.ietf.org/doc/html/rfc9220>
   - HTTP/3 における拡張 CONNECT の適用
-- draft-ietf-webtrans-overview-12 - WebTransport Protocol Framework
-  - <https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-overview-12>
-- draft-ietf-webtrans-http3-16 - WebTransport over HTTP/3
-  - <https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16>
+- draft-ietf-webtrans-overview-13 - WebTransport Protocol Framework
+  - <https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-overview-13>
+- draft-ietf-webtrans-http3-17 - WebTransport over HTTP/3
+  - <https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-17>
 
 ## ライセンス
 

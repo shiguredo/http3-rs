@@ -1,7 +1,7 @@
 # draft-17 の対応状況と接続共有時の制約を文書化する
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-04
 - Branch: feature/update-wt-draft-17-documentation
 - Polished: 2026-11-03
 - Category: doc
@@ -80,3 +80,15 @@ draft-ietf-webtrans-http3-17 と実装の対応関係を、利用者が判断で
 - `refs/webtrans/draft-ietf-webtrans-http3-16.txt`
 - `refs/webtrans/draft-ietf-webtrans-http3-17.txt`
 - <https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-17.txt>
+
+## 解決方法
+
+- `README.md` の WebTransport 節を draft-17 対応に更新した。対応 draft 表に draft-17 (本文版 / `SETTINGS_WT_ENABLED` = `0x20b8933b`) を追加し、`0x2c7cf000` (draft-15 / 16) との区別、接続単位の版選択規則 (優先順位 draft-17 本文版 → draft-15 / 16 → draft-07 → draft-14 → draft-02、Safari 互換の draft-07 優先)、本文版だけのクライアント、設定方法、0-RTT 再開、接続共有時の制約、先行ストリームとデータグラムの拒否を追加した
+- `README.md` の draft 毎の挙動表を 5 つの表に分割し、draft-17 列と 0-RTT / `WT_STREAM` の行を追加した
+- `docs/WT_HTTP3.md` を draft-17 対応に更新した。総括表とプロトコル / 前提条件 / 機能 / 終了 / 検証 / 0-RTT の各表に draft-17 を追加し、draft-16 から draft-17 への全差分 18 行の対応表 (実装済み / 未対応 / 変更不要の区別) を新設した
+- 不正な位置の `WT_STREAM` のエラーコードを実装に合わせた。旧 draft の仕様値が `H3_FRAME_ERROR` であることは残し、本実装が全版で `H3_FRAME_UNEXPECTED` を返すこと、制御ストリームの SETTINGS 受信前は `H3_MISSING_SETTINGS` を優先することを明記した
+- 0-RTT 再開の義務の主体を版ごとに分けた。draft-07 は最大セッション数、draft-14 / 15 はサーバー側の義務、draft-16 でクライアントが `H3_SETTINGS_ERROR` で接続を閉じる義務が加わり、draft-17 は前回値を破棄する
+- 部分配送付きリセット (draft-17 Section 4.4) について、ngtcp2 の `reset_stream_reliable` はアプリケーション指定オフセットに対応せず、s2n-quic 1.91 は `RESET_STREAM_AT` の送出 API も transport parameter の取得 API も公開していないことを記載し、アプリケーション指定オフセットが未対応であることを明記した
+- 接続共有時のデッドロック条件と回避策、先行ストリーム / データグラムの拒否がセッションを終了させないこと、再送は自動で行わないことを記載した。sans-I/O 層は `BufferedStreamRejected` を通知するだけで、`RESET_STREAM` / `STOP_SENDING` の送出は利用側の責務であることも明記した
+- `crates/tokio-ngtcp2/README.md`、`crates/tokio-s2n-quic/README.md`、`examples/wt_server/README.md` に、各アダプターと example が実際に保証できること (フロー制御の有効 / 無効、`RESET_STREAM_AT` の未対応、Safari 向け応答、`:protocol` のトークン系統の決め方) を記載した
+- 実装と食い違っていた記述を修正した。s2n-quic の版 (1.86 → 1.91)、不正位置の `WT_STREAM` のエラーコード、`--reject-connect` の応答 (404 → 405)、`WT_ALPN_ERROR` / `WT_REQUIREMENTS_NOT_MET` の対応 draft (draft-14 → draft-15 以降)、`RESET_STREAM_AT` の参照 draft、単調性判定の適用範囲 (draft-15 以降 → draft-14 以降)
