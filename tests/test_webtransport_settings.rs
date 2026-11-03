@@ -210,3 +210,203 @@ fn server_accepts_new_codepoint_boundary_values() {
         );
     }
 }
+
+// =========================================================================
+// 複数ドラフト版の広告と広告集合
+// (draft-ietf-webtrans-http3-17 Section 7.1, 9.2)
+// =========================================================================
+
+/// 制御ストリームの生バイト列から SETTINGS の (ID, 値) 一覧を取り出す
+///
+/// SETTINGS のエントリ順は送信側の実装依存であり、版の選択結果に影響しない
+/// ことを確認できるよう、ID と値の組だけを返す。
+fn parse_settings_entries(control: &[u8]) -> Vec<(u64, u64)> {
+    let (stream_type, stream_type_len) =
+        shiguredo_http3::varint::decode(control).expect("制御ストリームタイプを取得できること");
+    assert_eq!(
+        stream_type.get(),
+        0x00,
+        "制御ストリームタイプは 0x00 であること"
+    );
+    let mut pos = stream_type_len;
+
+    let (frame_type, frame_type_len) = shiguredo_http3::varint::decode(&control[pos..])
+        .expect("SETTINGS フレームタイプを取得できること");
+    assert_eq!(
+        frame_type.get(),
+        0x04,
+        "最初のフレームは SETTINGS であること"
+    );
+    pos += frame_type_len;
+
+    let (payload_len, payload_len_size) = shiguredo_http3::varint::decode(&control[pos..])
+        .expect("SETTINGS ペイロード長を取得できること");
+    pos += payload_len_size;
+    let payload_end = pos + payload_len.get() as usize;
+    assert!(
+        payload_end <= control.len(),
+        "SETTINGS ペイロードがストリーム長に収まること"
+    );
+
+    let mut entries = Vec::new();
+    while pos < payload_end {
+        let (id, id_len) =
+            shiguredo_http3::varint::decode(&control[pos..]).expect("SETTINGS ID を取得できること");
+        pos += id_len;
+        let (value, value_len) =
+            shiguredo_http3::varint::decode(&control[pos..]).expect("SETTINGS 値を取得できること");
+        pos += value_len;
+        entries.push((id.get(), value.get()));
+    }
+    entries
+}
+
+/// サーバー設定を構築し、制御ストリームの SETTINGS バイト列を取り出す
+fn server_control_with_drafts(versions: &[DraftVersion]) -> Vec<u8> {
+    let wt = shiguredo_http3::webtransport::Settings::for_draft_versions(
+        versions,
+        shiguredo_http3::webtransport::connect::ServerSettingsParams::default().max_sessions,
+    );
+    let mut server = ServerConnection::new(Settings::new().enable_webtransport_server(wt));
+    server
+        .set_control_stream_id(3)
+        .expect("テスト用の制御ストリーム設定に成功すること");
+    let (control, _) = server
+        .take_stream_data(3)
+        .expect("テスト用のサーバー SETTINGS 取得に成功すること");
+    control
+}
+
+#[test]
+fn for_draft_versions_advertises_old_and_new_codepoints_once() {
+    // 新旧両対応の端点は、異なる SETTINGS_WT_ENABLED のコードポイントを
+    // それぞれ 1 回だけ広告する
+    // (draft-ietf-webtrans-http3-17 Section 7.1)
+    let control = server_control_with_drafts(&[DraftVersion::Draft15, DraftVersion::Draft17]);
+    let entries = parse_settings_entries(&control);
+
+    let old = entries
+        .iter()
+        .filter(|(id, _)| *id == WT_ENABLED_DRAFT15_16)
+        .collect::<Vec<_>>();
+    let new = entries
+        .iter()
+        .filter(|(id, _)| *id == WT_ENABLED_DRAFT17)
+        .collect::<Vec<_>>();
+    assert_eq!(old.len(), 1, "旧コードポイントは 1 回だけ広告されること");
+    assert_eq!(new.len(), 1, "新コードポイントは 1 回だけ広告されること");
+    assert_eq!(*old[0], (WT_ENABLED_DRAFT15_16, 1));
+    assert_eq!(*new[0], (WT_ENABLED_DRAFT17, 1));
+}
+
+#[test]
+fn for_draft_versions_with_zero_max_sessions_is_not_advertised() {
+    // max_sessions が 0 の場合、draft-07 / draft-14 の設定値が 0 になり
+    // 広告として扱われない (draft-ietf-webtrans-http3-17 Section 7.1)
+    let wt = shiguredo_http3::webtransport::Settings::for_draft_versions(
+        &[DraftVersion::Draft07, DraftVersion::Draft14],
+        vi(0),
+    );
+    assert!(
+        wt.advertised_draft_versions().is_empty(),
+        "max_sessions が 0 なら旧 draft を広告しないこと"
+    );
+    assert!(!wt.is_enabled());
+}
+
+#[test]
+fn for_draft_versions_advertises_legacy_codepoints() {
+    // draft-02 / 07 / 14 は SETTINGS_WT_ENABLED 以外の ID で広告する
+    let control = server_control_with_drafts(&[
+        DraftVersion::Draft02,
+        DraftVersion::Draft07,
+        DraftVersion::Draft14,
+    ]);
+    let entries = parse_settings_entries(&control);
+    assert!(
+        entries.contains(&(0x2b603742, 1)),
+        "draft-02 の ID を広告すること"
+    );
+    assert!(
+        entries.contains(&(0xc671706a, 1)),
+        "draft-07 の ID を max_sessions で広告すること"
+    );
+    assert!(
+        entries.contains(&(0x14e9cd29, 1)),
+        "draft-14 の ID を max_sessions で広告すること"
+    );
+    // SETTINGS_WT_ENABLED は広告しない
+    assert!(
+        !entries
+            .iter()
+            .any(|(id, _)| *id == WT_ENABLED_DRAFT15_16 || *id == WT_ENABLED_DRAFT17)
+    );
+}
+
+#[test]
+fn for_draft_versions_does_not_advertise_flow_control_initial_values() {
+    // 版の広告とフロー制御の初期値は別の関心事であり、Safari 26.4 は応答
+    // SETTINGS に SETTINGS_WT_INITIAL_MAX_* が含まれると CONNECT をリセットする
+    let control = server_control_with_drafts(&[
+        DraftVersion::Draft07,
+        DraftVersion::Draft15,
+        DraftVersion::Draft17,
+    ]);
+    let entries = parse_settings_entries(&control);
+    assert!(
+        !entries
+            .iter()
+            .any(|(id, _)| *id == 0x2b61 || *id == 0x2b64 || *id == 0x2b65),
+        "SETTINGS_WT_INITIAL_MAX_* を広告しないこと"
+    );
+}
+
+#[test]
+fn advertised_draft_versions_reflects_wire_settings() {
+    // 受信した SETTINGS の広告集合を、生バイト列から構築した接続で確認する
+    let control = build_control_stream_with_settings(&[
+        (WT_ENABLED_DRAFT15_16, 1),
+        (WT_ENABLED_DRAFT17, 1),
+        (0x2b603742, 1),
+    ]);
+    let mut client = ClientConnection::new(Settings::new());
+    client
+        .set_control_stream_id(2)
+        .expect("テスト用の制御ストリーム設定に成功すること");
+    client
+        .feed_stream(3, &control, false)
+        .expect("テスト用のサーバー SETTINGS 受信に成功すること");
+    while let Some(_ev) = client
+        .poll_event()
+        .expect("テスト用のイベント取得に成功すること")
+    {}
+    let peer_wt = client
+        .peer_settings()
+        .expect("ピア SETTINGS が保持されること")
+        .wt_settings
+        .as_ref()
+        .expect("WebTransport SETTINGS が保持されること");
+    assert_eq!(
+        peer_wt.advertised_draft_versions(),
+        vec![
+            DraftVersion::Draft17,
+            DraftVersion::Draft15,
+            DraftVersion::Draft02
+        ]
+    );
+}
+
+#[test]
+fn advertised_draft_versions_is_empty_without_wt_codepoints() {
+    // WebTransport の SETTINGS を受信しても、版のコードポイントがなければ
+    // 広告集合は空になる
+    let client = make_client_with_server_settings(&[(0x2b61, 1024)]);
+    let peer_wt = client
+        .peer_settings()
+        .expect("ピア SETTINGS が保持されること")
+        .wt_settings
+        .as_ref()
+        .expect("WebTransport SETTINGS が保持されること");
+    assert!(peer_wt.advertised_draft_versions().is_empty());
+    assert!(!peer_wt.is_enabled());
+}

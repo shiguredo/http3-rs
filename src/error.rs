@@ -163,7 +163,10 @@ pub enum WtSetupError {
     PeerSettingsNotReceived,
     /// peer が WebTransport を有効化していない
     WebTransportNotEnabled,
-    /// peer のドラフトバージョンが不明
+    /// 接続で使うドラフトバージョンを決められない
+    ///
+    /// ピアの SETTINGS からドラフト版を検出できない、またはローカルが対応する版と
+    /// ピアが広告する版に交差がない場合に返る。
     UnknownDraftVersion,
     /// ENABLE_CONNECT_PROTOCOL が未設定 (draft-07/14/15 で必須)
     EnableConnectProtocolMissing,
@@ -182,7 +185,7 @@ impl fmt::Display for WtSetupError {
         match self {
             Self::PeerSettingsNotReceived => write!(f, "peer SETTINGS not received"),
             Self::WebTransportNotEnabled => write!(f, "WebTransport not enabled by peer"),
-            Self::UnknownDraftVersion => write!(f, "unknown WebTransport draft version"),
+            Self::UnknownDraftVersion => write!(f, "no WebTransport draft version is negotiated"),
             Self::EnableConnectProtocolMissing => {
                 write!(f, "ENABLE_CONNECT_PROTOCOL not set by peer")
             }

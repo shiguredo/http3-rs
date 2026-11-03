@@ -45,7 +45,7 @@ pub use capsule::{
 };
 pub use connect::{
     CapabilityError, ConnectError, ConnectRequest, ConnectResponse, DraftVersion,
-    PROTOCOL_WEBTRANSPORT_DRAFT02, PROTOCOL_WEBTRANSPORT_H3, ServerSettingsParams,
+    PROTOCOL_WEBTRANSPORT_DRAFT02, PROTOCOL_WEBTRANSPORT_H3, ProtocolToken, ServerSettingsParams,
     TransportCapabilities,
 };
 pub use datagram::Datagram;

@@ -8,8 +8,10 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
-use shiguredo_http3::webtransport::{ConnectRequest, ConnectResponse, StreamHeader};
-use shiguredo_http3::{Event, Settings, VarInt, WebTransportEvent};
+use shiguredo_http3::webtransport::{
+    ConnectRequest, ConnectResponse, DraftVersion, ServerSettingsParams, StreamHeader,
+};
+use shiguredo_http3::{Event, Settings, WebTransportEvent};
 use shiguredo_ngtcp2_tokio::ConnectionId;
 
 use crate::client::Client;
@@ -19,15 +21,29 @@ use crate::{Error, Result};
 
 /// WebTransport 用の HTTP/3 設定を作成する
 ///
-/// draft-02 / draft-07 / draft-15 の SETTINGS を同時に送信する。
+/// draft-02 / draft-07 / draft-15 / draft-16 / draft-17 の SETTINGS を同時に送信する。
+/// 複数のドラフト版に対応する端点は、対応する異なるコードポイントをそれぞれ
+/// 1 回だけ広告する (draft-ietf-webtrans-http3-17 Section 7.1)。接続で使う版は
+/// 接続単位の選択 (`Connection::negotiated_wt_draft_version`) で決める。
 /// WT_INITIAL_MAX_* を送らないため WebTransport のフロー制御は無効になり、
 /// ストリーム数とデータ量は QUIC のフロー制御だけで制限される
 /// (相互運用テストではフロー制御カプセルのやり取りを検証しない)。
+/// Safari は draft-07 と draft-14 を併送し、応答 SETTINGS に
+/// SETTINGS_WT_ENABLED や SETTINGS_WT_MAX_SESSIONS を含めると CONNECT を拒否する。
+/// 本アダプターはクライアントの SETTINGS を見て応答を変えないため、Safari との
+/// 相互運用を目的とする場合はサーバー側で別途対応が必要になる。
+/// (docs/SAFARI_WT.md)
 fn wt_settings() -> shiguredo_http3::webtransport::Settings {
-    shiguredo_http3::webtransport::Settings::new()
-        .wt_enabled(VarInt::from_static(1))
-        .enable_webtransport_draft02(true)
-        .webtransport_max_sessions_draft07(VarInt::from_static(1))
+    shiguredo_http3::webtransport::Settings::for_draft_versions(
+        &[
+            DraftVersion::Draft02,
+            DraftVersion::Draft07,
+            DraftVersion::Draft14,
+            DraftVersion::Draft15,
+            DraftVersion::Draft17,
+        ],
+        ServerSettingsParams::default().max_sessions,
+    )
 }
 
 /// WebTransport クライアント用の HTTP/3 設定
@@ -99,17 +115,20 @@ impl ClientWebTransportSession {
     }
 
     /// WebTransport セッションを開始する
+    ///
+    /// 接続単位の版選択 (`Connection::negotiated_wt_draft_version`) の結果に
+    /// 対応する `:protocol` 疑似ヘッダーで CONNECT を組み立てる。接続で使う版が
+    /// 決まらないと `:protocol` のトークンを選べないため、選択結果がない場合は
+    /// セッションを開始しない (draft-ietf-webtrans-http3-17 Section 7.1, 9.1)。
     pub async fn open_session(&mut self, authority: &str, path: &str) -> Result<u64> {
-        // ピアが対応するドラフトに合わせて `:protocol` 疑似ヘッダーを変える
-        // (draft-02/07/14 は "webtransport"、draft-15 は "webtransport-h3")
-        let mut request = ConnectRequest::new("https", authority, path);
-        if let Some(draft) = self
+        let draft = self
             .client
-            .peer_settings()
-            .and_then(|settings| settings.webtransport_draft_pattern())
-        {
-            request = request.draft_version(draft);
-        }
+            .h3
+            .negotiated_wt_draft_version()
+            .ok_or(Error::InvalidState(
+                "no WebTransport draft version is negotiated",
+            ))?;
+        let request = ConnectRequest::new("https", authority, path).draft_version(draft);
         let headers = request
             .to_headers()
             .map_err(|e| Error::InvalidArgument(format!("invalid CONNECT headers: {e}")))?;

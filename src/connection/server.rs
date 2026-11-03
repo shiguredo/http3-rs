@@ -143,6 +143,25 @@ impl ServerConnection {
         self.inner.local_settings()
     }
 
+    /// 接続単位で選択した WebTransport のドラフト版を返す
+    ///
+    /// 次の順で決める (draft-ietf-webtrans-http3-17 Section 7.1)。
+    /// - クライアントが本文版のコードポイントを広告していれば本文版
+    /// - そうでなければ対応する旧 ID のうち最も優先度の高い版
+    /// - どちらもなければ、ローカルが本文版に対応していれば本文版
+    ///
+    /// `None` を返すのは、クライアントの SETTINGS を受信していない場合と、
+    /// ローカルが本文版に対応せず交差する版もない場合。
+    /// ローカルが SETTINGS_WT_ENABLED を広告している場合、`None` は接続で使う版を
+    /// 決められないことを意味するため、WebTransport セッションを受理してはならない
+    /// (draft-ietf-webtrans-http3-17 Section 7.1)。SETTINGS_WT_ENABLED を広告しない
+    /// サーバー (draft-02 / 07 / 14) では、版が未確定のまま受理する
+    /// (交差なし = 非対応という仕様からの意図的な逸脱)。
+    /// 将来のドラフトで変更される可能性がある
+    pub fn negotiated_wt_draft_version(&self) -> Option<crate::webtransport::DraftVersion> {
+        self.inner.negotiated_wt_draft_version()
+    }
+
     /// GOAWAY を送信
     pub fn send_goaway(&mut self, id: VarInt) -> Result<(), Error> {
         self.inner.send_goaway(id)

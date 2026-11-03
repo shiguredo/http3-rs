@@ -5,20 +5,22 @@
 
 use crate::qpack::Header;
 
+use super::ProtocolToken;
 use super::connect_error::ConnectError;
 use super::draft::DraftVersion;
 use super::sf_parser::parse_sf_list_strings;
-use super::{PROTOCOL_WEBTRANSPORT_DRAFT02, PROTOCOL_WEBTRANSPORT_H3};
 
 #[derive(Debug, Clone)]
 pub struct ConnectRequest {
-    /// ドラフトバージョン (デフォルト: Draft15)
+    /// `:protocol` 疑似ヘッダーのトークン系統
     ///
-    /// `:protocol` が `webtransport-h3` の場合、draft-15 / 16 / 17 が同じ
-    /// トークンを共有するため、ヘッダーだけでは版を区別できない。
-    /// [`ConnectRequest::from_headers`] は暫定的に `Draft15` を返し、
-    /// 接続単位の版選択は SETTINGS のコードポイントで別途行う。
-    pub draft_version: DraftVersion,
+    /// `webtransport-h3` は draft-15 / 16 / 17 の共通トークンであり、この値から
+    /// 接続で使うドラフト版を決めることはできない。接続の版は SETTINGS の
+    /// コードポイントによる接続単位の選択で決める
+    /// ([`crate::Connection::negotiated_wt_draft_version`])。
+    /// [`ConnectRequest::from_headers`] はヘッダーから判定できるトークン系統だけを
+    /// 設定し、`to_headers` はこのトークン系統の値を使う。
+    pub protocol_token: ProtocolToken,
     /// `:scheme` (MUST be `https` - draft-ietf-webtrans-http3-15 Section 3.2)
     pub scheme: String,
     /// `:authority` (MUST be present - draft-ietf-webtrans-http3-15 Section 3.2)
@@ -34,14 +36,14 @@ pub struct ConnectRequest {
 }
 
 impl ConnectRequest {
-    /// 新しい CONNECT リクエストを作成 (デフォルト: Draft15)
+    /// 新しい CONNECT リクエストを作成 (トークンは `webtransport-h3`)
     pub fn new(
         scheme: impl Into<String>,
         authority: impl Into<String>,
         path: impl Into<String>,
     ) -> Self {
         Self {
-            draft_version: DraftVersion::Draft15,
+            protocol_token: ProtocolToken::WebTransportH3,
             scheme: scheme.into(),
             authority: authority.into(),
             path: path.into(),
@@ -50,9 +52,15 @@ impl ConnectRequest {
         }
     }
 
-    /// ドラフトバージョンを設定
+    /// ドラフトバージョンに対応する `:protocol` トークン系統を設定する
+    ///
+    /// 同じトークン系統に属する版 (draft-15 / 16 / 17 など) は同じヘッダーに
+    /// なるため、このメソッドで特定の版を選ぶことはできない。接続で使う版は
+    /// SETTINGS のコードポイントによる接続単位の選択で決める
+    /// ([`crate::Connection::negotiated_wt_draft_version`])。
+    /// トークン系統は [`ConnectRequest::protocol_token`] フィールドの値になる。
     pub fn draft_version(mut self, version: DraftVersion) -> Self {
-        self.draft_version = version;
+        self.protocol_token = ProtocolToken::from_draft_version(version);
         self
     }
 
@@ -166,29 +174,18 @@ impl ConnectRequest {
             None => return Err(ConnectError::InvalidMethod),
         }
 
-        // :protocol の検証とドラフトバージョンの判定
-        let draft_version = match protocol {
-            Some(p) => {
-                let p_str = core::str::from_utf8(p).map_err(|_| ConnectError::InvalidEncoding)?;
-                if p_str == PROTOCOL_WEBTRANSPORT_H3 {
-                    // `webtransport-h3` は draft-15 / 16 / 17 で共通のトークンであり、
-                    // ヘッダーだけでは版を区別できない。どの版を使うかは SETTINGS の
-                    // コードポイントと接続時の版選択規則で決まるため、ここでは
-                    // 従来どおり draft-15 を既定値として返し、版選択は別途扱う。
-                    DraftVersion::Draft15
-                } else if p_str == PROTOCOL_WEBTRANSPORT_DRAFT02 {
-                    // draft-02 と draft-07 は同じ `:protocol` 値を使用するため
-                    // ヘッダーだけでは区別できない。draft-02 として扱う。
-                    DraftVersion::Draft02
-                } else {
-                    return Err(ConnectError::InvalidProtocol);
-                }
-            }
+        // :protocol の検証とトークン系統の判定
+        //
+        // トークンは複数のドラフト版で共有されるため、ここで決まるのは
+        // トークン系統だけであり、接続で使うドラフト版ではない
+        // (draft-ietf-webtrans-http3-17 Section 7.1, 9.1)。
+        let protocol_token = match protocol {
+            Some(p) => ProtocolToken::from_bytes(p).ok_or(ConnectError::InvalidProtocol)?,
             None => return Err(ConnectError::InvalidProtocol),
         };
 
         let mut req = Self {
-            draft_version,
+            protocol_token,
             scheme: scheme.unwrap_or_default(),
             authority: authority.unwrap_or_default(),
             path: path.unwrap_or_default(),
@@ -205,7 +202,7 @@ impl ConnectRequest {
 
     /// CONNECT リクエストのヘッダー配列を生成する
     ///
-    /// `:protocol` の値はドラフトバージョンに依存する。
+    /// `:protocol` の値は [`ConnectRequest::protocol_token`] のトークン系統に依存する。
     ///
     /// 各フィールドの値は `Header::new` で構築時検査される。`:authority` や `:path`
     /// などのフィールドに RFC 9110 / RFC 9114 に違反する値が入っていた場合は
@@ -213,7 +210,7 @@ impl ConnectRequest {
     pub fn to_headers(&self) -> Result<Vec<Header>, crate::qpack::HeaderError> {
         let mut headers = vec![
             Header::new(b":method", b"CONNECT")?,
-            Header::new(b":protocol", self.draft_version.protocol_value().as_bytes())?,
+            Header::new(b":protocol", self.protocol_token.as_str().as_bytes())?,
             Header::new(b":scheme", self.scheme.as_bytes())?,
             Header::new(b":authority", self.authority.as_bytes())?,
             Header::new(b":path", self.path.as_bytes())?,
@@ -243,7 +240,8 @@ impl ConnectRequest {
     /// - `:authority` が空でないこと
     /// - `:path` が空でないこと
     ///
-    /// `:protocol` が `webtransport-h3` であることは呼び出し元が事前に確認する。
+    /// `:protocol` のトークン系統は [`ConnectRequest::protocol_token`] が保持する。
+    /// 接続で使う版との整合は別途検証する。
     pub fn validate(&self) -> Result<(), ConnectError> {
         if self.scheme != "https" {
             return Err(ConnectError::InvalidScheme);

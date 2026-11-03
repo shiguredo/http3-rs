@@ -5,7 +5,7 @@
 
 use crate::varint::VarInt;
 
-use super::{PROTOCOL_WEBTRANSPORT_DRAFT02, PROTOCOL_WEBTRANSPORT_H3};
+use super::ProtocolToken;
 
 /// WebTransport over HTTP/3 のドラフト版の識別子
 ///
@@ -26,7 +26,7 @@ pub enum DraftVersion {
     /// `:protocol` = `"webtransport"`, SETTINGS_WEBTRANSPORT_MAX_SESSIONS (0xc671706a)
     Draft07,
     /// draft-ietf-webtrans-http3-14
-    /// `:protocol` = `"webtransport"`, SETTINGS_WEBTRANSPORT_MAX_SESSIONS (0xc671706a)
+    /// `:protocol` = `"webtransport"`, SETTINGS_WT_MAX_SESSIONS (0x14e9cd29)
     /// draft-07 のセッションネゴシエーションに加え、
     /// WT_INITIAL_MAX_STREAMS_UNI/BIDI (0x2b64/0x2b65) によるフロー制御を使用する。
     /// Safari 26.4 がこのパターンを使用する。
@@ -49,14 +49,19 @@ pub enum DraftVersion {
 
 impl DraftVersion {
     /// このドラフトバージョンに対応する `:protocol` 疑似ヘッダーの値を返す
+    ///
+    /// トークンの対応表は [`ProtocolToken`] に集約している。
     pub fn protocol_value(self) -> &'static str {
-        match self {
-            Self::Draft02 | Self::Draft07 | Self::Draft14 => PROTOCOL_WEBTRANSPORT_DRAFT02,
-            Self::Draft15 | Self::Draft17 => PROTOCOL_WEBTRANSPORT_H3,
-        }
+        ProtocolToken::from_draft_version(self).as_str()
     }
 
     /// 検出されたクライアントのドラフトバージョンに対応するサーバー SETTINGS を構築する
+    ///
+    /// クライアントの版ごとに応答 SETTINGS を組み立てる旧来の互換処理である。
+    /// 接続で使う版を選択したうえで SETTINGS を広告する場合は
+    /// `Settings::for_draft_versions` を使う。Safari には draft-07 の
+    /// コードポイントだけを返す必要があり、その判断は呼び出し側の責務になる
+    /// (`docs/SAFARI_WT.md`)。
     ///
     /// ドラフトバージョンに応じて適切な SETTINGS パラメータを設定する:
     ///

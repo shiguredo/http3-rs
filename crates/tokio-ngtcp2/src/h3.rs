@@ -7,6 +7,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use shiguredo_http3::webtransport::DraftVersion;
 use shiguredo_http3::{ClientConnection, Event, Header, ServerConnection, Settings};
 use shiguredo_ngtcp2_tokio::{
     AcceptedConnection, ClientConnection as QuicClientConnection, ConnectionEvent, StreamId,
@@ -223,6 +224,14 @@ impl H3Connection {
         }
     }
 
+    /// 接続単位で選択した WebTransport のドラフト版を取得する
+    fn negotiated_wt_draft_version(&self) -> Option<DraftVersion> {
+        match self {
+            Self::Client(conn) => conn.negotiated_wt_draft_version(),
+            Self::Server(conn) => conn.negotiated_wt_draft_version(),
+        }
+    }
+
     /// ローカル開始の WebTransport ストリームを登録する
     fn register_local_wt_stream(&mut self, session_id: u64, stream_id: u64) -> Result<()> {
         match self {
@@ -364,6 +373,11 @@ impl H3State {
     /// ピアの SETTINGS を取得する
     pub(crate) fn peer_settings(&self) -> Option<&Settings> {
         self.conn.peer_settings()
+    }
+
+    /// 接続単位で選択した WebTransport のドラフト版を取得する
+    pub(crate) fn negotiated_wt_draft_version(&self) -> Option<DraftVersion> {
+        self.conn.negotiated_wt_draft_version()
     }
 
     /// リクエストを送信する (クライアント専用)

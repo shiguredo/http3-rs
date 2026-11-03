@@ -220,3 +220,186 @@ fn prop_settings_detect_draft17_priority() -> noprop::TestResult {
     })?;
     Ok(())
 }
+
+// =============================================================================
+// 接続単位のドラフト版選択
+// (draft-ietf-webtrans-http3-17 Section 3.1, 7.1)
+// =============================================================================
+
+/// SETTINGS の (ID, 値) の並びを制御ストリームのバイト列に変換する
+///
+/// エントリの順序と分割位置は版選択に影響しないため、PBT では順序を
+/// シャッフルしたうえで任意の位置で分割して流し込む。
+fn encode_control_stream(entries: &[(VarInt, VarInt)]) -> Vec<u8> {
+    let mut payload = Vec::new();
+    for (id, value) in entries {
+        shiguredo_http3::varint::encode_into_vec(&mut payload, *id);
+        shiguredo_http3::varint::encode_into_vec(&mut payload, *value);
+    }
+
+    let mut control = Vec::new();
+    // 制御ストリームタイプ (0x00)
+    shiguredo_http3::varint::encode_into_vec(&mut control, VarInt::from_static(0x00));
+    // SETTINGS フレームタイプ (0x04) とペイロード長
+    shiguredo_http3::varint::encode_into_vec(&mut control, VarInt::from_static(0x04));
+    shiguredo_http3::varint::encode_into_vec(
+        &mut control,
+        VarInt::new(payload.len() as u64).expect("payload length in VarInt range"),
+    );
+    control.extend_from_slice(&payload);
+    control
+}
+
+/// 広告するドラフト版の組み合わせを生成する
+///
+/// draft-02 / 07 / 14 / 15 / 17 のそれぞれについて広告するかどうかを選ぶ。
+fn sample_draft_set(ctx: &mut noprop::TestCaseContext) -> Vec<DraftVersion> {
+    let mut versions = Vec::new();
+    for version in [
+        DraftVersion::Draft02,
+        DraftVersion::Draft07,
+        DraftVersion::Draft14,
+        DraftVersion::Draft15,
+        DraftVersion::Draft17,
+    ] {
+        if noprop::sample_bool(ctx) {
+            versions.push(version);
+        }
+    }
+    versions
+}
+
+/// サーバー側の版選択の期待値を求める
+///
+/// - クライアントが本文版のコードポイントを広告していれば本文版
+/// - そうでなければ共通する旧 draft のうち最も優先順位の高い版
+/// - どちらもなければ、本文版に対応していれば本文版、対応していなければなし
+fn expected_server_selection(
+    local: &[DraftVersion],
+    peer: &[DraftVersion],
+) -> Option<DraftVersion> {
+    let common = |version: DraftVersion| local.contains(&version) && peer.contains(&version);
+    if common(DraftVersion::Draft17) {
+        return Some(DraftVersion::Draft17);
+    }
+    // draft-15 と draft-16 は同一コードポイント、draft-07 は Safari 互換で
+    // draft-14 より優先する
+    for version in [
+        DraftVersion::Draft15,
+        DraftVersion::Draft07,
+        DraftVersion::Draft14,
+        DraftVersion::Draft02,
+    ] {
+        if common(version) {
+            return Some(version);
+        }
+    }
+    if local.contains(&DraftVersion::Draft17) {
+        return Some(DraftVersion::Draft17);
+    }
+    None
+}
+
+/// Property: SETTINGS のエントリ順序と分割位置を変えても接続単位の版選択は変わらない
+///
+/// 実際の SETTINGS バイト列を組み立て、エントリをシャッフルしたうえで
+/// ランダムな位置で分割して `ServerConnection` に流し込む。選択結果が
+/// 入力の表現に依存しないことを検証する
+/// (draft-ietf-webtrans-http3-17 Section 3.1, 7.1)。
+#[test]
+fn prop_settings_order_and_split_do_not_change_negotiation() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SETTINGS_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(128, |ctx| {
+        let local_drafts = sample_draft_set(ctx);
+        let peer_drafts = sample_draft_set(ctx);
+        let params = shiguredo_http3::webtransport::connect::ServerSettingsParams::default();
+
+        let local_wt = Settings::for_draft_versions(&local_drafts, params.max_sessions);
+        let mut server = shiguredo_http3::ServerConnection::new(
+            shiguredo_http3::Settings::new().enable_webtransport_server(local_wt),
+        );
+        server
+            .set_control_stream_id(3)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+
+        let peer_wt = Settings::for_draft_versions(&peer_drafts, params.max_sessions);
+        let mut entries: Vec<(VarInt, VarInt)> =
+            peer_wt.iter().map(|setting| setting.as_wire()).collect();
+        // Fisher-Yates でエントリ順をシャッフルする
+        let len = entries.len();
+        for i in (1..len).rev() {
+            let j = noprop::sample_usize_in(ctx, 0..=i);
+            entries.swap(i, j);
+        }
+
+        let control = encode_control_stream(&entries);
+
+        // 制御ストリームをランダムな位置で分割して流し込む
+        let mut pos = 0;
+        while pos < control.len() {
+            let remaining = control.len() - pos;
+            let chunk_len = noprop::sample_usize_in(ctx, 1..=remaining);
+            server
+                .feed_stream(2, &control[pos..pos + chunk_len], false)
+                .expect("SETTINGS の分割受信に成功すること");
+            pos += chunk_len;
+        }
+
+        assert_eq!(
+            server.negotiated_wt_draft_version(),
+            expected_server_selection(&local_drafts, &peer_drafts),
+            "ローカル {local_drafts:?} とピア {peer_drafts:?} の選択結果が \
+             エントリ順序・分割位置に依存しないこと"
+        );
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Property: 複数版を広告する SETTINGS の広告集合は要求した版の集合と一致する
+///
+/// 入力の順序と重複を変えても、広告集合は「要求した版を優先順位の高い順に
+/// 並べたもの」になる (draft-ietf-webtrans-http3-17 Section 7.1)。
+#[test]
+fn prop_for_draft_versions_advertisement_set() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("PROP_WEBTRANSPORT_SETTINGS_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
+    runner.run(256, |ctx| {
+        let mut requested = sample_draft_set(ctx);
+        // 入力の順序をシャッフルする
+        let len = requested.len();
+        for i in (1..len).rev() {
+            let j = noprop::sample_usize_in(ctx, 0..=i);
+            requested.swap(i, j);
+        }
+        // 一部の版を重複させる
+        if !requested.is_empty() && noprop::sample_bool(ctx) {
+            let index = noprop::sample_usize_in(ctx, 0..requested.len());
+            requested.push(requested[index]);
+        }
+
+        let params = shiguredo_http3::webtransport::connect::ServerSettingsParams::default();
+        let settings = Settings::for_draft_versions(&requested, params.max_sessions);
+
+        let mut expected = Vec::new();
+        for version in [
+            DraftVersion::Draft17,
+            DraftVersion::Draft15,
+            DraftVersion::Draft07,
+            DraftVersion::Draft14,
+            DraftVersion::Draft02,
+        ] {
+            if requested.contains(&version) {
+                expected.push(version);
+            }
+        }
+        assert_eq!(
+            settings.advertised_draft_versions(),
+            expected,
+            "要求した版 {requested:?} の広告集合が優先順位順に一致すること"
+        );
+        Ok(())
+    })?;
+    Ok(())
+}

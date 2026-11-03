@@ -4675,6 +4675,9 @@ mod tests {
         server.set_control_stream_id(3).expect("test must succeed");
         server.peer_settings = Some(wt_enabled_settings());
         server.wt_transport_verified = true;
+        // 選択される版 (draft-15 / 16) は reset_stream_at を要求するため、
+        // ネゴシエーション完了には transport parameter の対応も必要になる
+        server.wt_reset_stream_at_supported = true;
 
         // client-initiated uni stream が先に到着 (session_id = 0)
         // ストリームタイプ 0x54 (varint [0x40, 0x54]) + session_id = 0
