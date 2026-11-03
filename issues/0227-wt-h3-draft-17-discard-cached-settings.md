@@ -1,7 +1,7 @@
 # draft-17 では前回接続の WT SETTINGS を破棄して現在値だけを使う
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-03
 - Branch: feature/change-wt-draft-17-discard-cached-settings
 - Polished: 2026-11-03
 - Category: change
@@ -51,3 +51,11 @@ draft-ietf-webtrans-http3-17 Section 3.2 の変更に従い、再開接続で前
 - `refs/webtrans/draft-ietf-webtrans-http3-16.txt` Section 3.2: 廃止された比較規則
 - `refs/quic/draft-ietf-quic-reliable-stream-reset-11.txt` Section 3: QUIC transport parameter の記憶義務
 - <https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-17.txt>
+
+## 解決方法
+
+- `src/connection/wt_session.rs` に `Connection::select_wt_draft_version` を追加し、`negotiated_wt_draft_version` と SETTINGS 受信処理が同じ選択規則を使うようにした。受信処理では `peer_settings` を更新する前に受信済み SETTINGS を渡して版を判定する
+- `src/connection/mod.rs` の 0-RTT 再開時の減少検出を、選択した版が draft-14 / 15 / 16 の場合だけ行うようにした。draft-02 / 07 は初期フロー制御値の SETTINGS を持たず 0-RTT の規則も最大セッション数に限られるため対象外、draft-17 は前回接続の WT SETTINGS を引き継がないため対象外とした。版を決定できない場合は、draft-17 に対応する端点 (新旧両方のコードポイントを広告する端点を含む) は前回値を破棄し、旧コードポイントだけに対応する端点は従来どおり検出する
+- `set_previous_wt_settings` (Connection / ClientConnection) の rustdoc を、draft-14 / 15 / 16 の 0-RTT 再開用であり draft-17 では使われないこと、初期フロー制御値のいずれかが前回値より小さければ接続を閉じることを明記した
+- `Session::initialize_remote_limits` の rustdoc に、0-RTT 再開時も前回接続のキャッシュ値ではなく現在接続で受信した SETTINGS の値を渡すこと、draft-17 では前回値を引き継がないことを追記した
+- テストを追加した: 単体テストで draft-14 の減少検出、旧コードポイントのみの端点での省略検出、旧コードポイントの前回値を持つ draft-17 接続での非検出、版選択の各組合せ。統合テストで draft-17 の減少受理 (セッション確立まで)、前回値が WT 有効化に流用されないこと (公開 API の CONNECT 開始で確認)、サーバーが draft-17 クライアントの広告省略を拒否しないこと。フロー制御テストで現在の SETTINGS が Session の比較基準になることを Connection から確認する。PBT で前回版と現在版を独立に生成し、旧コードポイントの版だけが減少検出の対象になることを検証する
