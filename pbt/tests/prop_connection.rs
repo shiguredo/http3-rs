@@ -1,7 +1,9 @@
 //! Property-Based Testing for HTTP/3 Connection (RFC 9114)
 //!
-//! get_stream_data のループ終了性とデータ完全性、および 0-RTT 再開時の
-//! WebTransport SETTINGS の減少検出が選択したドラフト版に依存することを検証する。
+//! get_stream_data のループ終了性とデータ完全性、0-RTT 再開時の WebTransport
+//! SETTINGS の減少検出が選択したドラフト版に依存すること、および WebTransport の
+//! 先行バッファリングがストリームの到着順や受信チャンクの分割に依存しないことを
+//! 検証する。
 
 use pbt::strategies::sample_len;
 use shiguredo_http3::frame::encode_frame;
@@ -312,4 +314,617 @@ fn prop_previous_wt_settings_reduction_only_for_old_draft() -> noprop::TestResul
         Ok(())
     })?;
     Ok(())
+}
+
+// =============================================================================
+// WebTransport draft-17 の先行バッファリングの順序・分割非依存性
+// (draft-ietf-webtrans-http3-17 Section 4.6)
+//
+// ストリームの到着順や受信チャンクの分割を変えても、上限内であれば拒否判定が
+// 変わらず、セッション確立後に全データが配送され、同じセッションで新しい
+// ストリームを利用できることを検証する。上限超過そのものの境界値は
+// tests/test_connection.rs 側で扱う。
+//
+// Section 4.6 が MUST として定めるのは保留するストリーム数 / データグラム数の
+// 上限である。1 ストリームあたり 64 KiB の受信バイト上限は実装独自の DoS 対策
+// なので、ここでは到達しない範囲のペイロードだけを送る。
+// =============================================================================
+
+mod webtransport_buffering {
+    use noprop::TestCaseContext;
+    use pbt::strategies::sample_len;
+    use shiguredo_http3::webtransport::stream::StreamHeader;
+    use shiguredo_http3::webtransport::{Datagram, DraftVersion, Settings as WtSettings};
+    use shiguredo_http3::{
+        ClientConnection, Event, Header, ServerConnection, Settings, WebTransportEvent,
+    };
+
+    use super::wt_settings;
+
+    /// 本モジュールのテストで使うセッション ID
+    ///
+    /// クライアントは最初のリクエストとして CONNECT をクライアント開始 bidi の
+    /// stream 0 に送るため、セッション ID (CONNECT ストリーム ID) は 0 になる。
+    const SESSION_ID: u64 = 0;
+
+    /// 確立後の新規クライアント開始 bidi ストリーム ID
+    ///
+    /// クライアント開始 bidi は 0 mod 4。上限内の先行ストリームは最大 4 本で
+    /// stream 4 から 16 までを使うため、衝突しない十分大きな値にする。
+    const POST_ESTABLISH_CLIENT_BIDI_STREAM_ID: u64 = 404;
+
+    /// 確立後の新規サーバー開始 bidi ストリーム ID
+    ///
+    /// サーバー開始 bidi は 1 mod 4。上限内の先行ストリームは stream 1 から 13
+    /// までを使い、サーバーの制御ストリーム (stream 3) とも衝突しない値にする。
+    const POST_ESTABLISH_SERVER_BIDI_STREAM_ID: u64 = 405;
+
+    /// draft-17 のフロー制御上限を広く広告する WebTransport 設定を構築する
+    ///
+    /// バッファ上限 (100 ストリーム) まで配送してもフロー制御違反にならないよう、
+    /// ストリーム数とデータ量を十分大きくする。
+    fn draft17_settings() -> WtSettings {
+        wt_settings(DraftVersion::Draft17, 1000, 1000, 8 * 1024 * 1024)
+    }
+
+    /// draft-17 のサーバーとクライアントを作り、サーバー SETTINGS だけを届ける
+    ///
+    /// 戻り値のクライアント制御ストリームデータは、サーバーへの SETTINGS 投入を
+    /// 遅らせた状態から各プロパティを開始するために呼び出し側へ返す。
+    fn connection_pair() -> (ServerConnection, ClientConnection, Vec<u8>) {
+        let mut server =
+            ServerConnection::new(Settings::new().enable_webtransport_server(draft17_settings()));
+        server
+            .set_control_stream_id(3)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        server
+            .set_webtransport_transport_verified(true, true)
+            .expect("テスト用の transport parameter 検証に成功すること");
+        let (server_control, _) = server
+            .take_stream_data(3)
+            .expect("テスト用のサーバー SETTINGS 取得に成功すること");
+
+        let mut client =
+            ClientConnection::new(Settings::new().enable_webtransport_client(draft17_settings()));
+        client
+            .set_control_stream_id(2)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        client
+            .set_webtransport_transport_verified(true, true)
+            .expect("テスト用の transport parameter 検証に成功すること");
+        let (client_control, _) = client
+            .take_stream_data(2)
+            .expect("テスト用のクライアント SETTINGS 取得に成功すること");
+
+        client
+            .feed_stream(3, &server_control, false)
+            .expect("クライアントのサーバー SETTINGS 受信に成功すること");
+        client
+            .drain_events()
+            .expect("テスト用のクライアントイベント取得に成功すること");
+
+        (server, client, client_control)
+    }
+
+    /// draft-17 の CONNECT ヘッダーを構築する
+    ///
+    /// 本文版のトークンである `webtransport-h3` を使う
+    /// (draft-ietf-webtrans-http3-17 Section 9.1)。
+    fn connect_headers() -> Vec<Header> {
+        vec![
+            Header::new(b":method", b"CONNECT").expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":protocol", b"webtransport-h3")
+                .expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":scheme", b"https").expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":authority", b"example.com")
+                .expect("テスト用のヘッダー作成に成功すること"),
+            Header::new(b":path", b"/wt").expect("テスト用のヘッダー作成に成功すること"),
+        ]
+    }
+
+    /// 双方向 WT ストリームの実バイト列 (signal value + session ID + ペイロード)
+    ///
+    /// (draft-ietf-webtrans-http3-17 Section 4.3)
+    fn bidi_stream_bytes(session_id: u64, payload: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        StreamHeader::new(session_id)
+            .expect("テスト用の session ID が client-initiated bidi ストリーム ID であること")
+            .encode_bidirectional(&mut buf);
+        buf.extend_from_slice(payload);
+        buf
+    }
+
+    /// HTTP Datagram の実バイト列 (Quarter Stream ID + ペイロード)
+    ///
+    /// (RFC 9297 Section 2.1, draft-ietf-webtrans-http3-17 Section 4.5)
+    fn datagram_bytes(session_id: u64, payload: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        Datagram::new(session_id, payload.to_vec())
+            .expect("テスト用の datagram 作成に成功すること")
+            .encode(&mut buf);
+        buf
+    }
+
+    /// クライアントから WT CONNECT を送り、サーバーに受理させる
+    ///
+    /// CONNECT 投入直後のサーバーイベントも返し、呼び出し側が確立前のイベント列を
+    /// 検証できるようにする。
+    fn send_connect(
+        server: &mut ServerConnection,
+        client: &mut ClientConnection,
+    ) -> (u64, Vec<Event>) {
+        let stream_id = client
+            .send_request(&connect_headers(), false)
+            .expect("draft-17 の CONNECT 送信に成功すること");
+        let (request, _) = client
+            .take_stream_data(stream_id)
+            .expect("テスト用の CONNECT ヘッダー取得に成功すること");
+        server
+            .feed_stream(stream_id, &request, false)
+            .expect("draft-17 の CONNECT 受理に成功すること");
+        let events = server
+            .drain_events()
+            .expect("テスト用のサーバーイベント取得に成功すること");
+        (stream_id, events)
+    }
+
+    /// サーバーが 2xx レスポンスを生成し、クライアントにはまだ投入しない
+    fn start_response(server: &mut ServerConnection, session_id: u64) -> Vec<u8> {
+        let response =
+            vec![Header::new(b":status", b"200").expect("テスト用のヘッダー作成に成功すること")];
+        server
+            .send_response(session_id, &response, false)
+            .expect("テスト用の 200 応答送信に成功すること");
+        server
+            .take_stream_data(session_id)
+            .expect("テスト用の 200 応答取得に成功すること")
+            .0
+    }
+
+    /// 2xx レスポンスをクライアントに投入し、クライアントのイベントを返す
+    fn feed_response(
+        client: &mut ClientConnection,
+        session_id: u64,
+        response: &[u8],
+    ) -> Vec<Event> {
+        client
+            .feed_stream(session_id, response, false)
+            .expect("クライアントの 200 応答受信に成功すること");
+        client
+            .drain_events()
+            .expect("テスト用のクライアントイベント取得に成功すること")
+    }
+
+    /// 0..len の添字をランダムな順序に並べ替える (Fisher-Yates)
+    fn shuffled_indices(ctx: &mut TestCaseContext, len: usize) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..len).collect();
+        for i in (1..len).rev() {
+            let j = noprop::sample_usize_in(ctx, 0..=i);
+            order.swap(i, j);
+        }
+        order
+    }
+
+    /// 実バイト列をランダムな長さのチャンクに分割して投入する
+    ///
+    /// `feed` にはサーバー / クライアントの `feed_stream` を渡す。チャンク境界は
+    /// 先頭 varint の途中にも置かれうる。FIN は分割とは独立に空チャンクとして
+    /// 最後に投入する。
+    fn feed_in_random_chunks(
+        ctx: &mut TestCaseContext,
+        stream_id: u64,
+        bytes: &[u8],
+        mut feed: impl FnMut(u64, &[u8], bool),
+    ) {
+        let mut offset = 0;
+        while offset < bytes.len() {
+            let remaining = bytes.len() - offset;
+            let chunk_len = noprop::sample_usize_in(ctx, 1..=remaining.min(8));
+            feed(stream_id, &bytes[offset..offset + chunk_len], false);
+            offset += chunk_len;
+        }
+        feed(stream_id, &[], true);
+    }
+
+    /// 位置依存のペイロードを生成する
+    ///
+    /// 同一バイトの繰り返しでは、チャンク分割や到着順の入れ替わりでバイト順が
+    /// 壊れても検出できないため、添字ごとに異なるバイト列にする。
+    fn payload(i: usize, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|j| {
+                let mixed = (i as u32).wrapping_mul(0x9e37_79b9).wrapping_add(j as u32);
+                (mixed ^ (mixed >> 13)) as u8
+            })
+            .collect()
+    }
+
+    /// 指定ストリームの双方向データを到着順に連結して返す
+    fn collected_bidi_data(events: &[Event], stream_id: u64) -> Vec<u8> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::WebTransport(WebTransportEvent::BidiStreamData {
+                    stream_id: event_stream_id,
+                    data,
+                }) if *event_stream_id == stream_id => Some(data.as_slice()),
+                _ => None,
+            })
+            .flatten()
+            .copied()
+            .collect()
+    }
+
+    /// Open / Data / End のいずれの配送イベントも含まれないことを検証する
+    fn assert_no_stream_delivery(events: &[Event], context: &str) {
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                Event::WebTransport(
+                    WebTransportEvent::BidiStreamOpen { .. }
+                        | WebTransportEvent::BidiStreamData { .. }
+                        | WebTransportEvent::BidiStreamEnd { .. }
+                        | WebTransportEvent::UniStreamOpen { .. }
+                        | WebTransportEvent::UniStreamData { .. }
+                        | WebTransportEvent::UniStreamEnd { .. }
+                )
+            )),
+            "{context}: セッション確立前に Open / Data / End を発火しないこと: {events:?}"
+        );
+    }
+
+    /// 拒否イベントが発火していないことを検証する
+    fn assert_no_buffered_stream_rejected(events: &[Event], context: &str) {
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                Event::WebTransport(WebTransportEvent::BufferedStreamRejected { .. })
+            )),
+            "{context}: 上限内の入力では拒否イベントが発火しないこと: {events:?}"
+        );
+    }
+
+    /// セッション終了イベントが発火していないことを検証する
+    fn assert_no_session_closed(events: &[Event], context: &str) {
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                Event::WebTransport(WebTransportEvent::SessionClosed { .. })
+            )),
+            "{context}: セッション終了イベントが発火しないこと: {events:?}"
+        );
+    }
+
+    /// 指定セッションの SessionEstablished がイベント列に含まれることを検証する
+    fn assert_session_established(events: &[Event], session_id: u64) {
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                Event::WebTransport(WebTransportEvent::SessionEstablished {
+                    session_id: event_session_id,
+                    ..
+                }) if *event_session_id == session_id
+            )),
+            "session {session_id} の SessionEstablished が発火すること: {events:?}"
+        );
+    }
+
+    /// 指定ストリームの BidiStreamOpen が指定セッションに紐付くことを検証する
+    fn assert_bidi_stream_open(events: &[Event], stream_id: u64, session_id: u64) {
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                Event::WebTransport(WebTransportEvent::BidiStreamOpen {
+                    stream_id: event_stream_id,
+                    session_id: event_session_id,
+                }) if *event_stream_id == stream_id && *event_session_id == session_id
+            )),
+            "stream {stream_id} の BidiStreamOpen が session {session_id} に紐付くこと: {events:?}"
+        );
+    }
+
+    /// Property: SETTINGS 受信前の先行 bidi ストリームは、到着順と分割によらず
+    /// 拒否されず、セッション確立後に全データが配送される
+    #[test]
+    fn prop_pre_negotiation_bidi_buffering_is_order_and_split_invariant() -> noprop::TestResult {
+        let seed = noprop::seed_from_env_or_time("PROP_CONNECTION_SEED")?;
+        let mut runner = noprop::Runner::new(seed);
+        runner.run(256, |ctx| {
+            let (mut server, mut client, client_control) = connection_pair();
+
+            // ストリーム数と各ストリームのペイロード長を生成する。
+            // 位置依存のバイト列にすることで、分割や順序の入れ替わりで
+            // バイト順が壊れた場合も検出できる。
+            let stream_count = noprop::sample_usize_in(ctx, 1..=4);
+            let mut payloads = Vec::new();
+            for i in 0..stream_count {
+                let payload_len = sample_len(ctx, 0..=512);
+                payloads.push(payload(i, payload_len));
+            }
+
+            // 到着順をランダム化し、各ストリームの受信バイト列をランダムに分割して
+            // SETTINGS 受信前に投入する。FIN もここで投入する。
+            let order = shuffled_indices(ctx, stream_count);
+            for &i in &order {
+                let stream_id = (i as u64 + 1) * 4;
+                let bytes = bidi_stream_bytes(SESSION_ID, &payloads[i]);
+                feed_in_random_chunks(ctx, stream_id, &bytes, |stream_id, data, fin| {
+                    server
+                        .feed_stream(stream_id, data, fin)
+                        .expect("分割した bidi ストリームの投入に成功すること");
+                });
+            }
+
+            // SETTINGS 受信前はイベントが発火しない
+            let events = server
+                .drain_events()
+                .expect("テスト用のサーバーイベント取得に成功すること");
+            assert!(
+                events.is_empty(),
+                "SETTINGS 受信前はイベントが発火しないこと: {events:?}"
+            );
+
+            // 遅延させたクライアント SETTINGS を投入する
+            server
+                .feed_stream(2, &client_control, false)
+                .expect("サーバーのクライアント SETTINGS 受信に成功すること");
+            let events = server
+                .drain_events()
+                .expect("テスト用のサーバーイベント取得に成功すること");
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, Event::SettingsReceived { .. })),
+                "クライアント SETTINGS 受信イベントが発火すること: {events:?}"
+            );
+            assert_no_buffered_stream_rejected(&events, "SETTINGS 受信時");
+            assert_no_session_closed(&events, "SETTINGS 受信時");
+
+            // CONNECT を送り、2xx を返してセッションを確立する
+            let (session_id, connect_events) = send_connect(&mut server, &mut client);
+            assert_eq!(session_id, SESSION_ID, "CONNECT は stream 0 で送られること");
+            assert_no_stream_delivery(&connect_events, "CONNECT 受理時");
+
+            let response = start_response(&mut server, session_id);
+            let client_events = feed_response(&mut client, session_id, &response);
+            assert_session_established(&client_events, session_id);
+
+            let events = server
+                .drain_events()
+                .expect("テスト用のサーバーイベント取得に成功すること");
+            assert_session_established(&events, session_id);
+            assert_no_buffered_stream_rejected(&events, "セッション確立時");
+            assert_no_session_closed(&events, "セッション確立時");
+
+            // 到着順によらず、全ストリームの Open / Data / End が配送される
+            let open_count = events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        Event::WebTransport(WebTransportEvent::BidiStreamOpen {
+                            session_id: event_session_id,
+                            ..
+                        }) if *event_session_id == session_id
+                    )
+                })
+                .count();
+            assert_eq!(
+                open_count, stream_count,
+                "保持した全ストリームが 1 回ずつ Open されること: {events:?}"
+            );
+            for (i, payload) in payloads.iter().enumerate() {
+                let stream_id = (i as u64 + 1) * 4;
+                let end_count = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::WebTransport(WebTransportEvent::BidiStreamEnd {
+                                stream_id: event_stream_id,
+                            }) if *event_stream_id == stream_id
+                        )
+                    })
+                    .count();
+                assert_eq!(
+                    end_count, 1,
+                    "stream {stream_id} の End が 1 回だけ発火すること: {events:?}"
+                );
+                assert_eq!(
+                    collected_bidi_data(&events, stream_id),
+                    *payload,
+                    "stream {stream_id} のデータが到着順や分割によらず一致すること"
+                );
+            }
+
+            // 確立後は同じセッションで新しいストリームを利用できる
+            let new_stream_id = POST_ESTABLISH_CLIENT_BIDI_STREAM_ID;
+            server
+                .feed_stream(
+                    new_stream_id,
+                    &bidi_stream_bytes(session_id, b"after"),
+                    true,
+                )
+                .expect("確立後の新規 bidi ストリームが受理されること");
+            let events = server
+                .drain_events()
+                .expect("テスト用のサーバーイベント取得に成功すること");
+            assert_bidi_stream_open(&events, new_stream_id, session_id);
+            assert_eq!(
+                collected_bidi_data(&events, new_stream_id),
+                b"after",
+                "拒否が発生していないセッションで新しいストリームを受信できること"
+            );
+            assert_no_session_closed(&events, "確立後のストリーム受信時");
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    /// Property: 2xx 受信前のサーバー開始 bidi ストリームとデータグラムは、
+    /// 到着順と分割によらず保留され、セッション確立後に全データが配送される
+    #[test]
+    fn prop_pending_session_buffering_is_order_and_split_invariant() -> noprop::TestResult {
+        let seed = noprop::seed_from_env_or_time("PROP_CONNECTION_SEED")?;
+        let mut runner = noprop::Runner::new(seed);
+        runner.run(256, |ctx| {
+            let (mut server, mut client, client_control) = connection_pair();
+            server
+                .feed_stream(2, &client_control, false)
+                .expect("サーバーのクライアント SETTINGS 受信に成功すること");
+            let events = server
+                .drain_events()
+                .expect("テスト用のサーバーイベント取得に成功すること");
+            assert_no_session_closed(&events, "クライアント SETTINGS 受信時");
+
+            // クライアントは CONNECT を送って Pending セッションを作る。
+            // サーバーは send_response で確立するが、2xx バイトはまだクライアントに
+            // 投入しない。
+            let (session_id, connect_events) = send_connect(&mut server, &mut client);
+            assert_eq!(session_id, SESSION_ID, "CONNECT は stream 0 で送られること");
+            assert_no_stream_delivery(&connect_events, "CONNECT 受理時");
+            let response = start_response(&mut server, session_id);
+
+            // サーバー開始 bidi ストリームの到着順と分割をランダム化する。
+            // ペイロードは位置依存のバイト列にして、バイト順の破壊も検出できるようにする。
+            let stream_count = noprop::sample_usize_in(ctx, 1..=4);
+            let mut payloads = Vec::new();
+            for i in 0..stream_count {
+                let payload_len = sample_len(ctx, 0..=512);
+                payloads.push(payload(i, payload_len));
+            }
+            let order = shuffled_indices(ctx, stream_count);
+            for &i in &order {
+                // サーバー開始 bidi は 1 mod 4。サーバー制御ストリーム (3) と衝突しない
+                let stream_id = 1 + (i as u64) * 4;
+                let bytes = bidi_stream_bytes(session_id, &payloads[i]);
+                feed_in_random_chunks(ctx, stream_id, &bytes, |stream_id, data, fin| {
+                    client
+                        .feed_stream(stream_id, data, fin)
+                        .expect("分割した bidi ストリームの投入に成功すること");
+                });
+            }
+
+            // データグラムも 2xx 前に送る。到着順をランダム化し、配送順が
+            // 仕様で規定されていないことを前提に検証する。
+            let datagram_count = noprop::sample_usize_in(ctx, 1..=4);
+            let mut datagram_payloads = Vec::new();
+            for i in 0..datagram_count {
+                let payload_len = sample_len(ctx, 0..=64);
+                datagram_payloads.push(payload(i, payload_len));
+            }
+            let datagram_order = shuffled_indices(ctx, datagram_count);
+            for &i in &datagram_order {
+                client
+                    .feed_datagram(&datagram_bytes(session_id, &datagram_payloads[i]))
+                    .expect("2xx 前の datagram が保留されること");
+            }
+
+            let events = client
+                .drain_events()
+                .expect("テスト用のクライアントイベント取得に成功すること");
+            assert!(
+                events.is_empty(),
+                "2xx 受信前はイベントが発火しないこと: {events:?}"
+            );
+
+            // 2xx を投入してセッションを確立する
+            let events = feed_response(&mut client, session_id, &response);
+            assert_session_established(&events, session_id);
+            assert_no_buffered_stream_rejected(&events, "セッション確立時");
+            assert_no_session_closed(&events, "セッション確立時");
+
+            let open_count = events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        Event::WebTransport(WebTransportEvent::BidiStreamOpen {
+                            session_id: event_session_id,
+                            ..
+                        }) if *event_session_id == session_id
+                    )
+                })
+                .count();
+            assert_eq!(
+                open_count, stream_count,
+                "保持した全ストリームが 1 回ずつ Open されること: {events:?}"
+            );
+            for (i, payload) in payloads.iter().enumerate() {
+                let stream_id = 1 + (i as u64) * 4;
+                let end_count = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            Event::WebTransport(WebTransportEvent::BidiStreamEnd {
+                                stream_id: event_stream_id,
+                            }) if *event_stream_id == stream_id
+                        )
+                    })
+                    .count();
+                assert_eq!(
+                    end_count, 1,
+                    "stream {stream_id} の End が 1 回だけ発火すること: {events:?}"
+                );
+                assert_eq!(
+                    collected_bidi_data(&events, stream_id),
+                    *payload,
+                    "stream {stream_id} のデータが到着順や分割によらず一致すること"
+                );
+            }
+
+            // データグラムの配送順は仕様で規定されていないため、順序ではなく
+            // 全 payload が過不足なく配送されることだけを検証する。
+            let mut delivered_datagrams: Vec<Vec<u8>> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::WebTransport(WebTransportEvent::Datagram { payload, .. }) => {
+                        Some(payload.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let mut expected_datagrams = datagram_payloads.clone();
+            delivered_datagrams.sort();
+            expected_datagrams.sort();
+            assert_eq!(
+                delivered_datagrams, expected_datagrams,
+                "到着順によらず、送信した全 datagram が過不足なく配送されること: {events:?}"
+            );
+
+            // 確立後は同じセッションで新しいストリームとデータグラムを利用できる
+            let new_stream_id = POST_ESTABLISH_SERVER_BIDI_STREAM_ID;
+            client
+                .feed_stream(
+                    new_stream_id,
+                    &bidi_stream_bytes(session_id, b"after"),
+                    true,
+                )
+                .expect("確立後のサーバー開始 bidi ストリームが受理されること");
+            client
+                .feed_datagram(&datagram_bytes(session_id, b"after-datagram"))
+                .expect("確立後の datagram が受理されること");
+            let events = client
+                .drain_events()
+                .expect("テスト用のクライアントイベント取得に成功すること");
+            assert_bidi_stream_open(&events, new_stream_id, session_id);
+            assert_eq!(
+                collected_bidi_data(&events, new_stream_id),
+                b"after",
+                "確立後の新しいストリームを受信できること"
+            );
+            assert!(
+                events.iter().any(|event| matches!(
+                    event,
+                    Event::WebTransport(WebTransportEvent::Datagram { payload, .. })
+                        if payload == b"after-datagram"
+                )),
+                "確立後の新しい datagram が配送されること: {events:?}"
+            );
+            assert_no_session_closed(&events, "確立後の受信時");
+            Ok(())
+        })?;
+        Ok(())
+    }
 }
