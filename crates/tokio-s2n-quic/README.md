@@ -13,6 +13,14 @@ shiguredo_http3 と s2n-quic を組み合わせた HTTP/3 と WebTransport over 
 - s2n-quic による QUIC トランスポート
 - Tokio 非同期ランタイム
 
+## WebTransport over HTTP/3
+
+WebTransport のセッション API を提供します。
+
+s2n-quic 1.91 は `RESET_STREAM_AT` (`draft-ietf-quic-reliable-stream-reset`) の送出 API も、ピアの `reset_stream_at` transport parameter を取得する API も公開していません。このクレートは、sans-I/O 層の能力検証に `reset_stream_at` 対応済み (`true`) を渡します。利用者が `enable_webtransport` と `wt_draft_version` を相手の版に合わせて設定した場合に限り、draft-14 / 15 / 16 / 17 のピアとのセッションを確立できます。ただし、実際のリセットは `RESET_STREAM_AT` ではなく通常の `RESET_STREAM` になり、draft-14 以降が要求するストリームヘッダーの確実な配送は保証されません。s2n-quic が両 API を公開するまでの既知の制限です。
+
+`ClientConfig::wt_draft_version` (既定値: `Draft15`) は、CONNECT の `:protocol` のトークン系統 (`webtransport` / `webtransport-h3`) だけを決めます。接続で使う版は SETTINGS のコードポイントで決まるため、この設定で版を固定するものではありません。接続で選択された版のトークン系統と設定が一致しない場合、CONNECT は `WtSetupError::ProtocolMismatch` で拒否されます。相手が使う版に合わせて設定してください。
+
 ## サンプルの実行
 
 ### サーバー
