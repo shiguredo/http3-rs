@@ -1,7 +1,7 @@
 # 先行ストリームのバッファ拒否後も WT セッションを継続できることを検証する
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-03
 - Branch: feature/add-wt-draft-17-buffer-rejection-tests
 - Polished: 2026-11-03
 - Category: test
@@ -53,3 +53,13 @@ draft-ietf-webtrans-http3-17 Section 4.6 で明記された、バッファ済み
 
 - `refs/webtrans/draft-ietf-webtrans-http3-17.txt` Section 4.6
 - <https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-17.txt>
+
+## 解決方法
+
+- `tests/test_connection.rs` に `mod webtransport_buffering` を追加し、公開接続 API 経由で 12 本のテストを追加した。実際の SETTINGS / CONNECT / WT ストリーム / datagram のバイト列だけを使い、モックやスタブは使っていない
+- SETTINGS 受信前の保留: サーバーが受信するクライアント開始 bidi のストリーム数上限 (100 本) と 1 ストリームのデータ量上限 (64 KiB) を超えるケースを分けて検証した。上限超過ストリームだけが `WT_BUFFERED_STREAM_REJECTED` で拒否され、接続エラーや `SessionClosed` が起きないこと、遅延させた SETTINGS と CONNECT を処理して 2xx を完了すると同じセッション ID の新しいストリームでデータを受信できることを確認した
+- 拒否対象のデータを誤配送せず、保持済みのほかのストリームが確立時に配送されること、SETTINGS 受信前の拒否では同じ stream ID の後続チャンクも配送されないことを確認した
+- Session Pending 中の保留: bidi / uni のストリーム数上限、累積データ量上限 (60,000 + 6,000 バイト)、初回チャンク単独での上限超過 (64 KiB + 1 バイト) と上限ちょうど (64 KiB) の受理、datagram の上限超過を検証した。拒否・破棄された後も同じセッションで新しい bidi / uni / datagram を利用できる
+- クライアント側でも、サーバー開始 bidi / uni / datagram の先行到着と、bidi のストリーム数上限・datagram 上限超過後の継続性を検証した
+- `pbt/tests/prop_connection.rs` に 2 本の性質を追加した。SETTINGS 受信前の先行 bidi と、2xx 前のサーバー開始 bidi / datagram について、到着順と受信チャンクの分割をランダム化しても、上限内では拒否が起きず、確立後に全データが欠損なく配送され、新しいストリームも受信できることを検証する
+- 1 ストリームあたりの 64 KiB 上限は実装独自の DoS 対策であり、draft-17 Section 4.6 が MUST としているのは保留するストリーム数 / データグラム数の上限であることをコメントに明記した
