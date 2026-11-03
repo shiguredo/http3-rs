@@ -5,14 +5,14 @@
 QUIC                                                          J. Iyengar
 Internet-Draft                                                    Fastly
 Intended status: Standards Track                                I. Swett
-Expires: 10 May 2026                                              Google
+Expires: 9 August 2026                                            Google
                                                             M. Kühlewind
                                                                 Ericsson
-                                                         6 November 2025
+                                                         5 February 2026
 
 
                      QUIC Acknowledgment Frequency
-                    draft-ietf-quic-ack-frequency-13
+                    draft-ietf-quic-ack-frequency-14
 
 Abstract
 
@@ -45,7 +45,7 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 10 May 2026.
+   This Internet-Draft will expire on 9 August 2026.
 
 
 
@@ -53,14 +53,14 @@ Status of This Memo
 
 
 
-Iyengar, et al.            Expires 10 May 2026                  [Page 1]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                 [Page 1]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
 Copyright Notice
 
-   Copyright (c) 2025 IETF Trust and the persons identified as the
+   Copyright (c) 2026 IETF Trust and the persons identified as the
    document authors.  All rights reserved.
 
    This document is subject to BCP 78 and the IETF Trust's Legal
@@ -109,9 +109,9 @@ Table of Contents
 
 
 
-Iyengar, et al.            Expires 10 May 2026                  [Page 2]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                 [Page 2]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
 1.  Introduction
@@ -165,9 +165,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                  [Page 3]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                 [Page 3]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
    *  Similarly, receiving UDP datagrams can also be CPU intensive.
@@ -221,9 +221,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                  [Page 4]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                 [Page 4]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
    An endpoint's min_ack_delay MUST NOT be greater than its
@@ -277,9 +277,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                  [Page 5]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                 [Page 5]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
       number assigned to the ACK_FREQUENCY frame by the sender so
@@ -312,7 +312,7 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
       PROTOCOL_VIOLATION.
 
    Reordering Threshold:  A variable-length integer that indicates the
-      maximum packet reordering before eliciting an immediate ACK, as
+      minimum packet reordering to trigger an immediate ACK, as
       specified in Section 6.2.  If no ACK_FREQUENCY frames have been
       received, the data receiver immediately acknowledges any
       subsequent packets that are received out-of-order, as specified in
@@ -333,9 +333,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                  [Page 6]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                 [Page 6]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
    A receiving endpoint MUST ignore a received ACK_FREQUENCY frame
@@ -389,9 +389,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                  [Page 7]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                 [Page 7]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
    *  max_ack_delay amount of time has passed and at least one ack-
@@ -445,9 +445,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                  [Page 8]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                 [Page 8]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
    If the most recent ACK_FREQUENCY frame received from the peer has a
@@ -471,11 +471,14 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
    An endpoint that receives an ACK_FREQUENCY frame with a non-zero
    Reordering Threshold value SHOULD send an immediate ACK whenever it
    receives an ack-eliciting, out-of order packet whose packet number is
-   outside the reordering window of the peer, i.e. when * the difference
-   between the smallest Unreported Missing packet and the Largest
-   Unacked packet is greater than or equal to the Reordering Threshold
-   value; or * the received packet number is less than or equal to
-   Largest Acked - Reordering Threshold.
+   outside the reordering window of the peer, when:
+
+   *  The difference between the smallest Unreported Missing packet and
+      the Largest Unacked packet is greater than or equal to the
+      Reordering Threshold value; or
+
+   *  The received packet number is less than or equal to Largest Acked
+      - Reordering Threshold.
 
    The first condition triggers an ACK as soon as the reordering
    threshold is reached and a packet can be declared lost at the sender.
@@ -496,15 +499,15 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
    Note that the following examples assume that packets are processed
    one-by-one in the received order as indicated below.
 
+
+
+Iyengar, et al.           Expires 9 August 2026                 [Page 9]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
+
+
    When the reordering threshold is 1, any time a packet is received and
    there is a missing packet, an immediate acknowledgement is sent.
-
-
-
-Iyengar, et al.            Expires 10 May 2026                  [Page 9]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
-
 
    If the reordering theshold is 3 and acknowledgements are only sent
    due to reordering, the sequence in Table 1 would occur:
@@ -554,12 +557,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-
-
-
-Iyengar, et al.            Expires 10 May 2026                 [Page 10]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                [Page 10]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
    +========+=======+=======+==========+============+=================+
@@ -613,9 +613,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                 [Page 11]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                [Page 11]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
    extreme congestion or when peers are using DCTCP [RFC8257] or other
@@ -669,9 +669,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                 [Page 12]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                [Page 12]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
 8.  Determining Acknowledgment Frequency
@@ -725,9 +725,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                 [Page 13]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                [Page 13]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
    It is possible that the RTT is smaller than the receiver's timer
@@ -781,9 +781,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                 [Page 14]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                [Page 14]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
    A QUIC sender detects loss using packet thresholds on receiving an
@@ -837,9 +837,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                 [Page 15]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                [Page 15]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
 10.  Security Considerations
@@ -893,9 +893,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                 [Page 16]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                [Page 16]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
 11.2.  QUIC Frame Types
@@ -949,9 +949,9 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                 [Page 17]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                [Page 17]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
    [Cus22]    Custura, A., Jones, T., Secchi, R., and G. Fairhurst,
@@ -1005,9 +1005,9 @@ Authors' Addresses
 
 
 
-Iyengar, et al.            Expires 10 May 2026                 [Page 18]
-
-Internet-Draft        QUIC Acknowledgment Frequency        November 2025
+Iyengar, et al.           Expires 9 August 2026                [Page 18]
+
+Internet-Draft        QUIC Acknowledgment Frequency        February 2026
 
 
    Ian Swett
@@ -1061,4 +1061,4 @@ Internet-Draft        QUIC Acknowledgment Frequency        November 2025
 
 
 
-Iyengar, et al.            Expires 10 May 2026                 [Page 19]
+Iyengar, et al.           Expires 9 August 2026                [Page 19]

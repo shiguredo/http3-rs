@@ -5,12 +5,12 @@
 WEBTRANS                                                      E. Kinnear
 Internet-Draft                                                Apple Inc.
 Intended status: Standards Track                             V. Vasiliev
-Expires: 3 September 2026                                         Google
-                                                            2 March 2026
+Expires: 6 May 2027                                               Google
+                                                         2 November 2026
 
 
                   The WebTransport Protocol Framework
-                    draft-ietf-webtrans-overview-12
+                    draft-ietf-webtrans-overview-14
 
 Abstract
 
@@ -22,7 +22,7 @@ Abstract
 
    This document defines the overall requirements on the protocols used
    in WebTransport, as well as the common features of the protocols,
-   support for some of which may be optional.
+   support for some of which is optional.
 
 About This Document
 
@@ -53,9 +53,9 @@ Status of This Memo
 
 
 
-Kinnear & Vasiliev      Expires 3 September 2026                [Page 1]
-
-Internet-Draft                WebTransport                    March 2026
+Kinnear & Vasiliev         Expires 6 May 2027                   [Page 1]
+
+Internet-Draft                WebTransport                 November 2026
 
 
    Internet-Drafts are draft documents valid for a maximum of six months
@@ -63,7 +63,7 @@ Internet-Draft                WebTransport                    March 2026
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 3 September 2026.
+   This Internet-Draft will expire on 6 May 2027.
 
 Copyright Notice
 
@@ -91,13 +91,13 @@ Table of Contents
      4.1.  Session-Wide Features . . . . . . . . . . . . . . . . . .   7
      4.2.  Datagrams . . . . . . . . . . . . . . . . . . . . . . . .   8
      4.3.  Streams . . . . . . . . . . . . . . . . . . . . . . . . .   9
-   5.  Transport Properties  . . . . . . . . . . . . . . . . . . . .  11
-   6.  Security Considerations . . . . . . . . . . . . . . . . . . .  11
-   7.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  12
-   8.  References  . . . . . . . . . . . . . . . . . . . . . . . . .  12
-     8.1.  Normative References  . . . . . . . . . . . . . . . . . .  12
-     8.2.  Informative References  . . . . . . . . . . . . . . . . .  12
-   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  14
+   5.  Transport Properties  . . . . . . . . . . . . . . . . . . . .  12
+   6.  Security Considerations . . . . . . . . . . . . . . . . . . .  12
+   7.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  13
+   8.  References  . . . . . . . . . . . . . . . . . . . . . . . . .  13
+     8.1.  Normative References  . . . . . . . . . . . . . . . . . .  13
+     8.2.  Informative References  . . . . . . . . . . . . . . . . .  14
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  15
 
 1.  Introduction
 
@@ -109,14 +109,14 @@ Table of Contents
 
 
 
-Kinnear & Vasiliev      Expires 3 September 2026                [Page 2]
-
-Internet-Draft                WebTransport                    March 2026
+Kinnear & Vasiliev         Expires 6 May 2027                   [Page 2]
+
+Internet-Draft                WebTransport                 November 2026
 
 
    This document defines the overall requirements on the protocols used
    in WebTransport, as well as the common features of the protocols,
-   support for some of which may be optional.
+   support for some of which is optional.
 
 1.1.  Background
 
@@ -127,7 +127,7 @@ Internet-Draft                WebTransport                    March 2026
    ordered reliable stream of messages, it suffers from head-of-line
    blocking, meaning that all messages must be sent and received in
    order even if they could be processed independently of each other,
-   and some messages may no longer be relevant.  This makes it a poor
+   and some messages might no longer be relevant.  This makes it a poor
    fit for latency-sensitive applications which rely on partial
    reliability and stream independence for performance.
 
@@ -165,9 +165,9 @@ Internet-Draft                WebTransport                    March 2026
 
 
 
-Kinnear & Vasiliev      Expires 3 September 2026                [Page 3]
-
-Internet-Draft                WebTransport                    March 2026
+Kinnear & Vasiliev         Expires 6 May 2027                   [Page 3]
+
+Internet-Draft                WebTransport                 November 2026
 
 
       request different retransmission priorities for different streams,
@@ -175,10 +175,10 @@ Internet-Draft                WebTransport                    March 2026
       same connection).
 
    WebTransport avoids all of those issues by letting applications
-   create a single transport object that can contain multiple streams
-   multiplexed together in a single context (similar to SCTP, HTTP/2,
-   QUIC and others), and can also be used to send unreliable datagrams
-   (similar to UDP).
+   create a single WebTransport session that can contain multiple
+   streams multiplexed together in a single context (similar to SCTP,
+   HTTP/2, QUIC and others), and can also be used to send unreliable
+   datagrams (similar to UDP).
 
 1.2.  Conventions and Definitions
 
@@ -195,19 +195,19 @@ Internet-Draft                WebTransport                    March 2026
 
    WebTransport session:  A WebTransport session is a single
       communication context established between a client and a server.
-      It may correspond to a specific transport-layer connection, or it
-      may be a logical entity within an existing multiplexed transport-
-      layer connection.  WebTransport sessions are logically independent
-      from one another even if some sessions can share an underlying
-      transport-layer connection.
+      It might correspond to a specific transport-layer connection, or
+      it might be a logical entity within an existing multiplexed
+      transport-layer connection.  WebTransport sessions are logically
+      independent from one another even if some sessions can share an
+      underlying transport-layer connection.
 
    WebTransport protocol:  A WebTransport protocol is a specific
       protocol that can be used to establish a WebTransport session.
 
    Datagram:  A datagram is a unit of transmission that is limited in
       size (typically to the path MTU), does not have an expectation of
-      being delivered reliably, and is treated atomically by the
-      transport.
+      being delivered reliably, is treated atomically by the transport,
+      and is not flow controlled.
 
    Stream:  A stream is a sequence of bytes that is reliably delivered
       to the receiving application in the same order as it was
@@ -221,9 +221,9 @@ Internet-Draft                WebTransport                    March 2026
 
 
 
-Kinnear & Vasiliev      Expires 3 September 2026                [Page 4]
-
-Internet-Draft                WebTransport                    March 2026
+Kinnear & Vasiliev         Expires 6 May 2027                   [Page 4]
+
+Internet-Draft                WebTransport                 November 2026
 
 
       can be fully buffered before being passed to the application.
@@ -277,9 +277,9 @@ Internet-Draft                WebTransport                    March 2026
 
 
 
-Kinnear & Vasiliev      Expires 3 September 2026                [Page 5]
-
-Internet-Draft                WebTransport                    March 2026
+Kinnear & Vasiliev         Expires 6 May 2027                   [Page 5]
+
+Internet-Draft                WebTransport                 November 2026
 
 
    All WebTransport protocols MUST use TLS [RFC8446] or a semantically
@@ -294,9 +294,13 @@ Internet-Draft                WebTransport                    March 2026
    Freshness [RFC7675] is another example of a mechanism satisfying this
    requirement.
 
-   All WebTransport protocols MUST limit the rate at which the client
+   All WebTransport protocols MUST limit the rate at which an endpoint
    sends data.  This SHOULD be accomplished via a feedback-based
-   congestion control mechanism (such as [RFC5681] or [RFC9002]).
+   congestion control mechanism (such as [RFC5681] or [RFC9002]).  A
+   WebTransport protocol MAY expose a way for the application to select
+   among different congestion control profiles (for example, one
+   optimized for throughput and one optimized for low latency), where
+   the underlying transport supports it.
 
    All WebTransport protocols MUST support simultaneously establishing
    multiple sessions between the same client and server.
@@ -321,21 +325,17 @@ Internet-Draft                WebTransport                    March 2026
    establishment request if none of the subprotocols are supported.
    Note that the semantics of individual subprotocol token values are
    determined by the WebTransport resource in question and are not
-   registered in IANA's "ALPN Protocol IDs" registry.
+   registered in IANA's "ALPN Protocol IDs" registry.  Resources SHOULD
+   use tokens that clearly identify their intended protocol; reusing
+   identifiers associated with established ALPN protocols for unrelated
+   purposes is NOT RECOMMENDED.
 
 
 
 
-
-
-
-
-
-
-
-Kinnear & Vasiliev      Expires 3 September 2026                [Page 6]
-
-Internet-Draft                WebTransport                    March 2026
+Kinnear & Vasiliev         Expires 6 May 2027                   [Page 6]
+
+Internet-Draft                WebTransport                 November 2026
 
 
 3.  Session Establishment
@@ -347,6 +347,11 @@ Internet-Draft                WebTransport                    March 2026
    clients to send data before the session is ready; however, they MUST
    NOT use mechanisms that are unsafe against replay attacks without an
    explicit indication from the client.
+
+   Where a WebTransport protocol is layered on a protocol whose session
+   establishment carries additional metadata (for example, HTTP response
+   header fields), the WebTransport protocol MAY expose that metadata to
+   the application once the session is ready.
 
 3.1.  Application Protocol Negotiation
 
@@ -364,9 +369,9 @@ Internet-Draft                WebTransport                    March 2026
 
 4.  Transport Features
 
-   All transport protocols MUST provide datagrams, unidirectional and
-   bidirectional streams in order to make the transport protocols
-   interchangeable.
+   In order to make the transport protocols interchangeable, all
+   transport protocols MUST provide datagrams, unidirectional streams,
+   and bidirectional streams.
 
 4.1.  Session-Wide Features
 
@@ -374,26 +379,29 @@ Internet-Draft                WebTransport                    March 2026
    the session:
 
    establish a session  Create a new WebTransport session given a URI
-      [RFC3986] of the requester.  An origin [RFC6454] MUST be given if
-      the WebTransport session is coming from a browser client;
+      [RFC3986] of the server endpoint.  An origin [RFC6454] MUST be
+      given if the WebTransport session is coming from a browser client;
       otherwise, it is OPTIONAL.
 
    terminate a session  Terminate the session while communicating to the
-      peer an unsigned 32-bit error code and an error reason string of
-      at most 1024 bytes.  As soon as the session is terminated, no
-      further application data will be exchanged on it.  The error code
-      and string are optional; the default values are 0 and "".  The
-      delivery of the error code and string MAY be best-effort.
+
+
+
+
+
+Kinnear & Vasiliev         Expires 6 May 2027                   [Page 7]
+
+Internet-Draft                WebTransport                 November 2026
+
+
+      peer an unsigned 32-bit error code and a UTF-8 encoded error
+      reason string of at most 1024 bytes.  As soon as the session is
+      terminated, no further application data will be exchanged on it.
+      The error code and string are optional; the default values are 0
+      and "".  The delivery of the error code and string MAY be best-
+      effort.
 
    drain a session  Indicate to the peer that it expects the session to
-
-
-
-Kinnear & Vasiliev      Expires 3 September 2026                [Page 7]
-
-Internet-Draft                WebTransport                    March 2026
-
-
       be gracefully terminated as soon as possible.  Either endpoint MAY
       continue using the session and MAY open new streams.  This signal
       is intended to allow intermediaries and endpoints to request a
@@ -419,11 +427,9 @@ Internet-Draft                WebTransport                    March 2026
 
 4.2.  Datagrams
 
-   A datagram is a sequence of bytes that is limited in size (generally
-   to the path MTU) and is not expected to be transmitted reliably.  The
-   general goal for WebTransport datagrams is to be similar in behavior
-   to UDP while being subject to common requirements expressed in
-   Section 2.
+   The general goal for WebTransport datagrams is to be similar in
+   behavior to UDP while being subject to common requirements expressed
+   in Section 2.
 
    A WebTransport sender is not expected to retransmit datagrams, though
    it may end up doing so if it is using TCP or some other underlying
@@ -434,21 +440,33 @@ Internet-Draft                WebTransport                    March 2026
 
    The application MUST be provided with the maximum datagram size that
    it can send.  The size SHOULD be derived from the result of
-   performing path MTU discovery.
+   performing path MTU discovery, when the underlying transport supports
+   it.
 
-   In the WebTransport model, all of the outgoing and incoming datagrams
-   are placed into a size-bound queue (similar to a network interface
-   card queue).
+
+
+Kinnear & Vasiliev         Expires 6 May 2027                   [Page 8]
+
+Internet-Draft                WebTransport                 November 2026
+
+
+   WebTransport datagrams have bounded send and receive buffers.  Either
+   endpoint can drop a datagram when its buffer is full: the sender can
+   drop an outgoing datagram that does not fit in its send buffer, and
+   the receiver can drop an incoming datagram that does not fit in its
+   receive buffer.
+
+   Additionally, because datagrams are not reliably delivered,
+   applications sending time-sensitive data can use age-based limits to
+   request that stale data is not sent.  A sender MAY impose an age-
+   based limit that caps how long an outgoing datagram remains queued
+   before it is either sent or discarded.  A receiver MAY apply a
+   similar age-based limit to discard incoming datagrams that have
+   waited in the receive queue for longer than the application is
+   willing to accept.
 
    Any WebTransport protocol SHALL provide the following operations on
    the session:
-
-
-
-Kinnear & Vasiliev      Expires 3 September 2026                [Page 8]
-
-Internet-Draft                WebTransport                    March 2026
-
 
    send a datagram  Enqueues a datagram to be sent to the peer.  This
       can potentially result in the datagram being dropped if the queue
@@ -457,8 +475,13 @@ Internet-Draft                WebTransport                    March 2026
    receive a datagram  Dequeues an incoming datagram, if one is
       available.
 
-   get maxiumum datagram size  Returns the largest size of the datagram
+   get maximum datagram size  Returns the largest size of the datagram
       that a WebTransport session is expected to be able to send.
+
+   The maximum size of an incoming datagram is determined by the
+   WebTransport protocol binding and the underlying transport.
+   WebTransport protocols MAY expose a way for the application to
+   influence the maximum receive datagram size or buffer capacity.
 
 4.3.  Streams
 
@@ -470,56 +493,86 @@ Internet-Draft                WebTransport                    March 2026
    The streams are in general expected to follow the semantics and the
    state machine of QUIC streams ([RFC9000], Sections 2 and 3).
 
-   A WebTransport stream can be reset, indicating that the endpoint is
-   not interested in either sending or receiving any data related to the
-   stream.  The sender of a stream can indicate an offset in the stream
-   (possibly zero) after which data that was already sent will not be
-   retransmitted.
+   A WebTransport stream sender can reset its send side, indicating that
+   no further data will be transmitted on the stream.  The sender can
+   indicate an offset in the stream (possibly zero) after which data
+   that was already sent will not be retransmitted.
 
-   Streams SHOULD be sufficiently lightweight that they can be used as
-   messages.
+
+
+
+Kinnear & Vasiliev         Expires 6 May 2027                   [Page 9]
+
+Internet-Draft                WebTransport                 November 2026
+
+
+   A WebTransport stream receiver can abort its receive side, indicating
+   that it is not interested in receiving further data and signaling the
+   sender to stop sending.  These operations are independent: the two
+   directions of a bidirectional stream can be terminated separately.
+
+   Errors signaled through resetting or aborting a stream are scoped to
+   that stream and do not terminate the WebTransport session.  Session-
+   level errors, signaled through the "terminate a session" operation,
+   apply to the entire session.
+
+   WebTransport protocols are designed so that streams are sufficiently
+   lightweight to be used as messages.
 
    Data sent on a stream is flow controlled by the transport protocol.
    In addition to flow controlling stream data, the creation of new
    streams is flow controlled as well: an endpoint may only open a
    limited number of streams until the peer explicitly allows creating
-   more streams.  From the perspective of the client, this is presented
-   as a size-bounded queue of incoming streams.
+   more streams.  From the receiver's perspective, this is presented as
+   a size-bounded queue of incoming streams.  A WebTransport protocol
+   MUST expose enough information about the current stream-creation flow
+   control state that a caller can determine whether stream creation
+   would succeed and know when additional stream credit becomes
+   available.
+
+   Applications MAY provide the transport with hints about how sending
+   on different streams and datagrams should be scheduled relative to
+   each other.  A WebTransport protocol MAY honor these hints using the
+   prioritization facilities of the underlying transport, where such
+   facilities are available.
 
    Any WebTransport protocol SHALL provide the following operations on
    the session:
 
    create a unidirectional stream  Creates an outgoing unidirectional
-      stream; this operation may block until the flow control of the
-      underlying protocol allows for it to be completed.
+      stream.
 
    create a bidirectional stream  Creates an outgoing bidirectional
-      stream; this operation may block until the flow control of the
-      underlying protocol allows for it to be completed.
+      stream.
 
-   receive a unidirectional stream  Removes a stream from the queue of
+   receive a unidirectional stream  Returns the next stream from the
+      queue of incoming unidirectional streams, if one is available.
 
-
-
-Kinnear & Vasiliev      Expires 3 September 2026                [Page 9]
-
-Internet-Draft                WebTransport                    March 2026
-
-
-      incoming unidirectional streams, if one is available.
-
-   receive a bidirectional stream  Removes a stream from the queue of
-      incoming bidirectional streams, if one is available.
+   receive a bidirectional stream  Returns the next stream from the
+      queue of incoming bidirectional streams, if one is available.
 
    Any WebTransport protocol SHALL provide the following operations on
    an individual stream:
 
-   send bytes  Add bytes into the stream send buffer.  The sender can
-      also indicate a FIN, signalling the fact that no new data will be
-      sent on the stream.  Not applicable for incoming unidirectional
-      streams.
 
-   receive bytes  Removes bytes from the stream receive buffer.  FIN can
+
+
+Kinnear & Vasiliev         Expires 6 May 2027                  [Page 10]
+
+Internet-Draft                WebTransport                 November 2026
+
+
+   send bytes  Add bytes into the stream send buffer.  The sender can
+      also indicate a FIN together with the bytes, signaling that no new
+      data will be sent on the stream.  Not applicable for incoming
+      unidirectional streams.
+
+   close send side  Indicate a FIN on the stream without writing
+      additional bytes, signaling that no new data will be sent.
+      Equivalent to calling send bytes with an empty payload and a FIN.
+      Not applicable for incoming unidirectional streams.
+
+   receive bytes  Reads bytes from the stream receive buffer.  FIN can
       be received together with the stream data.  Not applicable for
       outgoing unidirectional streams.
 
@@ -528,41 +581,43 @@ Internet-Draft                WebTransport                    March 2026
       that is reliably delivered.  Discards the send buffer after that
       offset; if possible, no currently outstanding data after the
       provided send offset is transmitted or retransmitted.  If omitted,
-      the offset is presumed to be 0.  An unsigned 32-bit error code can
-      be supplied as a part of the signal to the peer; if omitted, the
-      error code is presumed to be 0.
+      the offset is 0.  An unsigned 32-bit error code can be supplied as
+      a part of the signal to the peer; if omitted, the error code is 0.
 
    abort receive side  Sends a signal to the peer that the read side of
       the stream has been aborted.  Discards the receive buffer; the
-      peer is typically expected to abort the corresponding send side in
-      response.  An unsigned 32-bit error code can be supplied as a part
-      of the signal to the peer.
+      peer SHOULD abort the corresponding send side in response (similar
+      to Section 3.5 of [RFC9000]).  An unsigned 32-bit error code can
+      be supplied as a part of the signal to the peer.
 
    Any WebTransport protocol SHALL provide the following events for an
    individual stream:
 
    send side aborted  Indicates that the peer has aborted the
       corresponding receive side of the stream.  An unsigned 32-bit
-      error code from the peer may be available.
+      error code from the peer might be available.
 
    receive side aborted  Indicates that the peer has aborted the
       corresponding send side of the stream.  An unsigned 32-bit error
-      code from the peer may be available.
+      code from the peer might be available.
 
    all data committed  Indicates that all of the outgoing data on the
       stream, including the end stream indication, is in the state where
       aborting the send side would have no further effect on any data
       being delivered.
 
-
-
-
-Kinnear & Vasiliev      Expires 3 September 2026               [Page 10]
-
-Internet-Draft                WebTransport                    March 2026
-
-
       For protocols, like HTTP/2, stream data might be passed to another
+
+
+
+
+
+
+Kinnear & Vasiliev         Expires 6 May 2027                  [Page 11]
+
+Internet-Draft                WebTransport                 November 2026
+
+
       component (like a kernel) for transmission.  Once data is passed
       to that component it might not be possible to abort the sending of
       stream data without also aborting the entire connection.  For
@@ -570,18 +625,18 @@ Internet-Draft                WebTransport                    March 2026
       the other component.
 
       A protocol, like HTTP/3, that uses a more integrated stack might
-      be able to retract data further into the process.  For these
-      protocols, sending on a stream might be aborted at any time until
-      all data has been received and acknowledged by the peer,
-      corresponding to the "Data Recvd" state in QUIC; see Section 3.1
-      of [QUIC].
+      be able to prevent the transmission or retransmission of data that
+      has not yet been acknowledged by the peer.  For these protocols,
+      sending on a stream might be aborted at any time until all data
+      has been received and acknowledged by the peer, corresponding to
+      the "Data Recvd" state in QUIC; see Section 3.1 of [QUIC].
 
 5.  Transport Properties
 
    WebTransport defines common semantics for multiple protocols to allow
    them to be used interchangeably.  Nevertheless, those protocols still
    have substantially different performance properties that an
-   application may want to query.
+   application might want to query.
 
    The most notable property is support for unreliable data delivery.
    The protocol is defined to support unreliable delivery if:
@@ -589,7 +644,13 @@ Internet-Draft                WebTransport                    March 2026
    *  Resetting a stream results in the lost stream data no longer being
       retransmitted, and
 
-   *  The datagrams are never retransmitted.
+   *  Datagrams are never retransmitted.
+
+   Applications that depend on unreliable delivery, such as applications
+   sending time-sensitive datagrams, MAY require it when establishing a
+   session, and a WebTransport protocol MAY expose a way for such
+   applications to refuse a protocol binding that cannot provide
+   unreliable delivery.
 
    Another important property is pooling support.  Pooling means that
    multiple transport sessions may end up sharing the same transport
@@ -598,9 +659,20 @@ Internet-Draft                WebTransport                    March 2026
 
 6.  Security Considerations
 
-   Providing untrusted clients with a reasonably low-level access to the
+   Providing untrusted clients with a relatively low-level access to the
    network comes with risks.  This document mitigates those risks by
    imposing a set of common requirements described in Section 2.
+
+
+
+
+
+
+
+Kinnear & Vasiliev         Expires 6 May 2027                  [Page 12]
+
+Internet-Draft                WebTransport                 November 2026
+
 
    WebTransport mandates the use of TLS for all protocols implementing
    it.  This provides confidentiality and integrity for the transport,
@@ -610,20 +682,12 @@ Internet-Draft                WebTransport                    March 2026
    One potential concern is that even when a transport cannot be
    created, the connection error would reveal enough information to
    allow an attacker to scan the network addresses that would normally
-
-
-
-Kinnear & Vasiliev      Expires 3 September 2026               [Page 11]
-
-Internet-Draft                WebTransport                    March 2026
-
-
    be inaccessible.  Because of that, the user agent that runs untrusted
    clients MUST NOT provide any detailed error information until the
    server has confirmed that it is a WebTransport endpoint.  For
-   example, the client must not be able to distinguish between a network
-   address that is unreachable and one that is reachable but is not a
-   WebTransport server.
+   example, a client cannot distinguish between a network address that
+   is unreachable and one that is reachable but is not a WebTransport
+   server.
 
    Since WebTransport requires TLS, individual transport protocols MAY
    expose TLS-based authentication capabilities such as client
@@ -657,6 +721,15 @@ Internet-Draft                WebTransport                    March 2026
               DOI 10.17487/RFC6454, December 2011,
               <https://www.rfc-editor.org/rfc/rfc6454>.
 
+
+
+
+
+Kinnear & Vasiliev         Expires 6 May 2027                  [Page 13]
+
+Internet-Draft                WebTransport                 November 2026
+
+
    [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
               2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
               May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
@@ -667,14 +740,7 @@ Internet-Draft                WebTransport                    March 2026
 
 8.2.  Informative References
 
-
-
-Kinnear & Vasiliev      Expires 3 September 2026               [Page 12]
-
-Internet-Draft                WebTransport                    March 2026
-
-
-   [CSP]      W3C, "Content Security Policy Level 3", March 2026,
+   [CSP]      W3C, "Content Security Policy Level 3", November 2026,
               <https://www.w3.org/TR/CSP/>.
 
    [RFC5681]  Allman, M., Paxson, V., and E. Blanton, "TCP Congestion
@@ -713,6 +779,13 @@ Internet-Draft                WebTransport                    March 2026
               1.3", RFC 9147, DOI 10.17487/RFC9147, April 2022,
               <https://www.rfc-editor.org/rfc/rfc9147>.
 
+
+
+Kinnear & Vasiliev         Expires 6 May 2027                  [Page 14]
+
+Internet-Draft                WebTransport                 November 2026
+
+
    [RFC9220]  Hamilton, R., "Bootstrapping WebSockets with HTTP/3",
               RFC 9220, DOI 10.17487/RFC9220, June 2022,
               <https://www.rfc-editor.org/rfc/rfc9220>.
@@ -721,14 +794,6 @@ Internet-Draft                WebTransport                    March 2026
               Datagram Extension to QUIC", RFC 9221,
               DOI 10.17487/RFC9221, March 2022,
               <https://www.rfc-editor.org/rfc/rfc9221>.
-
-
-
-
-Kinnear & Vasiliev      Expires 3 September 2026               [Page 13]
-
-Internet-Draft                WebTransport                    March 2026
-
 
 Authors' Addresses
 
@@ -772,13 +837,4 @@ Authors' Addresses
 
 
 
-
-
-
-
-
-
-
-
-
-Kinnear & Vasiliev      Expires 3 September 2026               [Page 14]
+Kinnear & Vasiliev         Expires 6 May 2027                  [Page 15]

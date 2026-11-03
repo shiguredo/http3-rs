@@ -5,12 +5,12 @@
 QUIC                                                       I. Swett, Ed.
 Internet-Draft                                                Google LLC
 Intended status: Standards Track                          J. Beshay, Ed.
-Expires: 7 May 2026                                 Meta Platforms, Inc.
-                                                         3 November 2025
+Expires: 21 January 2027                            Meta Platforms, Inc.
+                                                            20 July 2026
 
 
  QUIC Extended Acknowledgement for Reporting Packet Receive Timestamps
-                     draft-ietf-quic-receive-ts-00
+                     draft-ietf-quic-receive-ts-03
 
 Abstract
 
@@ -33,11 +33,11 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 7 May 2026.
+   This Internet-Draft will expire on 21 January 2027.
 
 Copyright Notice
 
-   Copyright (c) 2025 IETF Trust and the persons identified as the
+   Copyright (c) 2026 IETF Trust and the persons identified as the
    document authors.  All rights reserved.
 
    This document is subject to BCP 78 and the IETF Trust's Legal
@@ -53,9 +53,9 @@ Copyright Notice
 
 
 
-Swett & Beshay             Expires 7 May 2026                   [Page 1]
-
-Internet-Draft           QUIC Receive Timestamps           November 2025
+Swett & Beshay           Expires 21 January 2027                [Page 1]
+
+Internet-Draft           QUIC Receive Timestamps               July 2026
 
 
 Table of Contents
@@ -63,21 +63,22 @@ Table of Contents
    1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   2
    2.  Motivation  . . . . . . . . . . . . . . . . . . . . . . . . .   2
    3.  Conventions and Definitions . . . . . . . . . . . . . . . . .   3
-   4.  ACK Frame Wire Format . . . . . . . . . . . . . . . . . . . .   3
+   4.  New ACK_RECEIVE_TIMESTAMPS Frame Wire Format  . . . . . . . .   3
      4.1.  Timestamp Ranges  . . . . . . . . . . . . . . . . . . . .   4
-   5.  Extension Negotiation . . . . . . . . . . . . . . . . . . . .   5
-     5.1.  Multiple Extensions to the ACK Frame  . . . . . . . . . .   6
-     5.2.  Receive Timestamp Basis . . . . . . . . . . . . . . . . .   6
-   6.  Discussion  . . . . . . . . . . . . . . . . . . . . . . . . .   6
-     6.1.  Best-Effort Behavior  . . . . . . . . . . . . . . . . . .   6
-   7.  Examples  . . . . . . . . . . . . . . . . . . . . . . . . . .   6
-   8.  Security Considerations . . . . . . . . . . . . . . . . . . .   8
-   9.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .   8
-   10. References  . . . . . . . . . . . . . . . . . . . . . . . . .   9
-     10.1.  Normative References . . . . . . . . . . . . . . . . . .   9
-     10.2.  Informative References . . . . . . . . . . . . . . . . .   9
-   Acknowledgments . . . . . . . . . . . . . . . . . . . . . . . . .  10
-   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  10
+   5.  PATH_ACK_RECEIVE_TIMESTAMPS Frame Wire Format . . . . . . . .   5
+   6.  Extension Negotiation . . . . . . . . . . . . . . . . . . . .   6
+     6.1.  Receive Timestamp Basis . . . . . . . . . . . . . . . . .   7
+   7.  Discussion  . . . . . . . . . . . . . . . . . . . . . . . . .   7
+     7.1.  Best-Effort Behavior  . . . . . . . . . . . . . . . . . .   7
+     7.2.  Frame Size  . . . . . . . . . . . . . . . . . . . . . . .   8
+   8.  Examples  . . . . . . . . . . . . . . . . . . . . . . . . . .   8
+   9.  Security Considerations . . . . . . . . . . . . . . . . . . .  10
+   10. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  11
+   11. References  . . . . . . . . . . . . . . . . . . . . . . . . .  11
+     11.1.  Normative References . . . . . . . . . . . . . . . . . .  11
+     11.2.  Informative References . . . . . . . . . . . . . . . . .  12
+   Acknowledgments . . . . . . . . . . . . . . . . . . . . . . . . .  12
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  12
 
 1.  Introduction
 
@@ -97,7 +98,7 @@ Table of Contents
    control, especially for latency-critical applications such as real-
    time video conferencing or game streaming.
 
-   Numerous existing algorithms and techniques leverage receive receive
+   Numerous existing algorithms and techniques leverage receive
    timestamps to improve transport performance.  Examples include:
 
    *  The WebRTC congestion control algorithm described in
@@ -108,10 +109,9 @@ Table of Contents
 
 
 
-
-Swett & Beshay             Expires 7 May 2026                   [Page 2]
-
-Internet-Draft           QUIC Receive Timestamps           November 2025
+Swett & Beshay           Expires 21 January 2027                [Page 2]
+
+Internet-Draft           QUIC Receive Timestamps               July 2026
 
 
    *  The pathChirp ([RRBNC]) technique estimates available bandwidth by
@@ -131,44 +131,50 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
    BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
    capitals, as shown here.
 
-4.  ACK Frame Wire Format
+4.  New ACK_RECEIVE_TIMESTAMPS Frame Wire Format
 
-   Endpoints send ACK frames in 1-RTT packets as they otherwise would,
-   with 0 or more receive timestamps following the Ack Ranges and
-   optional ECN Counts.  Receive timestamps MUST NOT be sent in Initial
-   or Handshake packets, because the peer would not know to use the
-   extended wire format.  ACK frames are never sent in 0-RTT packets, so
-   there is no change to 0-RTT.
+   Once the receive timestamps extension is negotiated (see Section 6),
+   an endpoint MAY use the ACK_RECEIVE_TIMESTAMPS frame defined below to
+   report receive timestamps to its peer.  An endpoint MAY continue to
+   use the existing ACK frames as specified in Section 19.3 of [RFC9000]
+   if it does not have any receive timestamps or does not want to report
+   them.
 
-   Once negotiated, the ACK format is identical to RFC9000, but with an
-   additional section for receive timestamps at the end:
+   Endpoints send ACK_RECEIVE_TIMESTAMPS frames in 1-RTT packets, with 0
+   or more receive timestamps following the Ack Ranges and optional ECN
+   Counts.  Similar to to the ACK frame types (x02..0x03), the
+   ACK_RECEIVE_TIMESTAMPS frame defines two frame types
+   (0x03178307..0x03178308) to indicate whether the frame includes ECN
+   counts.  ACK frames are never sent in 0-RTT packets, so the same
+   applies to ACK_RECEIVE_TIMESTAMPS frames.
 
-   ACK Frame {
-     Type (i) = 0x02..0x03,
+   ACK_RECEIVE_TIMESTAMPS Frame {
+     Type (i) = 0x03178307..0x03178308,
      Largest Acknowledged (i),
      ACK Delay (i),
      ACK Range Count (i),
      First ACK Range (i),
      ACK Range (..) ...,
-     [ECN Counts (..)],
-     // Timestamp Extension, see {{ts-ranges}}
-     Receive Timestamps (..)
+     [ECN Counts (..)],       // included iff Type == 0x03178308
+     Receive Timestamps (..)  // see {{ts-ranges}}
    }
 
                          Figure 1: ACK Frame Format
+
+
+
+
+
+Swett & Beshay           Expires 21 January 2027                [Page 3]
+
+Internet-Draft           QUIC Receive Timestamps               July 2026
+
 
    The fields Largest Acknowledged, ACK Delay, ACK Range Count, First
    ACK Range, ACK Range and ECN Counts are the same as for ACK
    (type=0x02..0x03) frames specified in Section 19.3 of [RFC9000].
 
    The format of the Receive Timestamps field is shown in Figure 2.
-
-
-
-Swett & Beshay             Expires 7 May 2026                   [Page 3]
-
-Internet-Draft           QUIC Receive Timestamps           November 2025
-
 
    Receive Timestamps {
      Timestamp Range Count (i),
@@ -195,6 +201,11 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
    and timestamp order.  Ranges are in descending timestamp order but do
    not have to be in descending packet number order.
 
+   Each packet in a range MUST be an acknowledged packet, i.e., the
+   packet number MUST have been included in an ACK Range in the current
+   or a previously sent ACK, ACK_RECEIVE_TIMESTAMPS, PATH_ACK, or
+   PATH_ACK_RECEIVE_TIMESTAMPS frame.
+
    Timestamp Ranges are structured as shown in Figure 3.
 
    Timestamp Range {
@@ -207,6 +218,14 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
 
    The fields that form each Timestamp Range are:
 
+
+
+
+Swett & Beshay           Expires 21 January 2027                [Page 4]
+
+Internet-Draft           QUIC Receive Timestamps               July 2026
+
+
    Delta Largest Acknowledged:  A variable-length integer indicating the
       largest packet number in the Timestamp Range as a delta to
       subtract from the Largest Acknowledged in the ACK frame.  For
@@ -216,19 +235,9 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
    Timestamp Delta Count:  A variable-length integer indicating the
       number of Timestamp Deltas in the current Timestamp Range.
 
-
-
-
-
-
-Swett & Beshay             Expires 7 May 2026                   [Page 4]
-
-Internet-Draft           QUIC Receive Timestamps           November 2025
-
-
       The sum of Timestamp Delta Counts for all Timestamp Ranges in the
       frame MUST NOT exceed max_receive_timestamps_per_ack as specified
-      in Section 5.
+      in Section 6.
 
    Timestamp Deltas:  Variable-length integers encoding the receive
       timestamp for contiguous packets in the Timestamp Range in
@@ -238,7 +247,7 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
       frame: the value is the difference between (a) the receive
       timestamp of the largest packet in the Timestamp Range (indicated
       by Gap) and (b) the session receive_timestamp_basis (see
-      Section 5.2), decoded as described below.
+      Section 6.1), decoded as described below.
 
       For all other Timestamp Deltas: the value is the difference
       between (a) the receive timestamp specified by the previous
@@ -247,52 +256,110 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
 
       All Timestamp Delta values are decoded by mulitplying the value in
       the field by 2 to the power of the receive_timestamps_exponent
-      transport parameter received by the sender of the ACK frame (see
-      Section 5):
+      transport parameter received by the sender of the frame (see
+      Section 6):
 
    When the receiver receives packets out-of-order, it SHOULD report
-   them with other packets in a single ACK frame, starting with the most
-   recently received packet regardless of the packet number order.  See
-   Section 7 for examples of reporting timestamps of out-of-order
-   packets.
+   them with other packets in a single ACK_RECEIVE_TIMESTAMPS or
+   PATH_ACK_RECEIVE_TIMESTAMPS frame, starting with the most recently
+   received packet regardless of the packet number order.  See Section 8
+   for examples of reporting timestamps of out-of-order packets.
 
-5.  Extension Negotiation
+5.  PATH_ACK_RECEIVE_TIMESTAMPS Frame Wire Format
 
-   max_receive_timestamps_per_ack (0xff0a002 temporary value for
-   draft use):  A variable-length integer indicating that the maximum
-      number of receive timestamps the sending endpoint would like to
-      receive in an ACK frame.
+   When both the receive timestamps extension and the multipath
+   extension [MULTIPATH] are negotiated, an endpoint MAY use the
+   PATH_ACK_RECEIVE_TIMESTAMPS frame defined below to report receive
+   timestamps for packets received on a specific path.  An endpoint MAY
+   continue to use the existing PATH_ACK frames as specified in
+   Section 4.1 of [MULTIPATH] if it does not have any receive timestamps
+   or does not want to report them.
 
-      Each ACK frame sent MUST NOT contain more than the peer's maximum
-      number of receive timestamps.
 
-   receive_timestamps_exponent (0xff0a003 temporary value for draft
+
+Swett & Beshay           Expires 21 January 2027                [Page 5]
+
+Internet-Draft           QUIC Receive Timestamps               July 2026
+
+
+   Endpoints send PATH_ACK_RECEIVE_TIMESTAMPS frames in 1-RTT packets,
+   with 0 or more receive timestamps following the Ack Ranges and
+   optional ECN Counts.  Similar to the PATH_ACK frame types
+   (0x3e..0x3f), the PATH_ACK_RECEIVE_TIMESTAMPS frame defines two frame
+   types (0x03178309..0x0317830a) to indicate whether the frame includes
+   ECN counts.
+
+   PATH_ACK_RECEIVE_TIMESTAMPS Frame {
+     Type (i) = 0x03178309..0x0317830a,
+     Path Identifier (i),
+     Largest Acknowledged (i),
+     ACK Delay (i),
+     ACK Range Count (i),
+     First ACK Range (i),
+     ACK Range (..) ...,
+     [ECN Counts (..)],       // included iff Type == 0x0317830a
+     Receive Timestamps (..)  // see {{ts-ranges}}
+   }
+
+             Figure 4: PATH_ACK_RECEIVE_TIMESTAMPS Frame Format
+
+   Compared to the ACK_RECEIVE_TIMESTAMPS frame defined in Section 4,
+   the following field is added:
+
+   Path Identifier:  The path ID associated with the packet number space
+      of the 1-RTT packets which are acknowledged by this frame, as
+      specified in Section 4.1 of [MULTIPATH].
+
+   All other fields are the same as for the ACK_RECEIVE_TIMESTAMPS frame
+   (Section 4).  The Receive Timestamps field follows the same format
+   described in Section 4.1.
+
+   When truncation is necessary to fit within the
+   max_receive_timestamps_per_ack limit or reduce the size of the frame,
+   the receiver SHOULD retain timestamps for the most recently received
+   packets and omit timestamps for older packets.
+
+6.  Extension Negotiation
+
+   max_receive_timestamps_per_ack (0x4ac07 temporary value for draft
+   use):  A variable-length integer indicating that the maximum number
+      of receive timestamps the sending endpoint would like to receive
+      in an ACK_RECEIVE_TIMESTAMPS or PATH_ACK_RECEIVE_TIMESTAMPS frame.
+      If this transport parameter is absent, this extension is not
+      supported, which is equivalent to a value of 0.
+
+
+
+
+
+
+Swett & Beshay           Expires 21 January 2027                [Page 6]
+
+Internet-Draft           QUIC Receive Timestamps               July 2026
+
+
+      Each ACK_RECEIVE_TIMESTAMPS or PATH_ACK_RECEIVE_TIMESTAMPS frame
+      sent MUST NOT contain more than the peer's maximum number of
+      receive timestamps.
+
+      An endpoint MUST NOT send ACK_RECEIVE_TIMESTAMPS or
+      PATH_ACK_RECEIVE_TIMESTAMPS frames to a peer whose
+      max_receive_timestamps_per_ack is not present or 0.  A value of 0
+      does not permit sending these frames with zero timestamps; it
+      prohibits sending them entirely.
+
+   receive_timestamps_exponent (0x4ac26 temporary value for draft
    use):  A variable-length integer indicating the exponent to be used
-      when encoding and decoding timestamp delta fields in ACK frames
-      sent by the peer (see Section 4.1).  If this value is absent, a
-      default value of 0 is assumed (indicating microsecond precision).
-      Values above 20 are invalid.
+      when encoding and decoding timestamp delta fields in
+      ACK_RECEIVE_TIMESTAMPS and PATH_ACK_RECEIVE_TIMESTAMPS frames sent
+      by the peer (see Section 4.1).  If this value is absent, a default
+      value of 0 is assumed (indicating microsecond precision).  Values
+      above 20 are invalid.  If the receive_timestamps_exponent
+      transport parameter is present and max_receive_timestamps_per_ack
+      is absent or has a value of 0, receive timestamps are not
+      supported and receive_timestamps_exponent MUST be ignored.
 
-
-
-
-
-Swett & Beshay             Expires 7 May 2026                   [Page 5]
-
-Internet-Draft           QUIC Receive Timestamps           November 2025
-
-
-5.1.  Multiple Extensions to the ACK Frame
-
-   Multiple extensions can alter the ACK Frame or define new codepoints
-   for variations on the ACK frame, such as [MULTIPATH].  Each extension
-   defines how it co-exists with past extensions.  If multiple
-   extensions add more information to the ACK Frame, as this receive
-   timestamp extension does, the additional extensions are appended at
-   the end of the ACK Frame in the order of their RFC number, unless
-   otherwise specified.
-
-5.2.  Receive Timestamp Basis
+6.1.  Receive Timestamp Basis
 
    Endpoints which negotiate the extension need to determine a value,
    receive_timestamp_basis, relative to which all receive timestamps for
@@ -307,22 +374,46 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
    absolute time to avoid requiring clock synchronization between
    endpoints and to make the frame more compact.
 
-6.  Discussion
+7.  Discussion
 
-6.1.  Best-Effort Behavior
+7.1.  Best-Effort Behavior
 
    Receive timestamps are sent on a best-effort basis.  Endpoints MUST
    gracefully handle scenarios where the receiver does not communicate
    receive timestamps for acknowledged packets.  Examples of such
    scenarios are:
 
-   *  A packet containing an ACK frame is lost.
+   *  A packet containing an ACK_RECEIVE_TIMESTAMPS or
+      PATH_ACK_RECEIVE_TIMESTAMPS frame is lost.
 
-   *  The sender truncates the number of timestamps sent in order to (a)
-      avoid sending more than max_receive_timestamps_per_ack
-      (Section 5); or (b) fit the ACK frame into a packet.
 
-7.  Examples
+
+
+Swett & Beshay           Expires 21 January 2027                [Page 7]
+
+Internet-Draft           QUIC Receive Timestamps               July 2026
+
+
+   *  The receiver truncates the number of timestamps sent in order to
+      (a) avoid sending more than max_receive_timestamps_per_ack
+      (Section 6); or (b) fit the ACK_RECEIVE_TIMESTAMPS or
+      PATH_ACK_RECEIVE_TIMESTAMPS frame into a packet.
+
+   *  The receiver is unable to measure the arrival timestamp of a
+      packet with sufficient accuracy, for example due to a scheduling
+      delay in a userspace implementation, and omits the packet from the
+      Timestamp Ranges while still acknowledging it in the ACK Ranges.
+
+7.2.  Frame Size
+
+   The addition of receive timestamps increases the size of ACK frames.
+   Receivers SHOULD use receive timestamps to fill available space in
+   packets that would already be sent, rather than sending additional
+   packets solely to report timestamps.  In such cases, the receiver
+   would send fewer timestamps than the maximum allowed by
+   max_receive_timestamps_per_ack.
+
+8.  Examples
 
    To illustrate the usage of the Receive Timestamps fields, consider a
    peer that sent 14 packets with numbers 87 to 100.
@@ -333,9 +424,30 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
 
 
 
-Swett & Beshay             Expires 7 May 2026                   [Page 6]
 
-Internet-Draft           QUIC Receive Timestamps           November 2025
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Swett & Beshay           Expires 21 January 2027                [Page 8]
+
+Internet-Draft           QUIC Receive Timestamps               July 2026
 
 
                   +===============+====================+
@@ -389,9 +501,9 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
 
 
 
-Swett & Beshay             Expires 7 May 2026                   [Page 7]
-
-Internet-Draft           QUIC Receive Timestamps           November 2025
+Swett & Beshay           Expires 21 January 2027                [Page 9]
+
+Internet-Draft           QUIC Receive Timestamps               July 2026
 
 
                   +===============+====================+
@@ -434,30 +546,77 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
    the first timestamp range only since the timestamps for the other two
    ranges have already been reported.
 
-8.  Security Considerations
+9.  Security Considerations
 
-   TODO Security
-
-9.  IANA Considerations
-
-   This document has no IANA actions.
+   The security properties described in Section 21 of [RFC9000] apply,
+   as this extension only defines frames sent in 1-RTT packets, which
+   are authenticated and integrity-protected.
 
 
 
 
-Swett & Beshay             Expires 7 May 2026                   [Page 8]
-
-Internet-Draft           QUIC Receive Timestamps           November 2025
 
 
-10.  References
+Swett & Beshay           Expires 21 January 2027               [Page 10]
+
+Internet-Draft           QUIC Receive Timestamps               July 2026
 
-10.1.  Normative References
+
+   As noted in Section 8.1 of [RFC9002], congestion control relies on
+   signals from unauthenticated entities.  Receive timestamps are
+   integrity-protected but remain under the peer's control and could be
+   crafted to influence the sender's congestion control or bandwidth
+   estimation.
+
+   A malicious peer could report incorrect timestamps to cause the
+   sender to over- or under-estimate available bandwidth.
+   Implementations that use receive timestamps SHOULD perform
+   plausibility checks and bound their impact using other signals (loss,
+   ECN, RTT); implausible timestamps MAY be ignored.
+
+   Processing and storing timestamps requires additional state.
+   Endpoints SHOULD bound the resources dedicated to this extension,
+   advertise a max_receive_timestamps_per_ack they are willing to
+   handle, and be prepared to truncate or ignore excess timestamps as
+   described in Section 7.1.  The size of ACK_RECEIVE_TIMESTAMPS and
+   PATH_ACK_RECEIVE_TIMESTAMPS frames is bounded by the peer's
+   advertised limit and the packet size, limiting amplification as
+   discussed in Section 21.9 of [RFC9000].
+
+10.  IANA Considerations
+
+   This document uses temporary values for the transport parameters
+   max_receive_timestamps_per_ack (0x4ac07) and
+   receive_timestamps_exponent (0x4ac26), and for the frame types
+   ACK_RECEIVE_TIMESTAMPS (0x03178307..0x03178308) and
+   PATH_ACK_RECEIVE_TIMESTAMPS (0x03178309..0x0317830a).  Prior to
+   publication, these will be replaced with permanent registrations in
+   the "QUIC Transport Parameters" (Section 22.3 of [RFC9000]) and "QUIC
+   Frame Types" (Section 22.4 of [RFC9000]) registries.
+
+11.  References
+
+11.1.  Normative References
+
+   [MULTIPATH]
+              Liu, Y., Ma, Y., De Coninck, Q., Bonaventure, O., Huitema,
+              C., and M. Kühlewind, "Managing multiple paths for a QUIC
+              connection", Work in Progress, Internet-Draft, draft-ietf-
+              quic-multipath-21, 17 March 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-quic-
+              multipath-21>.
 
    [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
               Requirement Levels", BCP 14, RFC 2119,
               DOI 10.17487/RFC2119, March 1997,
               <https://www.rfc-editor.org/rfc/rfc2119>.
+
+
+
+Swett & Beshay           Expires 21 January 2027               [Page 11]
+
+Internet-Draft           QUIC Receive Timestamps               July 2026
+
 
    [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
               2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
@@ -468,7 +627,7 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
               DOI 10.17487/RFC9000, May 2021,
               <https://www.rfc-editor.org/rfc/rfc9000>.
 
-10.2.  Informative References
+11.2.  Informative References
 
    [I-D.ietf-rmcat-gcc]
               Holmer, S., Lundin, H., Carlucci, G., De Cicco, L., and S.
@@ -478,14 +637,6 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
               <https://datatracker.ietf.org/doc/html/draft-ietf-rmcat-
               gcc-02>.
 
-   [MULTIPATH]
-              Liu, Y., Ma, Y., De Coninck, Q., Bonaventure, O., Huitema,
-              C., and M. Kühlewind, "Managing multiple paths for a QUIC
-              connection", Work in Progress, Internet-Draft, draft-ietf-
-              quic-multipath-17, 20 October 2025,
-              <https://datatracker.ietf.org/doc/html/draft-ietf-quic-
-              multipath-17>.
-
    [RFC9002]  Iyengar, J., Ed. and I. Swett, Ed., "QUIC Loss Detection
               and Congestion Control", RFC 9002, DOI 10.17487/RFC9002,
               May 2021, <https://www.rfc-editor.org/rfc/rfc9002>.
@@ -493,18 +644,6 @@ Internet-Draft           QUIC Receive Timestamps           November 2025
    [RRBNC]    Cottrel, R. V. R. R. B. R. N. J. and L., "pathChirp:
               Efficient Available Bandwidth Estimation for Network
               Paths", 2003.
-
-
-
-
-
-
-
-
-Swett & Beshay             Expires 7 May 2026                   [Page 9]
-
-Internet-Draft           QUIC Receive Timestamps           November 2025
-
 
 Acknowledgments
 
@@ -530,31 +669,4 @@ Authors' Addresses
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Swett & Beshay             Expires 7 May 2026                  [Page 10]
+Swett & Beshay           Expires 21 January 2027               [Page 12]
