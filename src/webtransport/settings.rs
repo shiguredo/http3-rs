@@ -238,8 +238,8 @@ impl Settings {
     /// - [`DraftVersion::Draft15`] (draft-15 / 16): SETTINGS_WT_ENABLED (0x2c7cf000) = 1
     /// - [`DraftVersion::Draft17`]: SETTINGS_WT_ENABLED (0x20b8933b) = 1
     ///
-    /// `max_sessions` が 0 の場合、draft-07 / draft-14 の設定値が 0 になり
-    /// 広告として扱われない ([`Settings::advertised_draft_versions`] を参照)。
+    /// `max_sessions` が 0 の場合、draft-07 / draft-14 のコードポイントは
+    /// 送信しない (0 値を送っても広告にならないため)。
     ///
     /// SETTINGS_WT_INITIAL_MAX_* は設定しない。フロー制御の初期値は接続ごとの
     /// 方針であり、ビルダーメソッド
@@ -268,10 +268,12 @@ impl Settings {
             match version {
                 DraftVersion::Draft02 => settings.enable_webtransport_draft02 = Some(true),
                 DraftVersion::Draft07 => {
-                    settings.webtransport_max_sessions_draft07 = Some(max_sessions);
+                    settings.webtransport_max_sessions_draft07 =
+                        (max_sessions != VarInt::ZERO).then_some(max_sessions);
                 }
                 DraftVersion::Draft14 => {
-                    settings.wt_max_sessions_draft14 = Some(max_sessions);
+                    settings.wt_max_sessions_draft14 =
+                        (max_sessions != VarInt::ZERO).then_some(max_sessions);
                 }
                 DraftVersion::Draft15 => settings.wt_enabled = VarInt::from_static(1),
                 DraftVersion::Draft17 => settings.wt_enabled_draft17 = VarInt::from_static(1),

@@ -67,10 +67,12 @@ impl DraftVersion {
     ///
     /// - **Draft17**: `SETTINGS_WT_ENABLED` (0x20b8933b) + 初期ストリーム上限
     /// - **Draft15** (draft-15 / 16): `SETTINGS_WT_ENABLED` (0x2c7cf000) + 初期ストリーム上限
-    /// - **Draft14**: Safari (Network.framework) 互換のため draft-07 と draft-14 の
-    ///   **両方** の SETTINGS ID を返す。Safari 26.4 はどちらの ID で判定するか不定のため、
-    ///   両方返すことで WebTransport 対応と認識させる。カプセルベースフロー制御用に
-    ///   初期ストリーム上限と初期データ上限も設定する。
+    /// - **Draft14**: safari 以外の draft-14 クライアント向けに draft-07 と draft-14 の
+    ///   **両方** の SETTINGS ID を返す。Safari 26.4 は draft-07 と draft-14 の ID を
+    ///   併送するが、応答 SETTINGS に draft-14 の ID を含めると CONNECT を拒否するため、
+    ///   Safari に応答する場合は draft-07 を使い、この関数を使わない
+    ///   (`docs/SAFARI_WT.md`)。カプセルベースフロー制御用に初期ストリーム上限と
+    ///   初期データ上限も設定する。
     /// - **Draft07**: `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` (draft-07) のみ
     /// - **Draft02**: `SETTINGS_ENABLE_WEBTRANSPORT` のみ
     ///

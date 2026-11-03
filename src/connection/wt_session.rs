@@ -310,9 +310,17 @@ impl Connection {
     /// を前提に、必須 SETTINGS と transport parameter を検証する。
     /// (draft-ietf-webtrans-http3-02/07/14/15/16/17 Section 3.1)
     pub(crate) fn is_wt_fully_negotiated(&self) -> bool {
-        // ローカルが WebTransport を有効にしているか
-        if !self.local_settings.is_webtransport_enabled() {
-            return false;
+        // ローカルが WebTransport を有効にしているか。本文版だけに対応する
+        // クライアントは SETTINGS_WT_ENABLED を送らないため、クライアントでは
+        // WebTransport の SETTINGS を持つことだけを条件にする
+        // (draft-ietf-webtrans-http3-17 Section 7.1)。
+        match self.local_settings.wt_settings.as_ref() {
+            None => return false,
+            Some(local_wt) => {
+                if self.role == Role::Server && !local_wt.is_enabled() {
+                    return false;
+                }
+            }
         }
         // peer の SETTINGS を受信済みか
         let Some(peer) = self.peer_settings.as_ref() else {

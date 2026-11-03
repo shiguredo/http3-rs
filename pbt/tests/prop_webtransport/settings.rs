@@ -244,7 +244,8 @@ fn encode_control_stream(entries: &[(VarInt, VarInt)]) -> Vec<u8> {
     shiguredo_http3::varint::encode_into_vec(&mut control, VarInt::from_static(0x04));
     shiguredo_http3::varint::encode_into_vec(
         &mut control,
-        VarInt::new(payload.len() as u64).expect("payload length in VarInt range"),
+        VarInt::new(payload.len() as u64)
+            .expect("テスト用の SETTINGS ペイロード長が VarInt 範囲に収まること"),
     );
     control.extend_from_slice(&payload);
     control

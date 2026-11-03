@@ -242,7 +242,6 @@ impl WtSessionRequest {
         // ── Phase 2: サーバー H3 設定を用意する ──
         //
         // 初期フロー制御値は動的更新が未実装のため大きめに通知する。
-        // 初期フロー制御値は動的更新が未実装のため大きめに通知する。
         let initial_max_streams_uni = shiguredo_http3::VarInt::from_static(1000);
         let initial_max_streams_bidi = shiguredo_http3::VarInt::from_static(1000);
         let initial_max_data = shiguredo_http3::VarInt::new(8 * 1024 * 1024)

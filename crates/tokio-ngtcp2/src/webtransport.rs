@@ -8,9 +8,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
-use shiguredo_http3::webtransport::{
-    ConnectRequest, ConnectResponse, DraftVersion, ServerSettingsParams, StreamHeader,
-};
+use shiguredo_http3::webtransport::{ConnectRequest, ConnectResponse, DraftVersion, StreamHeader};
 use shiguredo_http3::{Event, Settings, WebTransportEvent};
 use shiguredo_ngtcp2_tokio::ConnectionId;
 
@@ -42,7 +40,7 @@ fn wt_settings() -> shiguredo_http3::webtransport::Settings {
             DraftVersion::Draft15,
             DraftVersion::Draft17,
         ],
-        ServerSettingsParams::default().max_sessions,
+        shiguredo_http3::VarInt::from_static(1),
     )
 }
 

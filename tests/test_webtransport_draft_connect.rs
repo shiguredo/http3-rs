@@ -1817,8 +1817,10 @@ mod version_selection {
     fn server_selects_document_version_without_client_advertisement() {
         // 表の 1 行目: 本文版のみのサーバー + WT 広告なしのクライアント → 本文版
         let mut server = make_server(&[DraftVersion::Draft17], true);
-        // 本文版だけに対応するクライアントは SETTINGS_WT_ENABLED を送らず、
-        // SETTINGS_WT_INITIAL_MAX_* だけを送る (draft-ietf-webtrans-http3-17 Section 3.1)
+        // 本文版だけに対応するクライアントは SETTINGS_WT_ENABLED を送らない
+        // (draft-ietf-webtrans-http3-17 Section 7.1)。テストでは wt_settings を
+        // 空でない値にするため SETTINGS_WT_INITIAL_MAX_DATA だけを設定する
+        // (フロー制御の初期値: 同 Section 5.1)
         let mut client = make_client(WtSettings::new().wt_initial_max_data(vi(1024)), true);
 
         exchange_settings(&mut server, &mut client);
@@ -1838,6 +1840,50 @@ mod version_selection {
             send_connect_via_client(&mut server, &mut client, DraftVersion::Draft17)
                 .expect("本文版だけのクライアントの CONNECT が受理されること");
         assert_eq!(session_start, 0, "CONNECT は stream 0 で送られること");
+    }
+
+    #[test]
+    fn document_version_only_client_receives_server_initiated_streams() {
+        // 本文版だけに対応するクライアント (SETTINGS_WT_ENABLED を送らない) でも、
+        // セッション確立後のサーバー開始 bidi / uni / datagram を受信できる
+        // (draft-ietf-webtrans-http3-17 Section 4.3, 4.5, 4.6)
+        let mut server = make_server(&[DraftVersion::Draft17], true);
+        let mut client = make_client(WtSettings::new().wt_initial_max_data(vi(1024)), true);
+        exchange_settings(&mut server, &mut client);
+        let (session_id, _events) =
+            establish_session(&mut server, &mut client, DraftVersion::Draft17);
+        assert_eq!(session_id, 0);
+
+        // サーバー開始 bidi (stream 1) の 0x41 bidi
+        client
+            .feed_stream(1, &[0x40, 0x41, 0x00], false)
+            .expect("本文版だけのクライアントでもサーバー開始 bidi を受理すること");
+        // サーバー開始 uni (stream 7。stream 3 はサーバーの制御ストリーム) の 0x54
+        client
+            .feed_stream(7, &[0x40, 0x54, 0x00], false)
+            .expect("本文版だけのクライアントでもサーバー開始 uni を受理すること");
+        // datagram (Quarter Stream ID = 0)
+        client
+            .feed_datagram(&[0x00, 0x01, 0x02])
+            .expect("本文版だけのクライアントでも datagram を受理すること");
+
+        let events = client
+            .drain_events()
+            .expect("テスト用のクライアントイベント取得に成功すること");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::UniStreamOpen { stream_id: 7, .. })
+            )),
+            "サーバー開始 uni ストリームが開くこと: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::WebTransport(WebTransportEvent::Datagram { session_id: 0, .. })
+            )),
+            "datagram が配送されること: {events:?}"
+        );
     }
 
     #[test]

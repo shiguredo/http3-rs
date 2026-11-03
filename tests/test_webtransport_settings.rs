@@ -301,8 +301,8 @@ fn for_draft_versions_advertises_old_and_new_codepoints_once() {
 
 #[test]
 fn for_draft_versions_with_zero_max_sessions_is_not_advertised() {
-    // max_sessions が 0 の場合、draft-07 / draft-14 の設定値が 0 になり
-    // 広告として扱われない (draft-ietf-webtrans-http3-17 Section 7.1)
+    // max_sessions が 0 の場合、draft-07 / draft-14 のコードポイントは送信せず、
+    // 広告としても扱わない (draft-ietf-webtrans-http3-17 Section 7.1)
     let wt = shiguredo_http3::webtransport::Settings::for_draft_versions(
         &[DraftVersion::Draft07, DraftVersion::Draft14],
         vi(0),
@@ -312,6 +312,7 @@ fn for_draft_versions_with_zero_max_sessions_is_not_advertised() {
         "max_sessions が 0 なら旧 draft を広告しないこと"
     );
     assert!(!wt.is_enabled());
+    assert_eq!(wt.iter().count(), 0, "0 値のコードポイントも送信しないこと");
 }
 
 #[test]
