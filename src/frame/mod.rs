@@ -14,6 +14,7 @@
 mod decoder;
 mod encoder;
 
+pub(crate) use decoder::decode_frame_type;
 pub use decoder::{FrameHeader, decode_frame, decode_frame_header};
 pub use encoder::{encode_frame, encode_frame_header, encoded_frame_len};
 

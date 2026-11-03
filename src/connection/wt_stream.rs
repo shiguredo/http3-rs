@@ -603,10 +603,12 @@ impl Connection {
         };
 
         // signal value は 0x41 (WT_STREAM) でなければならない
-        // (draft-ietf-webtrans-http3-15 Section 4.3)
+        // (draft-ietf-webtrans-http3-17 Section 4.3)
         if signal_value.get() != 0x41 {
-            // 0x41 以外の signal value はリクエストストリームの先頭以外での WT_STREAM 受信、
-            // または不正な signal value。H3_FRAME_ERROR として接続エラー。
+            // 0x41 以外の signal value は WT 双方向ストリームのシグナル値として不正。
+            // ドラフトに特定のエラーコードの規定がないため、既存の H3_FRAME_ERROR を
+            // 維持する。不正な位置の WT_STREAM (0x41) は RequestStream /
+            // ControlStreamRecv が H3_FRAME_UNEXPECTED で拒否する。
             return Err(Error::ConnectionError(ErrorCode::FrameError));
         }
 

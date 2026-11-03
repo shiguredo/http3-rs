@@ -74,6 +74,16 @@ impl FrameHeader {
     }
 }
 
+/// フレームタイプの可変長整数のみをデコードする
+///
+/// 先頭の可変長整数が揃っていない場合は [`None`] を返す。
+/// [`decode_frame_header`] のように length を要求せず、フレームタイプだけを先に
+/// 読み取る用途で使う。length フィールドを持たないフレーム (WT_STREAM など) の
+/// 位置判定のように、後続バイトの到着を待たずに型だけで判断できる場合に使う。
+pub(crate) fn decode_frame_type(buf: &[u8]) -> Option<VarInt> {
+    varint::decode(buf).ok().map(|(frame_type, _)| frame_type)
+}
+
 /// フレームヘッダーをデコードする
 ///
 /// 成功時は `FrameHeader` を返す
@@ -213,6 +223,40 @@ mod tests {
         let header = decode_frame_header(&buf).expect("test must succeed");
         assert_eq!(header.frame_type().get(), 4);
         assert_eq!(header.payload_len().get(), 10);
+    }
+
+    #[test]
+    fn test_decode_frame_type() {
+        // 1 バイトの可変長整数はそのままフレームタイプになる
+        assert_eq!(decode_frame_type(&[0x00]), Some(VarInt::from_static(0x00)));
+
+        // WT_STREAM (0x41) の最小表現は 2 バイトの可変長整数である。
+        // WT_STREAM は length を持たないため、後続のバイトが無くても
+        // フレームタイプだけはデコードできる必要がある
+        assert_eq!(
+            decode_frame_type(&[0x40, 0x41]),
+            Some(VarInt::from_static(0x41))
+        );
+
+        // 可変長整数が途中までの場合はタイプを確定できないため None
+        assert_eq!(decode_frame_type(&[0x40]), None);
+
+        // 空バッファもタイプを確定できない
+        assert_eq!(decode_frame_type(&[]), None);
+
+        // 4 バイト / 8 バイト表現でも同じ値になる (RFC 9000 Section 16 の
+        // 非最小エンコードの許容。同節のフレームタイプの例外は QUIC フレームタイプに
+        // 対するもので、HTTP/3 のフレームタイプは非最小表現もあり得る)
+        assert_eq!(
+            decode_frame_type(&[0x80, 0x00, 0x00, 0x41]),
+            Some(VarInt::from_static(0x41))
+        );
+        assert_eq!(
+            decode_frame_type(&[0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x41]),
+            Some(VarInt::from_static(0x41))
+        );
+        // 8 バイト表現の途中までの場合はタイプを確定できない
+        assert_eq!(decode_frame_type(&[0xc0, 0x00, 0x00, 0x00]), None);
     }
 
     #[test]

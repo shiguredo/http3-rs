@@ -16,6 +16,21 @@ const UNI_TYPE_VARINT: VarInt = VarInt::from_static(UNIDIRECTIONAL_STREAM_TYPE);
 /// 双方向シグナル値の VarInt 表現
 const BIDI_SIGNAL_VARINT: VarInt = VarInt::from_static(BIDIRECTIONAL_SIGNAL_VALUE);
 
+/// バッファ先頭が WT_STREAM (0x41) のフレームタイプかどうかを判定する
+///
+/// WT_STREAM は length フィールドを持たないフレームであり、双方向ストリームの
+/// 開始者が送る最初のバイト列以外で受信した場合は接続エラーになる
+/// (draft-ietf-webtrans-http3-17 Section 4.3)。length の到着を待たずフレームタイプが
+/// 確定した時点で判定できるよう、この関数はフレームタイプの可変長整数だけを読む。
+/// エラーコードの選択は呼び出し側の責務である。
+/// タイプの可変長整数が途中までの場合は `false` を返し、呼び出し側で一般の
+/// フレーム処理 (途中切れなら H3_FRAME_ERROR) に委ねる。
+/// 将来のドラフトで変更される可能性がある。
+pub(crate) fn is_wt_stream_frame_type(buf: &[u8]) -> bool {
+    crate::frame::decode_frame_type(buf)
+        .is_some_and(|frame_type| frame_type.get() == BIDIRECTIONAL_SIGNAL_VALUE)
+}
+
 /// 可変長整数をデコード (生の `u64` 値を返す)
 fn decode_varint(buf: &[u8]) -> Option<(u64, usize)> {
     varint::decode(buf).ok().map(|(v, n)| (v.get(), n))

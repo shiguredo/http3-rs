@@ -2,7 +2,7 @@ use shiguredo_http3::{
     ClientConnection, Error, ErrorCode, Event, Header, ServerConnection, Settings, VarInt,
 };
 
-/// GOAWAY テスト用のクライアント・サーバーペアを構築する
+/// 制御ストリーム ID を設定し、サーバー制御ストリームをクライアントに受信させたペアを構築する
 fn setup_pair() -> (ClientConnection, ServerConnection) {
     let mut client = ClientConnection::new(Settings::default());
     client.set_control_stream_id(2).expect("test must succeed");
@@ -619,4 +619,216 @@ fn connection_debug_redacts_sensitive_headers() {
         debug.contains("<redacted>"),
         "Cookie の値が Connection の Debug 出力で伏せられていること"
     );
+}
+
+#[test]
+fn request_stream_wt_stream_after_headers_is_frame_unexpected() {
+    // リクエスト開始者が送る最初のバイト列より後で WT_STREAM (0x41) を受信すると
+    // H3_FRAME_UNEXPECTED の接続エラーになること
+    // (draft-ietf-webtrans-http3-17 Section 4.3)
+    let (mut client, mut server) = setup_pair();
+    let stream_id = client
+        .send_request(&request_headers(), false)
+        .expect("テスト用の処理に成功すること");
+
+    // HEADERS をサーバーに届けてイベントを消費する
+    let (header_data, _) = client
+        .take_stream_data(stream_id)
+        .expect("テスト用の処理に成功すること");
+    server
+        .feed_stream(stream_id, &header_data, false)
+        .expect("テスト用の処理に成功すること");
+    while server
+        .poll_event()
+        .expect("テスト用の処理に成功すること")
+        .is_some()
+    {}
+
+    // リクエストの途中で WT_STREAM のフレームタイプだけを投入する
+    // (WT_STREAM は length を持たないため、length は送らない)
+    let err = server
+        .feed_stream(stream_id, &[0x40, 0x41], false)
+        .expect_err("不正な位置の WT_STREAM は拒否されること");
+    assert!(
+        matches!(err, Error::ConnectionError(ErrorCode::FrameUnexpected)),
+        "H3_FRAME_UNEXPECTED になること: {err:?}"
+    );
+}
+
+#[test]
+fn request_stream_wt_stream_split_varint_is_frame_unexpected() {
+    // WT_STREAM 型の可変長整数が複数の feed_stream 呼び出しに分割されても、
+    // 型が確定した時点で H3_FRAME_UNEXPECTED になること
+    // (draft-ietf-webtrans-http3-17 Section 4.3)
+    let (mut client, mut server) = setup_pair();
+    let stream_id = client
+        .send_request(&request_headers(), false)
+        .expect("テスト用の処理に成功すること");
+    let (header_data, _) = client
+        .take_stream_data(stream_id)
+        .expect("テスト用の処理に成功すること");
+    server
+        .feed_stream(stream_id, &header_data, false)
+        .expect("テスト用の処理に成功すること");
+    while server
+        .poll_event()
+        .expect("テスト用の処理に成功すること")
+        .is_some()
+    {}
+
+    // type=0x41 の 1 バイト目だけでは型を確定できないため、エラーにならない
+    server
+        .feed_stream(stream_id, &[0x40], false)
+        .expect("型が未確定の間はエラーにならないこと");
+
+    // 2 バイト目で型が確定するため、length の到着を待たずに接続エラーになる
+    let err = server
+        .feed_stream(stream_id, &[0x41], false)
+        .expect_err("WT_STREAM 型の確定で拒否されること");
+    assert!(
+        matches!(err, Error::ConnectionError(ErrorCode::FrameUnexpected)),
+        "H3_FRAME_UNEXPECTED になること: {err:?}"
+    );
+}
+
+#[test]
+fn response_stream_wt_stream_after_headers_is_frame_unexpected() {
+    // クライアントがレスポンス受信方向のストリームで WT_STREAM (0x41) を受信すると
+    // H3_FRAME_UNEXPECTED の接続エラーになること
+    // (draft-ietf-webtrans-http3-17 Section 4.3: 開始者が送る最初のバイト列の例外は
+    //  ストリームを開始する側にのみ該当する)
+    let (mut client, mut server) = setup_pair();
+    let stream_id = client
+        .send_request(&request_headers(), false)
+        .expect("テスト用の処理に成功すること");
+    let (request_data, _) = client
+        .take_stream_data(stream_id)
+        .expect("テスト用の処理に成功すること");
+    server
+        .feed_stream(stream_id, &request_data, false)
+        .expect("テスト用の処理に成功すること");
+    while server
+        .poll_event()
+        .expect("テスト用の処理に成功すること")
+        .is_some()
+    {}
+
+    // サーバーがレスポンス HEADERS を送信する
+    let response = vec![Header::new(b":status", b"200").expect("テスト用の処理に成功すること")];
+    server
+        .send_response(stream_id, &response, false)
+        .expect("テスト用の処理に成功すること");
+    let (response_data, _) = server
+        .take_stream_data(stream_id)
+        .expect("テスト用の処理に成功すること");
+    client
+        .feed_stream(stream_id, &response_data, false)
+        .expect("テスト用の処理に成功すること");
+    while client
+        .poll_event()
+        .expect("テスト用の処理に成功すること")
+        .is_some()
+    {}
+
+    // レスポンスの途中で WT_STREAM のフレームタイプだけを投入する
+    let err = client
+        .feed_stream(stream_id, &[0x40, 0x41], false)
+        .expect_err("レスポンス方向の WT_STREAM は拒否されること");
+    assert!(
+        matches!(err, Error::ConnectionError(ErrorCode::FrameUnexpected)),
+        "H3_FRAME_UNEXPECTED になること: {err:?}"
+    );
+}
+
+#[test]
+fn response_stream_wt_stream_at_first_byte_is_frame_unexpected() {
+    // クライアントがレスポンス受信方向のストリームの先頭で WT_STREAM (0x41) を
+    // 受信すると H3_FRAME_UNEXPECTED の接続エラーになること
+    // (draft-ietf-webtrans-http3-17 Section 4.3: 開始者が送る最初のバイト列の例外は
+    //  ストリームを開始する側にのみ該当する)
+    let (mut client, mut server) = setup_pair();
+    let stream_id = client
+        .send_request(&request_headers(), false)
+        .expect("テスト用の処理に成功すること");
+    let (request_data, _) = client
+        .take_stream_data(stream_id)
+        .expect("テスト用の処理に成功すること");
+    server
+        .feed_stream(stream_id, &request_data, false)
+        .expect("テスト用の処理に成功すること");
+    while server
+        .poll_event()
+        .expect("テスト用の処理に成功すること")
+        .is_some()
+    {}
+
+    // レスポンス HEADERS より前に WT_STREAM のフレームタイプだけを投入する
+    let err = client
+        .feed_stream(stream_id, &[0x40, 0x41], false)
+        .expect_err("レスポンス先頭の WT_STREAM は拒否されること");
+    assert!(
+        matches!(err, Error::ConnectionError(ErrorCode::FrameUnexpected)),
+        "H3_FRAME_UNEXPECTED になること: {err:?}"
+    );
+}
+
+#[test]
+fn control_stream_truncated_frame_type_is_frame_error() {
+    // 制御ストリームでフレームタイプの可変長整数が途中のまま FIN した場合は、
+    // 型を確定できないため一般のフレーム途中切れとして H3_FRAME_ERROR になること
+    // (RFC 9114 Section 7.1)
+    let (mut client, _server) = setup_pair();
+    let err = client
+        .feed_stream(3, &[0x40], true)
+        .expect_err("型が未確定のまま FIN した場合はフレームエラーになること");
+    assert!(
+        matches!(err, Error::ConnectionError(ErrorCode::FrameError)),
+        "H3_FRAME_ERROR になること: {err:?}"
+    );
+}
+
+#[test]
+fn control_stream_wt_stream_after_settings_is_frame_unexpected() {
+    // SETTINGS 受信後の制御ストリームで WT_STREAM (0x41) を受信すると
+    // H3_FRAME_UNEXPECTED の接続エラーになること
+    // (draft-ietf-webtrans-http3-17 Section 4.3)
+    let (mut client, _server) = setup_pair();
+
+    // setup_pair で stream 3 の制御ストリーム (ストリームタイプ + SETTINGS) は
+    // 受信済みのため、Ready 状態で WT_STREAM のフレームタイプだけを投入する
+    let err = client
+        .feed_stream(3, &[0x40, 0x41], false)
+        .expect_err("制御ストリームの WT_STREAM は拒否されること");
+    assert!(
+        matches!(err, Error::ConnectionError(ErrorCode::FrameUnexpected)),
+        "H3_FRAME_UNEXPECTED になること: {err:?}"
+    );
+}
+
+#[test]
+fn control_stream_wt_stream_before_settings_is_missing_settings() {
+    // SETTINGS を先頭に受信していない制御ストリームでは、WT_STREAM (0x41) より
+    // RFC 9114 Section 6.2.1 の H3_MISSING_SETTINGS が優先されること
+    let mut server = ServerConnection::new(Settings::default());
+    server
+        .set_control_stream_id(3)
+        .expect("テスト用の処理に成功すること");
+
+    // クライアントの制御ストリーム (stream 2) のストリームタイプ 0x00 の直後に、
+    // SETTINGS ではなく WT_STREAM (0x41) を置く。WT_STREAM は length を持たない
+    // ため、フレームタイプだけで判定される (後続バイトの有無によらない)
+    // (RFC 9114 Section 6.2.1, draft-ietf-webtrans-http3-17 Section 4.3)。
+    for data in [&[0x00u8, 0x40, 0x41][..], &[0x00, 0x40, 0x41, 0x00][..]] {
+        let mut server = ServerConnection::new(Settings::default());
+        server
+            .set_control_stream_id(3)
+            .expect("テスト用の制御ストリーム設定に成功すること");
+        let err = server
+            .feed_stream(2, data, false)
+            .expect_err("SETTINGS 前の WT_STREAM は拒否されること");
+        assert!(
+            matches!(err, Error::ConnectionError(ErrorCode::MissingSettings)),
+            "H3_MISSING_SETTINGS になること: {err:?}"
+        );
+    }
 }
