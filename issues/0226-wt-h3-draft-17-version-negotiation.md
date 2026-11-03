@@ -1,7 +1,7 @@
 # draft-17 本文版と旧 draft の選択規則を実装する
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-03
 - Branch: feature/change-wt-draft-17-version-negotiation
 - Polished: 2026-11-03
 - Category: change
@@ -62,3 +62,14 @@ draft-ietf-webtrans-http3-17 Section 3.1 / 7.1 に従い、クライアントが
 
 - `refs/webtrans/draft-ietf-webtrans-http3-17.txt` Section 3.1 / 7.1
 - <https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-17.txt>
+
+## 解決方法
+
+- `src/webtransport/settings.rs` に `for_draft_versions` (指定した版の SETTINGS コードポイントを過不足なく広告する構築関数)、`advertised_draft_versions` (広告している版を優先順位順に返す関数)、`first_mutual_draft` (ピアと共通する最上位の版を確保なしで返す関数) を追加した。優先順位は draft-17 > draft-15 / 16 > draft-07 > draft-14 > draft-02 で、draft-07 と draft-14 の併送は Safari 互換のため draft-07 を優先する
+- `src/connection/wt_session.rs` の `Connection::negotiated_wt_draft_version` を接続単位の版選択として実装した。サーバーは「クライアントが本文版のコードポイントを広告 → 本文版 / 対応する旧 ID のみ → 交差する旧 draft の最上位 / 広告なし・対応しない旧 ID のみ → 本文版対応なら本文版」、クライアントは「交差の最上位 / 版を広告しない端点はピアが本文版を広告していれば本文版」を選ぶ。SETTINGS 未着では `None` を返す
+- `is_wt_fully_negotiated`、`validate_wt_connect_request`、`validate_wt_connect_request_server`、0x41 / 0x54 / datagram の受理判定、SETTINGS 受信後の保留再ディスパッチを選択結果で判断するようにした。SETTINGS 未着 (保留) と、受信済みで WT 広告がない場合 (選択結果に応じて受理 / 拒否) を区別する
+- `src/webtransport/connect/mod.rs` に `ProtocolToken` を追加し、`:protocol` のヘッダー解析結果と接続の版を区別した。`ConnectRequest` の `draft_version` フィールドを `protocol_token` に置き換え (後方互換のない変更)、`protocol_value` の対応表を `ProtocolToken` に集約した
+- `crates/tokio-ngtcp2` は新旧コードポイントと旧 draft を広告し、`open_session` が選択結果の版で CONNECT を組み立てるようにした。`examples/wt_server` は接続ごとに SETTINGS を構築し、Safari (draft-07 と draft-14 を併送) には draft-07 のコードポイントだけを、それ以外には対応する全コードポイントと初期フロー制御値を広告する
+- `tests/test_webtransport_draft_connect.rs` に `version_selection` モジュールを追加し、完了条件の表 5 行、クライアントの開始条件、SETTINGS 未着と広告なしの区別、必須 SETTINGS / transport parameter 不足、先行ストリーム (0x41 / 0x54 / datagram) の保留・受理・拒否を、実際に生成した SETTINGS / CONNECT のバイト列で検証する
+- `pbt/tests/prop_webtransport/settings.rs` に、SETTINGS のエントリ順序と分割位置を変えても選択結果が変わらない性質、広告集合が要求した版の優先順位どおりになる性質を追加した
+- `examples/wt_server` の Safari 互換応答はブラウザ (Chromium / WebKit) との相互運用テストで確認した
