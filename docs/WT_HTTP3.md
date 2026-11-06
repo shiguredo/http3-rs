@@ -354,6 +354,13 @@ HTTP/3 版では QUIC ネイティブのストリームレベルフロー制御�
 - セッション終了カプセル送信後に即座に QUIC CONNECTION_CLOSE を送るとピアがカプセルを受信する前に接続が閉じる可能性がある
 - CONNECT ストリームのデータが ACK されるまで待ってから CONNECTION_CLOSE を送るべき (SHOULD)
 
+### 5.4 実装のセッション状態
+
+本実装の `webtransport::Session` は `SessionState` で状態を管理する。状態は `Pending` (CONNECT 送信前)、`Connecting` (CONNECT 送信済み、応答待ち)、`Established`、`Draining` (グレースフルシャットダウン中)、`Closed` の順に遷移する。
+
+- `Session::drain` は `Established` のとき `WT_DRAIN_SESSION` カプセルを送信キューに積み、`Draining` へ遷移する
+- `Session::close_with_error` は `WT_CLOSE_SESSION` カプセルを送信キューに積み、`Closed` へ遷移する
+
 ---
 
 ## 6. エラーコード
@@ -600,16 +607,41 @@ draft-16 と draft-17 の本文を比較し、規範的な変更、既存実装�
 
 ### 12.2 バージョンネゴシエーション
 
-draft-17 Section 7.1 は、`SETTINGS_WT_ENABLED` のコードポイントで版を選ぶ規則を明記する。
+接続で使う版は、SETTINGS のコードポイントを交わして接続単位で決める。draft-17 Section 7.1 がその規則を定める。
 
-- 端点は対応する版のコードポイントを 1 回ずつ広告する。draft-15 / 16 は `0x2c7cf000`、draft-17 の本文版は `0x20b8933b` を使う
-- 本文版と旧 draft の両方に対応するサーバーは、クライアントが `0x20b8933b` を送っていれば本文版を選ぶ。送っていなければ、共通する旧 draft のうち優先順位の高い版を選ぶ。共通する旧 draft がなく、サーバーが本文版に対応していれば本文版を選ぶ
-- 本文版だけに対応するクライアントは `SETTINGS_WT_ENABLED` を送らない。本文版に対応するサーバーはこのクライアントを本文版として扱う
-- クライアントは、ローカルとサーバーが共通して広告する版のうち優先順位の高い版を選ぶ。共通する版がなく、ローカルが版を 1 つも広告せず、サーバーが本文版を広告している場合は本文版を選ぶ。それ以外で共通する版がない場合、使用する版がないため WebTransport を開始しない
-- サーバーは、クライアントの SETTINGS を受信するまで WebTransport のリクエストを処理しない。ストリームヘッダーの形式が版に依存するためである
-- 本文版に対応せず、`SETTINGS_WT_ENABLED` を広告しているサーバーで共通する版がない場合、サーバーは CONNECT を受理しない
+#### コードポイントの広告
 
-本実装の優先順位は draft-17 の本文版、draft-15 / 16、draft-07、draft-14、draft-02 である。draft-17 Section 7.1 の「両端点が対応する最も高い版を選ぶ」規則に対する例外として、draft-07 と draft-14 が併送された場合は draft-07 を優先する。Safari 26.4 (Network.framework) との互換のためであり、Safari 以外の端点が同じ組み合わせを広告した場合にも適用する (`SAFARI_WT.md`)。`Connection::negotiated_wt_draft_version` が接続単位の選択結果を返す。
+- 端点は、対応する版のコードポイントを 1 回ずつ広告する。draft-15 / 16 は `0x2c7cf000`、draft-17 の本文版は `0x20b8933b` を使う
+- draft-02 は `Sec-Webtransport-Http3-Draft02` ヘッダーで版を通知する。draft-07 以降は SETTINGS コードポイントを使い、draft-14 以降は ALPN (`WT-Available-Protocols` / `WT-Protocol`) も併用する (本書 Section 1.1 / 1.2 を参照)
+- サーバーは、クライアントが送る `SETTINGS_WT_ENABLED` を通常は無視する。旧 draft にも対応するサーバーは、クライアントが広告したコードポイントを版の選択に使う
+
+#### サーバー側の選択
+
+- 本文版に対応するサーバーは、クライアントが `0x20b8933b` を広告していれば本文版を選ぶ
+- 広告していない場合、サーバーは共通する旧 draft のうち優先順位の高い版を選ぶ
+- 共通する旧 draft がなく、サーバーが本文版に対応していれば、本文版を選ぶ。クライアントが本文版に対応しない場合、セッションは確立できない
+- 本文版に対応せず、`SETTINGS_WT_ENABLED` を広告しているサーバーで共通する版がない場合、サーバーはクライアントの CONNECT を拒否する
+- サーバーは、クライアントの SETTINGS を受信するまで WebTransport リクエストの処理を保留する。ストリームヘッダーの形式が版に依存するためである
+
+#### クライアント側の選択
+
+- ローカルとサーバーが共通して広告する版のうち、優先順位の高い版を選ぶ
+- 共通する版がなく、ローカルが版を 1 つも広告せず、サーバーが `0x20b8933b` を広告している場合は、本文版を選ぶ
+- それ以外で共通する版がない場合、使用する版がないため WebTransport を開始しない
+
+#### 端点の種類ごとの扱い
+
+- 本文版と旧 draft の両方に対応するクライアントは、対応するコードポイントをそれぞれ広告する。`0x20b8933b` を送った場合、サーバーは本文版を選ぶ。送らない場合、サーバーは共通する旧 draft のうち優先順位の高い版を選ぶ
+- 本文版だけに対応するクライアントは `SETTINGS_WT_ENABLED` を送らない。サーバーが `0x20b8933b` を広告していれば、クライアントは本文版を選ぶ。サーバーは、`SETTINGS_WT_ENABLED` を送らないクライアントを本文版として扱う
+- 旧 draft だけに対応するクライアントは、旧 draft のコードポイントだけを広告する。本文版に対応するサーバーは、共通する旧 draft があればそのうち優先順位の高い版を選ぶ。共通する旧 draft がなければ本文版を選ぶが、そのクライアントは本文版に対応しないためセッションを確立できない
+
+#### 本実装の選択順序
+
+本実装の優先順位は、draft-17 の本文版、draft-15 / 16、draft-07、draft-14、draft-02 である。
+
+draft-17 Section 7.1 の「両端点が対応する最も高い版を選ぶ」規則に対する例外として、draft-07 と draft-14 のコードポイントが併送された場合は draft-07 を優先する。Safari 26.4 (Network.framework) との互換のためであり、Safari 以外の端点が同じ組み合わせを広告した場合にも適用する (`SAFARI_WT.md` を参照)。
+
+接続単位の選択結果は `Connection::negotiated_wt_draft_version` で取得できる。
 
 ### 12.3 先行ストリームとデータグラムの拒否
 
@@ -629,3 +661,32 @@ draft-17 Section 4.6 は、CONNECT の応答が到着する前に届いたスト
 draft-17 Section 8 は、フロー制御を有効にせずに WebTransport セッションを HTTP/3 接続へ相乗りさせた場合のデッドロックを説明する。複数の WebTransport セッションに接続を共有させる端点は、フロー制御を実装しなければならない (MUST)。この MUST は draft-16 Section 5.1 / Section 8 に既にある。draft-17 で追加されたのは、フロー制御を無効にした場合の停滞とデッドロックの段落である。WebTransport セッションは下位 QUIC 接続のストリーム数とデータ量の上限まで使えるため、同じ接続の HTTP 応答と QPACK ストリームの進行を止め得る。HTTP 応答と QPACK ストリームは接続レベルのフロー制御を共有するため、アプリケーションが WebTransport セッションの読み取りを、同じ接続上の HTTP 応答の完了まで待つと、双方が進めなくなる。
 
 回避策は、WebTransport のフロー制御を有効にしてセッションごとの上限を設けるか、WebTransport セッションを別の接続へ分離することである。本実装の sans-I/O 層は SETTINGS とカプセルによるフロー制御を提供するが、実際に有効にできるかはアプリケーションと各アダプターの設定に依存する。
+
+---
+
+## 13. 実装の設定方法
+
+`webtransport::Settings::for_draft_versions` は、渡した版の SETTINGS コードポイントを広告する設定を組み立てる。
+
+- `DraftVersion::Draft17` を渡すと `SETTINGS_WT_ENABLED` (`0x20b8933b`) を送る。サーバーが本文版に対応することを示す場合は、この設定が必要である
+- 本文版だけに対応するクライアントは `SETTINGS_WT_ENABLED` を送らない。`for_draft_versions` に `DraftVersion::Draft17` を渡さず、版を 1 つも含まない `webtransport::Settings::new()` を `enable_webtransport_client` に渡す。この場合も、サーバーが `0x20b8933b` を広告していれば本文版が選ばれる
+- 本文版と旧 draft の両方に対応するクライアントは、対応する旧 draft のコードポイントと `DraftVersion::Draft17` の両方を含める
+- フロー制御を有効にする場合は、`wt_initial_max_streams_uni` などのビルダーメソッドで初期値を設定する。`for_draft_versions` はこれらの初期値を設定しない
+
+```rust
+use shiguredo_http3::Settings;
+use shiguredo_http3::webtransport::{DraftVersion, Settings as WtSettings};
+
+// 本文版に対応するサーバー: SETTINGS_WT_ENABLED (0x20b8933b) を広告する
+let wt = WtSettings::for_draft_versions(
+    &[DraftVersion::Draft17],
+    shiguredo_http3::VarInt::from_static(1),
+);
+let server = Settings::default().enable_webtransport_server(wt);
+
+// 本文版だけに対応するクライアント: SETTINGS_WT_ENABLED を送らない
+let wt = WtSettings::new();
+let client = Settings::default().enable_webtransport_client(wt);
+```
+
+draft-16 は draft-15 と同じコードポイントを使うため、`DraftVersion::Draft15` として扱う (本書 Section 11 を参照)。
