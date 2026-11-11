@@ -3164,7 +3164,7 @@ mod tests {
     #[test]
     fn test_wt_uni_stream_invalid_session_id_returns_id_error() {
         // session_id が client-initiated bidi stream ID (% 4 == 0) でない場合は
-        // H3_ID_ERROR で接続エラー (draft-ietf-webtrans-http3-15 Section 4.2)
+        // H3_ID_ERROR で接続エラー (draft-ietf-webtrans-http3-17 Section 4)
         let mut conn = make_server_with_established_wt_session(4);
 
         // session_id = 1 (server-initiated bidi: 不正)
@@ -5137,14 +5137,15 @@ mod tests {
     }
 
     #[test]
-    fn test_feed_datagram_qsi_overflow_returns_h3_datagram_error() {
-        // RFC 9297 Section 2.1: Quarter Stream ID が 2^60-1 を超える場合
-        // (qsi * 4 が u64 をオーバーフロー) は H3_DATAGRAM_ERROR
+    fn test_feed_datagram_qsi_out_of_range_returns_h3_datagram_error() {
+        // RFC 9297 Section 2.1: Quarter Stream ID が 2^60-1 を超える場合は
+        // H3_DATAGRAM_ERROR で接続を閉じる
         let mut conn = make_server_with_established_wt_session(4);
 
-        // 8 オクテット varint で最大値 (2^62-1) を表現する
-        // 0xc0 で 8 バイト長プレフィックス、残り 7 バイトを 0xff で埋めると
-        // qsi = 2^62 - 1 となり、qsi * 4 が u64 をオーバーフローする
+        // 8 オクテット varint の先頭 1 バイトが 0xff なので 8 バイト長プレフィックスとなり、
+        // 残り 7 バイトも 0xff で埋めると qsi = 2^62 - 1 に復号される。
+        // これは 2^60 - 1 を超えるため値域検査で拒否される
+        // (qsi * 4 = 2^64 - 4 は u64 に収まるので、オーバーフローではない)。
         let buf = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
         let err = conn.feed_datagram(&buf).unwrap_err();
         assert!(matches!(

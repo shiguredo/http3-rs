@@ -136,9 +136,11 @@ impl Datagram {
         if qsi > (1u64 << 60) - 1 {
             return Err(DatagramDecodeError::InvalidQuarterStreamId);
         }
+        // 上の値域検査により `qsi <= 2^60 - 1` が保証されているため、
+        // `qsi * 4 <= 2^62 - 4` となって u64 の範囲に必ず収まる。
         let session_id = qsi
             .checked_mul(4)
-            .ok_or(DatagramDecodeError::InvalidQuarterStreamId)?;
+            .expect("qsi * 4 fits in u64 (qsi <= 2^60 - 1)");
         let payload = buf[varint_len..].to_vec();
         let consumed = buf.len();
         Ok((
@@ -199,7 +201,12 @@ mod tests {
 
     #[test]
     fn test_datagram_decode_empty_buffer() {
-        assert!(Datagram::decode(&[]).is_err());
+        // 空バッファは Quarter Stream ID をパースできず、追加データが必要な
+        // BufferTooShort になる (RFC 9297 Section 2.1 の「短すぎる」ケース)
+        assert_eq!(
+            Datagram::decode(&[]),
+            Err(DatagramDecodeError::BufferTooShort)
+        );
     }
 
     #[test]
@@ -232,6 +239,41 @@ mod tests {
         assert_eq!(
             Datagram::new(too_large, vec![]),
             Err(DatagramError::SessionIdOutOfRange)
+        );
+    }
+
+    #[test]
+    fn test_datagram_decode_accepts_max_quarter_stream_id() {
+        // RFC 9297 Section 2.1: Quarter Stream ID の最大合法値は 2^60 - 1 で、
+        // 復元される session_id は 2^62 - 4 になる。
+        // PBT のサンプリングに依存せず、上限値を決定的に固定する
+        let mut buf = Vec::new();
+        varint::encode_into_vec(
+            &mut buf,
+            VarInt::new((1u64 << 60) - 1).expect("test must succeed"),
+        );
+        buf.extend_from_slice(b"payload");
+        let (decoded, consumed) = Datagram::decode(&buf).expect("test must succeed");
+        assert_eq!(decoded.session_id, (1u64 << 62) - 4);
+        // payload が varint の後ろから切り出され、末尾まで消費されることを固定する
+        // (varint の長さ計算が誤ると payload の開始位置と消費バイト数がずれる)。
+        // ここでは 8 バイト varint + 7 バイト payload = 15 バイトとなり、
+        // consumed が varint 長を含むことまで固定できる
+        assert_eq!(decoded.payload, b"payload".to_vec());
+        assert_eq!(consumed, buf.len());
+    }
+
+    #[test]
+    fn test_datagram_decode_rejects_quarter_stream_id_above_max() {
+        // 2^60 は 2^60 - 1 を超えるため InvalidQuarterStreamId で拒否する
+        let mut buf = Vec::new();
+        varint::encode_into_vec(
+            &mut buf,
+            VarInt::new(1u64 << 60).expect("test must succeed"),
+        );
+        assert_eq!(
+            Datagram::decode(&buf),
+            Err(DatagramDecodeError::InvalidQuarterStreamId)
         );
     }
 }
