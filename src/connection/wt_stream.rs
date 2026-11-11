@@ -33,9 +33,9 @@ impl Connection {
         }
 
         // HTTP Datagram フォーマットをデコード
-        // RFC 9297 Section 2.1: Quarter Stream ID が不正な (短すぎる、もしくは
-        // 2^60-1 を超える) Datagram を受信した場合は H3_DATAGRAM_ERROR で接続を
-        // 閉じなければならない。
+        // RFC 9297 Section 2.1: Quarter Stream ID をパースできない (短すぎる)
+        // Datagram、もしくは Quarter Stream ID が 2^60 - 1 を超える Datagram を
+        // 受信した場合は H3_DATAGRAM_ERROR で接続を閉じなければならない。
         let datagram = match crate::webtransport::Datagram::decode(data) {
             Ok((d, _)) => d,
             Err(_) => {
@@ -45,11 +45,15 @@ impl Connection {
 
         let session_id = datagram.session_id;
 
-        // session_id は client-initiated bidirectional stream ID でなければならない
-        // (draft-ietf-webtrans-http3-15 Section 4.5)
-        if session_id & 0x03 != 0x00 {
-            return Err(Error::ConnectionError(ErrorCode::H3DatagramError));
-        }
+        // session ID は client-initiated bidirectional stream ID でなければならず、
+        // そうでない session ID を受信したら H3_ID_ERROR で接続を閉じる
+        // (draft-ietf-webtrans-http3-17 Section 4)。
+        // ただし datagram 経路では `Datagram::decode` が Quarter Stream ID から
+        // `session_id = qsi * 4` を復元するため、session_id は常に 4 の倍数となり、
+        // 本要件は復号形式から構造的に満たされる (ここで検査する余地はない)。
+        // 復号に失敗するのは Quarter Stream ID の長さ不足か値域違反だけで、いずれも
+        // RFC 9297 Section 2.1 が H3_DATAGRAM_ERROR を MUST とする事象のため、
+        // 上の decode 失敗として扱う。
 
         // セッション状態に応じてルーティング
         if let Some(session) = self.wt_sessions.get_mut(&session_id) {
@@ -305,7 +309,7 @@ impl Connection {
             Ok((session_id, id_len)) => {
                 let session_id = session_id.get();
                 // session_id は client-initiated bidirectional stream ID でなければならない
-                // (draft-ietf-webtrans-http3-15 Section 4.2)
+                // (draft-ietf-webtrans-http3-17 Section 4)
                 // RFC 9000 Section 2.1: client-initiated bidi は stream_id % 4 == 0
                 if session_id & 0x03 != 0x00 {
                     return Err(Error::ConnectionError(ErrorCode::IdError));
@@ -618,7 +622,7 @@ impl Connection {
             Ok((session_id, id_len)) => {
                 let session_id = session_id.get();
                 // session_id は client-initiated bidirectional stream ID でなければならない
-                // (draft-ietf-webtrans-http3-15 Section 4.2)
+                // (draft-ietf-webtrans-http3-17 Section 4)
                 if session_id & 0x03 != 0x00 {
                     return Err(Error::ConnectionError(ErrorCode::IdError));
                 }
