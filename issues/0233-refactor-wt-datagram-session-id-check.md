@@ -1,7 +1,7 @@
 # datagram の到達不能な session ID 検査を削除し、規則の適用根拠を明記する
 
 - Created: 2026-11-09
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-11
 - Branch: feature/refactor-wt-datagram-session-id-check
 - Polished: 2026-11-10
 - Category: refactor
@@ -88,3 +88,30 @@
   L210-215 の H3_ID_ERROR SHOULD はストリーム数上限のケース
 - `issues/closed/0025-bug-datagram-missing-settings-negotiation.md`: 同じ検査を `ErrorCode::IdError` に変更した経緯
 - `issues/closed/0047-bug-h3-datagram-error-code.md`: `H3DatagramError` に戻した経緯と根拠引用
+
+## 解決方法
+
+- `src/connection/wt_stream.rs` の `Connection::feed_datagram` から、`session_id & 0x03 != 0x00` の
+  4 倍数検査を削除した。削除箇所には、`Datagram::decode` が Quarter Stream ID から
+  `session_id = qsi * 4` を復元するため session ID が常に client-initiated bidirectional stream ID となり、
+  draft-17 Section 4 の H3_ID_ERROR 要件が復号形式から構造的に満たされることをコメントで記録した。
+  復号に失敗するのは Quarter Stream ID の長さ不足か値域違反だけで、いずれも
+  RFC 9297 Section 2.1 が H3_DATAGRAM_ERROR を MUST とする事象のため、decode 失敗として扱うことを併記した
+- `src/webtransport/datagram.rs` の `Datagram::decode` は、値域検査により到達不能な
+  `checked_mul` の Err パスを `expect("qsi * 4 fits in u64 (qsi <= 2^60 - 1)")` に置き換え、
+  不変条件をメッセージで示した
+- `src/connection/wt_stream.rs` の `resolve_wt_uni_stream_session_id` と `resolve_wt_bidi_stream_header` の
+  インラインコメントの引用を draft-17 Section 4 に更新した。エラーコードは `ErrorCode::IdError` のまま変更していない
+- `src/connection/mod.rs` の `test_feed_datagram_qsi_overflow_returns_h3_datagram_error` を
+  `test_feed_datagram_qsi_out_of_range_returns_h3_datagram_error` に改名し、コメントを実際の挙動
+  (8 オクテット varint で `qsi = 2^62 - 1` に復号され、値域検査で拒否される。乗算はオーバーフローしない) に合わせた
+- `src/connection/mod.rs` の `test_wt_uni_stream_invalid_session_id_returns_id_error` の引用も
+  draft-17 Section 4 に揃えた
+- テストを追加・強化した
+  - `src/webtransport/datagram.rs`: `test_datagram_decode_accepts_max_quarter_stream_id`
+    (`2^60 - 1` で成功し session_id が `2^62 - 4`、payload の切り出しと消費バイト数も検証)
+    と `test_datagram_decode_rejects_quarter_stream_id_above_max` (`2^60` で `InvalidQuarterStreamId`)
+  - `src/webtransport/datagram.rs`: `test_datagram_decode_empty_buffer` を `is_err()` から
+    `Err(BufferTooShort)` の厳密比較に強化した
+- `docs/WT_HTTP3.md` は変更していない。エラーコード表の H3_DATAGRAM_ERROR 行は WT_MAX_STREAMS の
+  値超過だけを記載しており Quarter Stream ID の値域違反の記載が無いが、ドキュメント整備は本 issue の範囲外
