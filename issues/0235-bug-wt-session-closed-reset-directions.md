@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-wt-session-closed-reset-directions
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 - Category: bug
 
 ## 目的
@@ -42,7 +43,7 @@ doc どおり実装しても接続エラーにならない API にする。
 ## 再現手順
 
 1. サーバーでセッション 0 を確立する
-2. クライアント開始双方向ストリーム 4 に `0x41 0x00` (WT ヘッダーのみ) を流し、サーバーが応答を送らない状態にする
+2. クライアント開始双方向ストリーム 4 に `0x40 0x41 0x00` (WT ヘッダーのみ) を流し、サーバーが応答を送らない状態にする
 3. CONNECT ストリームを reset してセッションを終了する
 4. `SessionClosed.reset_streams` に stream 4 が reliable_size = 3 で含まれる。
    これを `RESET_STREAM_AT` で送ると Final Size 0 < Reliable Size 3 となり、仕様上ピアは FRAME_ENCODING_ERROR で閉じる
