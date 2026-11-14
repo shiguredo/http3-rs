@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: {BRANCH}
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 - Category: bug
 
 ## 目的
@@ -35,7 +36,7 @@ WebTransport 単方向ストリームの最初のチャンクに FIN が付い�
 
 - 最初のチャンクに FIN が付いている場合も `handle_wt_uni_stream_fin` と同じ後処理 (セッションへの終了通知、クレジット回復、受信量追跡の削除、Pending 時のバッファへの FIN 記録) を行う
 - セッションが Pending のときは終了イベントを即時発火せず、ストリームのバッファエントリに FIN を記録して確立後に配送する
-- 双方向ストリームの同等経路 (`handle_wt_bidi_stream` の初回チャンク FIN) も同じ扱いになっているか確認する
+- 双方向ストリームの同等経路 (`handle_wt_bidi_stream` の初回チャンク FIN) は、Pending 時の FIN 記録と Established 時のクレジット回復・受信量追跡の削除が実装済みである。`tests/test_connection.rs` の `server_pending_session_buffers_uni_and_bidi_until_established` は、双方向の初回 FIN について Pending 時と Established 時の Open → Data → End の配送を公開 API 経由で検証している (`df2a5b0`)
 - 既存の `handle_new_unidirectional_stream` の FIN 処理と `handle_wt_uni_stream_fin` の重複を整理する
 
 ## 完了条件
