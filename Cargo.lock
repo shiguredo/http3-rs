@@ -3116,7 +3116,7 @@ dependencies = [
 
 [[package]]
 name = "shiguredo_http3"
-version = "2026.1.0-canary.15"
+version = "2026.1.0-canary.16"
 
 [[package]]
 name = "shiguredo_ngtcp2"
