@@ -619,14 +619,19 @@ impl Connection {
     ///   到達しないケースがあり、セッション終了を除去トリガにする
     ///   (RFC 9114 Section 4.4 / draft-ietf-webtrans-http3-16 Section 6)
     ///
-    /// StreamEnd (受信側 FIN) 時点や STOP_SENDING 受信時点では除去しない
-    /// (サーバーが応答を送る必要がある / 受信側が open のままのため)。
+    /// StreamEnd (受信側 FIN) だけでは除去しない。STOP_SENDING も受信方向が
+    /// open のままなら除去しない (サーバーが応答を送る必要があるため)。
+    /// 両方向が閉じた場合に限り除去する。
     fn remove_stream_if_done(&mut self, stream_id: u64) {
         let done = self.streams.get(&stream_id).is_some_and(|s| {
             s.state() == StreamState::Reset
                 || (s.state() == StreamState::Closed && s.is_send_complete())
         });
         if done || self.closed_wt_sessions.contains(&stream_id) {
+            // 除去するストリームの QPACK ブロック状態を解放する。ブロック中の
+            // ヘッダーは二度とデコードされないため、ricnt エントリを残すと
+            // 上限チェックにカウントされ続ける。
+            self.clear_qpack_blocked(stream_id);
             self.streams.remove(&stream_id);
         }
     }
@@ -2372,8 +2377,6 @@ impl Connection {
             // ストリームの状態を破棄する)。ゲート除去で SETTINGS 未受信中でも本経路に
             // 流入するようになったため清掃が必要
             self.pending_bidi_dispatch.remove(&stream_id);
-            // QPACK ブロック状態をクリアする
-            self.clear_qpack_blocked(stream_id);
             // QPACK Stream Cancellation を送信 (RFC 9204 Section 2.2.2.2)
             // max_dynamic_table_capacity が 0 の場合は省略可能
             self.send_stream_cancellation_if_needed(stream_id);
@@ -2403,9 +2406,11 @@ impl Connection {
 
     /// QPACK ブロック状態と `blocked_by_ricnt` エントリをクリアする
     ///
-    /// `stream_reset` / `stop_sending` の共通処理。ブロック中ストリームの
+    /// `streams` から除去するストリームに対して呼ぶ。ブロック中ストリームの
     /// ricnt エントリが残ると、`blocked_by_ricnt` の上限チェック
     /// (QPACK_DECOMPRESSION_FAILED 接続エラー) にカウントされ続けるため除去する。
+    /// STOP_SENDING は送信方向だけを止め、受信方向は開いたままなので、
+    /// ストリームを除去しない限りブロック状態を保持する。
     fn clear_qpack_blocked(&mut self, stream_id: u64) {
         if let Some(stream) = self.streams.get(&stream_id)
             && stream.is_qpack_blocked()
@@ -2421,6 +2426,9 @@ impl Connection {
     /// QUIC から STOP_SENDING 受信時に呼ぶ
     ///
     /// ストリームのローカル側をクローズし、イベントを発行する。
+    /// STOP_SENDING は送信方向だけを止める要求であり、受信方向は開いたままである。
+    /// そのため QPACK Stream Cancellation は送らず、受信中のヘッダーブロックの
+    /// デコードを継続する (RFC 9204 Section 2.2.2.2)。
     /// クリティカルストリームへの STOP_SENDING は接続エラー (RFC 9114 Section 6.2.1, RFC 9204 Section 4.2)
     pub fn stop_sending(&mut self, stream_id: u64, error_code: u64) -> Result<(), Error> {
         let result = (|| {
@@ -2448,10 +2456,12 @@ impl Connection {
                 // 送信ストリームをリセットすること
                 stream.discard_send_data();
             }
-            // QPACK ブロック状態をクリアする (stream_reset と同じ)
-            self.clear_qpack_blocked(stream_id);
-            // QPACK Stream Cancellation を送信 (RFC 9204 Section 2.2.2.2)
-            self.send_stream_cancellation_if_needed(stream_id);
+            // Stream Cancellation は送らない。STOP_SENDING は送信方向だけを止め、
+            // 受信方向は開いたままなので、RFC 9204 Section 2.2.2.2 のトリガー
+            // (RESET_STREAM の受信、受信の abandon) に当たらない。受信方向の
+            // ヘッダーブロックをデコードし続けるため、完了時の Section
+            // Acknowledgment と Stream Cancellation を衝突させてはならない。
+            // Stream Cancellation は受信方向を終了する `stream_reset` だけが送る。
 
             // WebTransport セッション/データストリームへの STOP_SENDING 伝播
             // (draft-ietf-webtrans-http3-15 Section 4.4 / Section 6)
@@ -2468,8 +2478,11 @@ impl Connection {
         self.remember_connection_error(result)
     }
 
-    /// 必要に応じて QPACK Stream Cancellation を送信 (RFC 9204 Section 2.2.2.2)
+    /// 受信方向を終了したストリームの QPACK Stream Cancellation を送信する
+    /// (RFC 9204 Section 2.2.2.2)
     ///
+    /// 呼び出し元は `stream_reset` だけである。STOP_SENDING は送信方向だけを
+    /// 止め、受信方向は開いたままなので呼び出してはならない。
     /// 動的テーブル容量が 0 の場合は送信不要。
     fn send_stream_cancellation_if_needed(&mut self, stream_id: u64) {
         let max_capacity = self
@@ -2736,6 +2749,116 @@ mod tests {
     fn test_stop_sending_on_non_critical_stream_is_ok() {
         let mut conn = Connection::client(Settings::default());
         assert!(conn.stop_sending(0, 0).is_ok());
+    }
+
+    #[test]
+    fn test_stop_sending_does_not_send_qpack_stream_cancellation() {
+        // 動的 QPACK は Connection が Limits::default() から既定で有効にする。
+        // STOP_SENDING は送信方向だけを止め、受信方向は開いたままなので、
+        // QPACK Stream Cancellation を送ってはならない (RFC 9204 Section 2.2.2.2)。
+        let mut conn = Connection::client(Settings::default());
+        assert_eq!(
+            conn.local_settings
+                .qpack_max_table_capacity
+                .map(VarInt::get),
+            Some(Limits::default().qpack_max_table_capacity),
+            "動的 QPACK が既定で有効であること"
+        );
+        conn.set_control_stream_id(2)
+            .expect("制御ストリームを設定できる");
+        conn.set_decoder_stream_id(10)
+            .expect("デコーダーストリームを設定できる");
+
+        let headers = [
+            Header::new(b":method", b"GET").expect("メソッドを作成できる"),
+            Header::new(b":path", b"/").expect("パスを作成できる"),
+            Header::new(b":scheme", b"https").expect("スキームを作成できる"),
+            Header::new(b":authority", b"example.com").expect("authority を作成できる"),
+        ];
+        let stream_id = conn
+            .send_request(&headers, false)
+            .expect("要求を送信できる");
+
+        // デコーダーストリームの type バイト (0x03) を消費する。
+        let (initial, _) = conn
+            .take_stream_data(10)
+            .expect("デコーダーストリームの初期データを取得できる");
+        assert_eq!(initial, [0x03], "デコーダーストリームの type は 0x03");
+
+        conn.stop_sending(stream_id, 0)
+            .expect("STOP_SENDING を処理できる");
+
+        assert!(
+            conn.take_stream_data(10).is_none(),
+            "STOP_SENDING で QPACK Stream Cancellation を送らないこと"
+        );
+    }
+
+    #[test]
+    fn test_stop_sending_keeps_qpack_blocked_stream() {
+        // STOP_SENDING は送信方向だけを止めるため、QPACK ブロック中の
+        // 受信方向のストリームを blocked_by_ricnt から除去してはならない。
+        let mut conn = Connection::server(Settings::default());
+        // HEADERS フレーム (type 0x01, length 2)。QPACK フィールドセクションの
+        // Required Insert Count は 1 で、insert をまだ受け取っていないためブロックされる。
+        conn.feed_stream(0, &[0x01, 0x02, 0x02, 0x00], false)
+            .expect("HEADERS フレームを投入できる");
+        assert!(
+            conn.blocked_by_ricnt.contains(&(1, 0)),
+            "動的テーブル未受信のヘッダーブロックはブロック状態になること"
+        );
+
+        conn.stop_sending(0, 0).expect("STOP_SENDING を処理できる");
+
+        assert!(
+            conn.blocked_by_ricnt.contains(&(1, 0)),
+            "STOP_SENDING 後も受信方向のブロック状態を保持すること"
+        );
+    }
+
+    #[test]
+    fn test_stream_reset_sends_qpack_stream_cancellation() {
+        // RESET_STREAM の受信は受信方向の終了を意味するため、Stream Cancellation を
+        // 送る (RFC 9204 Section 2.2.2.2)。STOP_SENDING との非対称を固定する。
+        let mut conn = Connection::client(Settings::default());
+        assert_eq!(
+            conn.local_settings
+                .qpack_max_table_capacity
+                .map(VarInt::get),
+            Some(Limits::default().qpack_max_table_capacity),
+            "動的 QPACK が既定で有効であること"
+        );
+        conn.set_control_stream_id(2)
+            .expect("制御ストリームを設定できる");
+        conn.set_decoder_stream_id(10)
+            .expect("デコーダーストリームを設定できる");
+
+        let headers = [
+            Header::new(b":method", b"GET").expect("メソッドを作成できる"),
+            Header::new(b":path", b"/").expect("パスを作成できる"),
+            Header::new(b":scheme", b"https").expect("スキームを作成できる"),
+            Header::new(b":authority", b"example.com").expect("authority を作成できる"),
+        ];
+        let stream_id = conn
+            .send_request(&headers, false)
+            .expect("要求を送信できる");
+
+        let (initial, _) = conn
+            .take_stream_data(10)
+            .expect("デコーダーストリームの初期データを取得できる");
+        assert_eq!(initial, [0x03], "デコーダーストリームの type は 0x03");
+
+        conn.stream_reset(stream_id, 0, 0)
+            .expect("RESET_STREAM を処理できる");
+
+        let (data, _) = conn
+            .take_stream_data(10)
+            .expect("Stream Cancellation を取得できる");
+        assert_eq!(
+            data,
+            [0x40],
+            "RESET_STREAM ではストリーム 0 の Stream Cancellation を送ること"
+        );
     }
 
     // =========================================================================
